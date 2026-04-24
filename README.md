@@ -94,18 +94,48 @@ not strictly CAR-T constructs.
 
 ## Classification strategy
 
-Trials are classified in layers, from most durable to most specific:
+The pipeline uses a **hybrid four-layer classifier**: deterministic rules for
+the bulk, a calibrated default for inference gaps, and a two-round LLM
+validation loop for the residual ambiguous cases.
 
-1. **`config.py` keyword tables** — `ENTITY_TERMS`, `CATEGORY_FALLBACK_TERMS`,
-   `HEME_TARGET_TERMS`, `SOLID_TARGET_TERMS`, `DUAL_TARGET_LABELS`, exclusions.
-2. **Named-product lookup** — `NAMED_PRODUCT_TARGETS` and `NAMED_PRODUCT_TYPES`
-   resolve specific products (e.g., *tisagenlecleucel*, *ide-cel*, *GC012F*) when
-   the abstract text alone is insufficient.
-3. **LLM overrides** — per-trial JSON entries in `llm_overrides.json` produced by
-   `python validate.py`. Applied in `pipeline._classify_disease()` before keyword
-   matching; trials are flagged with `LLMOverride = True` in the dataframe.
-4. **Hard-exclusion list** — `HARD_EXCLUDED_NCT_IDS` in `config.py` for trials
-   that should never appear.
+1. **Rule-based keyword layer** — `config.py` term tables:
+   `ENTITY_TERMS`, `CATEGORY_FALLBACK_TERMS`, `HEME_TARGET_TERMS`,
+   `SOLID_TARGET_TERMS`, `DUAL_TARGET_LABELS`, exclusions. Word-boundary
+   regex for all term lengths prevents prefix collisions (EGFR vs EGFRvIII,
+   hodgkin vs non-hodgkin).
+2. **Named-product lookup** — `NAMED_PRODUCT_TARGETS` /
+   `NAMED_PRODUCT_TYPES` map known products (tisa-cel, axi-cel, ide-cel,
+   cilta-cel, GC012F, CT041, HBI0101, MT027, ThisCART19A, JY231, …) to
+   their disclosed antigen and manufacturing type.
+3. **Calibrated Autologous default** — if a trial is confirmed as CAR-T
+   but no product-type marker surfaces, the pipeline defaults to
+   `Autologous`, reflecting the dominant modality in the current landscape
+   (~85 % of approvals and ongoing trials). Each assignment records a
+   `ProductTypeSource` tag so inferred labels are distinguishable from
+   explicit ones.
+4. **LLM validation loop** — `validate.py` (Claude Opus) plus a structured
+   batched workflow processes every low-confidence trial:
+   - Export `curation_loop.csv` from the Methods & Appendix tab.
+   - Split into batches of ~130 trials.
+   - Launch parallel Claude agents, each receiving the batch CSV and an
+     `allowed_values.json` listing every valid label. Each agent returns
+     a strict-schema JSON array (`nct_id`, `branch`, `disease_category`,
+     `disease_entity`, `target_category`, `product_type`, `exclude`,
+     `exclude_reason`, `confidence`, `notes`).
+   - Merge into `llm_overrides.json`; pipeline loads:
+     - `_LLM_OVERRIDES` — per-trial reclassification entries
+       (high/medium confidence, not excluded).
+     - `_LLM_EXCLUDED_NCT_IDS` — trials the LLM flagged as off-scope
+       (PRO studies, follow-up registries, bispecifics/mAbs, device
+       trials, out-of-scope indications). Dropped at the PRISMA
+       hard-exclusion stage, alongside the manual list.
+5. **Hard-exclusion list** — `HARD_EXCLUDED_NCT_IDS` in `config.py` for
+   manually curated exceptions.
+
+Every trial carries a **`ClassificationConfidence`** label
+(`high` / `medium` / `low`) combining rule strength, `ProductTypeSource`,
+and LLM-override status. Surfaced in the Data tab and Data-Quality panel
+so users can filter analyses to high-confidence rows only.
 
 ### Running the LLM validator
 
@@ -118,7 +148,9 @@ python validate.py --limit 100       # expand batch
 ```
 
 Results merge into `llm_overrides.json` — previously validated trials are
-preserved across runs.
+preserved across runs. For a one-shot full curation of every low-confidence
+trial, see the "Curation loop" section of the Methods & Appendix tab inside
+the app.
 
 ---
 

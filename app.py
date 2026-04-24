@@ -844,10 +844,26 @@ with st.sidebar.expander("Data quality / missing classifications", expanded=Fals
         rows.append({"Column": col, "Missing / empty": missing, "Ambiguous labels": ambiguous})
     quality_df = pd.DataFrame(rows)
     st.dataframe(quality_df, width='stretch', hide_index=True)
+
+    # ClassificationConfidence band summary.
+    if "ClassificationConfidence" in df.columns:
+        conf_counts = df["ClassificationConfidence"].value_counts()
+        n_high = int(conf_counts.get("high", 0))
+        n_med = int(conf_counts.get("medium", 0))
+        n_low = int(conf_counts.get("low", 0))
+        total = max(1, len(df))
+        st.caption(
+            f"**Classification confidence** (see Methods): "
+            f"high = {n_high} ({100*n_high/total:.0f}%) · "
+            f"medium = {n_med} ({100*n_med/total:.0f}%) · "
+            f"low = {n_low} ({100*n_low/total:.0f}%)."
+        )
+
     n_llm = int(df["LLMOverride"].sum()) if "LLMOverride" in df.columns else 0
     if n_llm:
         st.caption(
-            f"LLM-assisted: **{n_llm}** trial(s) reclassified via `llm_overrides.json`. "
+            f"LLM-assisted: **{n_llm}** trial(s) reclassified via `llm_overrides.json` "
+            "(two-round Claude Opus validation; see Methods § LLM-Assisted Curation Loop). "
             "Run `python validate.py` to expand coverage."
         )
     else:
@@ -2503,6 +2519,9 @@ def _build_methods_text(prisma: dict, snapshot_date: str, n_included: int) -> st
     n_hard_excl = prisma.get("n_hard_excluded", "N/A")
     n_indic_excl = prisma.get("n_indication_excluded", "N/A")
 
+    # Quantify the LLM curation layer on the current dataset.
+    n_llm_override = int(df.get("LLMOverride", pd.Series(dtype=bool)).sum()) if hasattr(df, "get") else 0
+
     text = f"""\
 METHODS
 =======
@@ -2510,40 +2529,49 @@ METHODS
 Data Source and Search Strategy
 --------------------------------
 Clinical trial data were retrieved from the ClinicalTrials.gov public registry using the
-API (v2; {BASE_URL}; accessed {snapshot_date}). A structured keyword query was applied
-combining CAR-based cell-therapy terms ("CAR T", "CAR-T", "chimeric antigen receptor",
-"CAR-NK", "CAAR-T", "CAR-Treg", "gamma delta CAR") with oncology condition-search
-terms (leukemia, lymphoma, myeloma, multiple myeloma, solid tumor, glioma, glioblastoma,
-hepatocellular, pancreatic, gastric, colorectal, ovarian, breast, prostate, sarcoma,
-melanoma, neuroblastoma, mesothelioma, carcinoma). No restriction was placed on study
-phase, recruitment status, or geographic location at the query stage.
+API (v2; {BASE_URL}; accessed {snapshot_date}). A deliberately broad query was applied
+using only CAR-based cell-therapy terms ("CAR T", "CAR-T", "chimeric antigen receptor",
+"CAR-NK", "CAR NK", "CAAR-T", "CAR-Treg", "gamma delta CAR", "CAR gamma delta"). No
+AREA[ConditionSearch] restriction was applied so that trials registered under generic
+labels such as "Hematological Malignancies", "Neoplasms", "B-Cell Malignancies", or
+"Cancer" — commonly missed by specific-disease keyword queries — are captured. Scope
+is enforced downstream by the three-tier classifier and the autoimmune-exclusion filter
+(see Inclusion / Exclusion Criteria below). No restriction was placed on study phase,
+recruitment status, or geographic location at the query stage.
 
 Inclusion Criteria
 ------------------
 Studies were included if they: (1) described a CAR-based cellular therapy (CAR-T
 [autologous, allogeneic, or in vivo], CAR-NK, CAAR-T, CAR-Treg, or CAR-γδ T); and
 (2) targeted a hematologic or solid malignancy. No restriction was applied to study
-phase, sponsor type, or country. TCR-T products (e.g., afami-cel, NY-ESO-1 directed
+phase, sponsor type, or country. TCR-T products (e.g., afami-cel, NY-ESO-1-directed
 TCRs) are out of scope for this v1 dashboard.
 
 Exclusion Criteria
 ------------------
 Studies were excluded if they met any of the following criteria:
-    (1) The NCT identifier appeared on a manually curated exclusion list ({n_hard}
-        pre-specified identifiers) compiled via the curation loop to remove studies
-        retrieved by the search query but confirmed on manual inspection as outside
-        scope (e.g., non-CAR-T interventions, observational registries).
-    (2) Text fields (conditions, title, brief summary, interventions) contained one
-        or more of {n_indication} predefined autoimmune / rheumatologic keywords and
-        no oncology-adjacent hit. This is the inverse of the sister rheumatology app;
-        trials are excluded only when autoimmune is the *sole* indication.
+    (1) The NCT identifier appeared on a curated hard-exclusion list ({n_hard}
+        pre-specified identifiers) OR on the LLM-generated exclusion list (see
+        "LLM-Assisted Curation Loop" below). Exclusions cover non-CAR-T
+        interventions (bispecifics, mAbs, chemo/TKI, TIL, TCR-T, mRNA vaccines),
+        supportive-care / patient-reported-outcome (PRO) studies, long-term
+        follow-up registries, observational / biomarker / device trials, and
+        out-of-scope indications (COVID-19, non-malignant blood disorders,
+        transplant-rejection prophylaxis, etc.).
+    (2) Text fields (conditions, title, brief summary, interventions) contained
+        one or more of {n_indication} predefined autoimmune / rheumatologic
+        keywords and no oncology-adjacent hit. This is the inverse of the sister
+        rheumatology app; trials are excluded only when autoimmune is the *sole*
+        indication. Generic autoimmune wrappers ("autoimmune diseases",
+        "rheumatic diseases") and meta-therapeutic conditions ("cytokine release
+        syndrome", "neurotoxicity", "nephrotic syndrome") are also on the list.
 
 Study Selection (PRISMA)
 ------------------------
     Records identified via database search  : {n_fetched}
     Duplicate records removed               : {prisma.get("n_duplicates_removed", "N/A")}
     Records screened                        : {n_dedup}
-    Excluded — pre-specified NCT IDs        : {n_hard_excl}
+    Excluded — hard list + LLM exclusions   : {n_hard_excl}
     Excluded — autoimmune-only keywords     : {n_indic_excl}
     Studies included in final analysis      : {n_included}
 
@@ -2556,45 +2584,118 @@ Each trial is assigned three hierarchical labels:
     Heme-onc_other) and {len(ONTOLOGY["Solid-onc"])} solid (CNS, Thoracic, GI, GU, Gyn,
     Breast, H&N, Skin, Sarcoma, Pediatric solid, Solid-onc_other).
   • DiseaseEntity — {n_entities} Tier-3 leaves (e.g., DLBCL, Ph+ B-ALL, GBM, HCC,
-    CLDN18.2-amplified gastric, TNBC, Neuroblastoma).
+    Gastric/GEJ, TNBC, Neuroblastoma).
 Basket trials spanning ≥2 categories are labelled "Basket/Multidisease" and retain
 the full list of matched entities in the DiseaseEntities column (pipe-joined).
 Branch-level baskets are labelled "Heme basket" or "Advanced solid tumors".
 
-Classification Algorithm
-------------------------
-Assignment uses hierarchical rule-based matching of normalised text drawn from the
-conditions, title, brief summary, and interventions fields. Resolution order:
-    1. LLM override (if present in llm_overrides.json) — trusted wholesale.
-    2. Leaf-level ENTITY_TERMS match on each condition chunk and on full text.
-       Multiple leaves across ≥2 categories → Basket/Multidisease.
-    3. Category-level CATEGORY_FALLBACK_TERMS match.
-    4. Branch-level basket terms (SOLID_BASKET_TERMS, HEME_BASKET_TERMS).
-    5. Fall-through to Unclassified.
+Hybrid Classification Architecture
+----------------------------------
+Classification combines rule-based keyword matching, curated named-product lookups,
+calibrated defaults, and a two-round LLM validation layer. The resolution order for
+each trial is:
 
-Target Classification
----------------------
-Priority-ordered ruleset:
-    • Named-product short-circuit (NAMED_PRODUCT_TARGETS) — approved & late-stage
-      oncology CAR-T products (tisa-cel, axi-cel, ide-cel, cilta-cel, GC012F, …).
-    • Platform detection — CAR-NK, CAAR-T, CAR-Treg, CAR-γδ T.
-    • Antigen detection — heme-typical (CD19, BCMA, CD20, CD22, CD7, CD30, CD33,
-      CD38, CD70, CD123, GPRC5D, FcRH5, SLAMF7, CD79b, Kappa LC) and solid-typical
-      (GPC3, Claudin 18.2, Mesothelin, GD2, HER2, EGFR, EGFRvIII, B7-H3, PSMA, PSCA,
-      CEA, EpCAM, MUC1, CLDN6, NKG2D-L, ROR1, L1CAM, CD133, AFP, IL13Rα2, HER3, DLL3).
-      EGFRvIII overrides EGFR when both match (prefix collision).
-    • Dual-target combos (CD19/CD22, CD19/CD20, CD19/BCMA, BCMA/GPRC5D, BCMA/CD70,
-      HER2/MUC1, GPC3/MSLN).
-    • Residual: CAR-T_unspecified (CAR mention, no antigen) or Other_or_unknown.
+1. **LLM override** (if the trial's NCT ID appears in llm_overrides.json with
+   confidence "high" or "medium") — trusted wholesale.
+2. **Leaf-level term match** — ENTITY_TERMS applied per condition chunk and to the
+   combined text (conditions | title | brief summary | interventions). ≥2 leaves
+   across different categories → "Basket/Multidisease".
+3. **Category-level fallback** — CATEGORY_FALLBACK_TERMS (generic tumor-type
+   wordings) match to Tier-2 labels.
+4. **Branch-level basket terms** — HEME_BASKET_TERMS / SOLID_BASKET_TERMS.
+5. **Fall-through** — "Unclassified" (Branch: Unknown).
 
-Product Type Classification
----------------------------
-Classified as Autologous / Allogeneic/Off-the-shelf / In vivo / Unclear. In vivo is
-detected first (title contains "in vivo"; circular RNA / mRNA-LNP / lentiviral
-nanoparticle markers). "autoleucel" and "autologous" are high-precision Autologous
-markers. Strong allogeneic markers include UCART, off-the-shelf, universal CAR-T,
-healthy donor, donor-derived. Named-product fallback (NAMED_PRODUCT_TYPES) applied
-when no generic marker is present.
+Target Classification (Priority Order)
+--------------------------------------
+1. LLM override.
+2. Named-product short-circuit (NAMED_PRODUCT_TARGETS) — maps approved and
+   late-stage products to their disclosed antigen (tisa-cel, axi-cel, brexu-cel,
+   liso-cel, ide-cel, cilta-cel, obe-cel, relma-cel, eque-cel, zevor-cel, GC012F,
+   CT041 / satri-cel, BOXR1030, MT027, HBI0101, CT0596, JY231, Meta10-19, …).
+3. Platform detection — CAR-NK, CAAR-T, CAR-Treg, CAR-γδ T (text-level match
+   with word-boundary enforcement).
+4. Antigen detection:
+   • Heme-typical (16): CD19, BCMA, CD20, CD22, CD5, CD7, CD30, CD33, CD38, CD70,
+     CD123, GPRC5D, FcRH5, SLAMF7, CD79b, Kappa LC, FLT3, CLL1, CD147.
+   • Solid-typical (25): GPC3, Claudin 18.2, Mesothelin, GD2, HER2, EGFR,
+     EGFRvIII, B7-H3, PSMA, PSCA, CEA, EpCAM, MUC1, CLDN6, NKG2D-L, ROR1,
+     L1CAM, CD133, AFP, IL13Rα2, HER3, DLL3, CDH17, GUCY2C, GPNMB.
+5. Dual-target combos (7 explicit pairs): CD19/CD22, CD19/CD20, CD19/BCMA,
+   BCMA/GPRC5D, BCMA/CD70, HER2/MUC1, GPC3/MSLN.
+6. Residual: "CAR-T_unspecified" (CAR mentioned but antigen not in public text)
+   or "Other_or_unknown" (no CAR-T confirmation).
+
+Word-boundary matching is used for all term lengths, so prefix collisions
+(e.g., EGFR vs EGFRvIII; hodgkin vs non-hodgkin) do not produce false positives.
+
+Product Type Classification with Calibrated Default
+----------------------------------------------------
+Labels: Autologous / Allogeneic/Off-the-shelf / In vivo / Unclear. Priority:
+
+1. LLM override.
+2. "in vivo" in the title; or IN_VIVO_TERMS in the combined text
+   (circular RNA, mRNA-LNP, lentiviral nanoparticle, vivovec).
+3. Explicit autologous markers: "autoleucel", "autologous".
+4. Explicit allogeneic markers: UCART, "off the shelf", "universal CAR-T",
+   "universal CD19", "healthy donor", "donor-derived".
+5. Named-product lookup (NAMED_PRODUCT_TYPES).
+6. Weak autologous/allogeneic keywords (ALLOGENEIC_MARKERS, AUTOL_MARKERS).
+7. **Calibrated default** — if the trial is confirmed as CAR-T but no
+   product-type marker surfaces, default to "Autologous". This is a calibrated
+   choice: autologous cells are the dominant modality in the current
+   CAR-T landscape (~85 % of approvals and ongoing trials). Each assignment
+   carries a ProductTypeSource tag ("explicit_autologous", "named_product",
+   "default_autologous_no_allo_markers", "weak_autologous_marker",
+   "llm_override", "no_signal") so downstream users can distinguish high-signal
+   from inferred labels.
+
+Classification Confidence
+-------------------------
+Every trial carries a ClassificationConfidence label (high / medium / low)
+combining the above signals:
+  • high   — LLM-validated OR explicit markers + known branch/entity/target.
+  • medium — default rules (Autologous fallback) OR unclear antigen target
+             but known branch/entity.
+  • low    — Branch = Unknown OR DiseaseEntity = Unclassified (rare after LLM).
+
+The column is surfaced in the Data tab and can be used to filter analyses
+to high-confidence rows only.
+
+LLM-Assisted Curation Loop (validate.py + llm_overrides.json)
+-------------------------------------------------------------
+The pipeline's keyword layer is supplemented by a structured LLM validation
+loop (Claude Opus). Workflow:
+
+1. The Methods & Appendix tab exports `curation_loop.csv` — every trial with
+   any field in {{Branch=Unknown, DiseaseEntity=Unclassified,
+   TargetCategory ∈ [CAR-T_unspecified, Other_or_unknown], ProductType=Unclear}}.
+2. A batched subagent workflow (6 parallel Claude agents, ~130 trials each)
+   receives each batch CSV plus an allowed_values.json listing every valid
+   branch / category / entity / target / product label. Each agent emits a
+   strict-schema JSON array (nct_id, branch, disease_category, disease_entity,
+   target_category, product_type, exclude, exclude_reason, confidence, notes).
+3. A second round re-curates only the trials still low-confidence after the
+   architectural upgrade, with stricter exclusion criteria (PRO studies,
+   registries, bispecifics/mAbs, device trials, out-of-scope indications).
+4. Results are merged into llm_overrides.json. On load the pipeline populates:
+     _LLM_OVERRIDES         — per-trial classification overrides
+                              (confidence ∈ {{high, medium}}, exclude=false).
+     _LLM_EXCLUDED_NCT_IDS  — trials flagged exclude=true with high/medium
+                              confidence; these are dropped at the PRISMA
+                              hard-exclusion stage, the same step as the
+                              manually curated hard-exclusion list.
+5. The `LLMOverride` boolean column in the trial dataframe flags which rows
+   were reclassified by the LLM ({n_llm_override} of {n_included} in the current
+   dataset). Users can independently verify any override by inspecting the
+   corresponding entry in llm_overrides.json alongside the ClinicalTrials.gov
+   record.
+
+This hybrid (rules + defaults + LLM) approach avoids brittleness (a pure
+keyword system) and avoids cost/irreproducibility (a pure LLM system):
+deterministic rules handle the bulk, the calibrated Autologous default
+cleans up cases where information is genuinely absent, and the LLM layer
+resolves the residual ambiguous cases with full reasoning and explicit
+confidence tags.
 
 Cell-therapy Modality
 ---------------------
@@ -2607,7 +2708,11 @@ Enrollment Analysis
 -------------------
 Planned enrollment counts were extracted from the EnrollmentCount field
 (type = Anticipated or Actual) and coerced to numeric; missing or non-numeric values
-were excluded from enrollment analyses (Figure 4). Branch stratification distinguishes
+were excluded from enrollment analyses (Figure 4). To remove data-entry artifacts
+(registry placeholders like 99,999,999; real-world-data cost studies with 160,000+
+rows), the enrollment figure caps planned enrollment at 1,000 patients — a threshold
+safely above the largest prospective CAR-T trial (cilta-cel CARTITUDE, n≈790).
+Excluded outliers are reported in a caption. Branch stratification distinguishes
 heme-onc (historically larger cohorts, Phase II+ trials) from solid-onc (smaller
 Phase I dose-escalation cohorts). Geographic classification labels trials as "China"
 if China is among the Countries, else "Non-China".
@@ -2615,12 +2720,14 @@ if China is among the Countries, else "Non-China".
 Data Processing
 ---------------
 All processing was performed in Python (pandas {pd.__version__}) using a custom ETL
-pipeline. Text normalisation includes lowercasing, Unicode normalisation, R/R → "relapsed
-refractory" expansion, and hyphen-to-space conversion (so "b-cell", "chromosome-positive",
-"non-hodgkin" match the space-separated forms in the term maps). Term matching uses
-whole-word boundary matching for short terms (≤3 characters) and substring matching for
-longer terms. Classification rules and term dictionaries are versioned in config.py and
-updated via the curation loop and LLM validator (validate.py).
+pipeline. Text normalisation includes lowercasing, Unicode normalisation, R/R →
+"relapsed refractory" expansion, hyphen-to-space conversion (so "b-cell",
+"chromosome-positive" match the space-separated forms), and "non hodgkin" →
+"nonhodgkin" collapse to prevent "hodgkin lymphoma" from matching inside
+"non-Hodgkin lymphoma" context. Term matching uses whole-word boundary regex for
+all term lengths, so prefix collisions (EGFR vs EGFRvIII, CD19 vs CD190) do not
+produce false positives. Classification rules, term dictionaries, and named-product
+lookups are versioned in config.py and iteratively updated via the curation loop.
 
 Dataset Snapshot
 ----------------
@@ -2668,9 +2775,19 @@ def _build_ontology_df() -> pd.DataFrame:
                   "Label": f"{sum(len(v) for v in NAMED_PRODUCT_TARGETS.values())} product terms",
                   "Terms (sample)": "tisagenlecleucel, axicabtagene ciloleucel, ide-cel, cilta-cel, GC012F, …",
                   "N entities": 0})
-    rows.append({"Tier": "Exclusion", "Branch": "—", "Label": "Autoimmune keyword exclusion",
+    rows.append({"Tier": "Exclusion", "Branch": "—", "Label": "Autoimmune/meta keyword exclusion",
                   "Terms (sample)": "; ".join(EXCLUDED_INDICATION_TERMS[:6]) + "…",
                   "N entities": len(EXCLUDED_INDICATION_TERMS)})
+    rows.append({"Tier": "LLM curation",
+                  "Branch": "—",
+                  "Label": "Classification overrides (llm_overrides.json)",
+                  "Terms (sample)": "Per-trial Branch/Category/Entity/Target/Product overrides from two-round Claude Opus validation.",
+                  "N entities": 0})
+    rows.append({"Tier": "LLM curation",
+                  "Branch": "—",
+                  "Label": "ClassificationConfidence",
+                  "Terms (sample)": "high / medium / low band per trial, combining LLM validation, rule strength, and ProductTypeSource.",
+                  "N entities": 0})
     return pd.DataFrame(rows)
 
 

@@ -627,8 +627,15 @@ st.markdown(
 # Cached loaders
 # ---------------------------------------------------------------------------
 
-@st.cache_data(ttl=60 * 60)
+@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def load_live(max_records: int = 5000, statuses: tuple[str, ...] = ()) -> tuple:
+    """Fetch from CT.gov; cache for 24 hours.
+
+    With a 24h TTL the first user of the day pays the cold-start cost
+    (~30–60s for ~2.5k trials) and everyone else in the same day gets an
+    instant warm cache. This makes live-mode the natural default and
+    removes the need for users to trigger a 'refresh' step.
+    """
     statuses_list = list(statuses) if statuses else None
     return build_all_from_api(max_records=max_records, statuses=statuses_list)
 
@@ -761,35 +768,54 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # Sidebar — data source
 # ---------------------------------------------------------------------------
+#
+# Live-first architecture:
+#   - Default: live CT.gov pull cached 24h. First visitor of the day pays the
+#     cold-start cost; everyone else gets an instant warm cache. No manual
+#     refresh step.
+#   - Opt-in: pin a specific dated snapshot for publication reproducibility
+#     (e.g., "pin to the dataset cited in the paper"). Hidden behind an
+#     "Advanced" expander so casual viewers never see the mode toggle.
+#   - Safety net: if CT.gov is unreachable, fall back to the most recent
+#     frozen snapshot automatically.
+#
+# Previous architecture defaulted to frozen-by-default + manual Save snapshot,
+# which forced every schema change to require a re-freeze and manual backfill.
 
 st.sidebar.header("Data source")
 
 available_snapshots = list_snapshots()
-data_source = st.sidebar.radio(
-    "Source",
-    ["Live (ClinicalTrials.gov API)", "Frozen snapshot"],
-    index=0 if not available_snapshots else 0,
-)
-
 prisma_counts: dict = {}
 
-if data_source == "Frozen snapshot":
-    if not available_snapshots:
-        st.sidebar.warning("No snapshots found. Pull live data and save a snapshot first.")
-        st.stop()
-    selected_snapshot = st.sidebar.selectbox("Snapshot date", available_snapshots)
-    with st.spinner(f"Loading frozen snapshot {selected_snapshot}..."):
-        df, df_sites, prisma_counts = load_frozen(selected_snapshot)
-    st.sidebar.caption(f"Loaded: {selected_snapshot} ({len(df)} trials)")
+# Detect an explicit user opt-in to pin a frozen snapshot. Stored in
+# session_state so the Refresh button can clear it.
+_pin_key = "pinned_snapshot"
+_pinned = st.session_state.get(_pin_key)
+if _pinned and _pinned not in available_snapshots:
+    _pinned = None
+    st.session_state[_pin_key] = None
+
+if _pinned:
+    with st.spinner(f"Loading pinned snapshot {_pinned}..."):
+        df, df_sites, prisma_counts = load_frozen(_pinned)
+    st.sidebar.success(
+        f"Pinned to frozen snapshot **{_pinned}** ({len(df):,} trials)."
+    )
+    if st.sidebar.button("Unpin — switch back to live data"):
+        st.session_state[_pin_key] = None
+        st.cache_data.clear()
+        st.rerun()
 else:
-    # Pull ALL statuses by default — the "Overall status" filter below lets the
-    # user narrow to recruiting/active as needed. This way the cached pull covers
-    # historical (COMPLETED/TERMINATED) trials too, so Fig 1's temporal view shows
-    # the real pre-2017 CAR-T landscape without forcing a refetch.
     selected_statuses: list[str] = []
     try:
-        with st.spinner("Fetching and processing ClinicalTrials.gov data..."):
+        with st.spinner("Fetching live ClinicalTrials.gov data (cached 24h)..."):
             df, df_sites, prisma_counts = load_live(statuses=tuple(selected_statuses))
+        st.sidebar.caption(
+            f"Live from CT.gov · {len(df):,} trials · cached 24h"
+        )
+        if st.sidebar.button("Refresh now"):
+            st.cache_data.clear()
+            st.rerun()
     except Exception as api_err:
         st.sidebar.error(
             "ClinicalTrials.gov API is currently unreachable. "
@@ -801,8 +827,7 @@ else:
             with st.spinner(f"Loading snapshot {fallback}..."):
                 df, df_sites, prisma_counts = load_frozen(fallback)
             st.sidebar.info(
-                f"Loaded frozen snapshot **{fallback}** (fallback). "
-                "Switch the source toggle above to 'Frozen snapshot' for intentional offline use."
+                f"Loaded frozen snapshot **{fallback}** (offline fallback)."
             )
         else:
             st.error(
@@ -812,11 +837,29 @@ else:
             )
             st.stop()
 
-    if st.sidebar.button("Save snapshot"):
-        statuses_list = selected_statuses if selected_statuses else None
-        snap_date = save_snapshot(df, df_sites, prisma_counts, statuses=statuses_list)
-        st.sidebar.success(f"Saved snapshot: {snap_date}")
-        st.cache_data.clear()
+    # Reproducibility escape hatch — hidden by default so casual users never see it.
+    with st.sidebar.expander("Reproducibility — pin a frozen dataset", expanded=False):
+        if not available_snapshots:
+            st.caption(
+                "No frozen snapshots available. Click **Save current as snapshot** "
+                "below to create one from the live data for citation."
+            )
+        else:
+            _pin_choice = st.selectbox(
+                "Pin a dated snapshot (for citing in a paper)",
+                options=["— live data —"] + available_snapshots,
+                index=0,
+                key="pin_snapshot_select",
+            )
+            if _pin_choice != "— live data —":
+                if st.button(f"Pin snapshot {_pin_choice}"):
+                    st.session_state[_pin_key] = _pin_choice
+                    st.rerun()
+        if st.button("Save current as snapshot"):
+            statuses_list = selected_statuses if selected_statuses else None
+            snap_date = save_snapshot(df, df_sites, prisma_counts, statuses=statuses_list)
+            st.success(f"Saved snapshot: {snap_date}")
+            st.cache_data.clear()
 
 df = add_phase_columns(df)
 

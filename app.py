@@ -693,6 +693,22 @@ df["Modality"] = df.apply(_modality, axis=1)
 # ---------------------------------------------------------------------------
 
 st.sidebar.header("Filters")
+
+# Reset button — clears every filter widget's state so defaults (all options
+# selected) re-apply on the next rerun. Explicit keys on each multiselect below
+# let us target them selectively without affecting the data-source radio.
+_FILTER_KEYS = [
+    "filter_branch", "filter_category", "filter_entity",
+    "filter_design", "filter_phase", "filter_target",
+    "filter_status", "filter_product", "filter_modality",
+    "filter_country",
+]
+if st.sidebar.button("↺ Reset all filters", use_container_width=True):
+    for _k in _FILTER_KEYS:
+        if _k in st.session_state:
+            del st.session_state[_k]
+    st.rerun()
+
 st.sidebar.caption("Disease filter cascades: Branch → Category → Entity.")
 
 branch_options_all = sorted(df["Branch"].dropna().unique().tolist())
@@ -701,6 +717,7 @@ branch_sel = st.sidebar.multiselect(
     options=branch_options_all,
     default=branch_options_all,
     help="Heme-onc, Solid-onc, Mixed, Unknown.",
+    key="filter_branch",
 )
 
 df_after_branch = df[df["Branch"].isin(branch_sel)] if branch_sel else df
@@ -711,6 +728,7 @@ category_sel = st.sidebar.multiselect(
     options=category_options_all,
     default=category_options_all,
     help="Options narrow based on the selected branch(es).",
+    key="filter_category",
 )
 
 df_after_cat = (
@@ -732,6 +750,7 @@ entity_sel = st.sidebar.multiselect(
     options=entity_options_all,
     default=entity_options_all,
     help="Basket/multi-disease trials appear under every entity they enroll.",
+    key="filter_entity",
 )
 
 # Trial design
@@ -739,30 +758,38 @@ design_options = sorted(df["TrialDesign"].dropna().unique().tolist())
 design_sel = st.sidebar.multiselect(
     "Trial design", options=design_options, default=design_options,
     help="Single-disease vs basket/multi-disease trials.",
+    key="filter_design",
 )
 
 # Phase
 phase_options = [PHASE_LABELS[p] for p in PHASE_ORDER if p in set(df["PhaseNormalized"].astype(str))]
-phase_sel = st.sidebar.multiselect("Phase", options=phase_options, default=phase_options)
+phase_sel = st.sidebar.multiselect("Phase", options=phase_options, default=phase_options, key="filter_phase")
 
 # Target category (exclude platform labels — those live in modality filter)
 target_options = sorted(
     t for t in df["TargetCategory"].dropna().unique() if t not in _PLATFORM_LABELS
 )
-target_sel = st.sidebar.multiselect("Antigen target", options=target_options, default=target_options)
+target_sel = st.sidebar.multiselect(
+    "Antigen target", options=target_options, default=target_options, key="filter_target",
+)
 
 # Status
 status_options = sorted(df["OverallStatus"].dropna().unique().tolist())
-status_sel = st.sidebar.multiselect("Overall status", options=status_options, default=status_options)
+status_sel = st.sidebar.multiselect(
+    "Overall status", options=status_options, default=status_options, key="filter_status",
+)
 
 # Product type
 product_options = sorted(df["ProductType"].dropna().unique().tolist())
-product_sel = st.sidebar.multiselect("Product type", options=product_options, default=product_options)
+product_sel = st.sidebar.multiselect(
+    "Product type", options=product_options, default=product_options, key="filter_product",
+)
 
 # Modality
 modality_options = [m for m in MODALITY_ORDER if m in set(df["Modality"])]
 modality_sel = st.sidebar.multiselect(
     "Cell therapy modality", options=modality_options, default=modality_options,
+    key="filter_modality",
 )
 
 # Country
@@ -773,7 +800,9 @@ for cs in df["Countries"].dropna():
         if c:
             all_countries.add(c)
 country_options = sorted(all_countries)
-country_sel = st.sidebar.multiselect("Country", options=country_options, default=country_options)
+country_sel = st.sidebar.multiselect(
+    "Country", options=country_options, default=country_options, key="filter_country",
+)
 
 
 # ---------------------------------------------------------------------------

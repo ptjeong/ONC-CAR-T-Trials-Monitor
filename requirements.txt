@@ -5,4 +5,5 @@ numpy==2.4.4
 altair==6.1.0
 pillow==12.2.0
 requests==2.33.1
+anthropic>=0.40.0
 pyarrow==24.0.0

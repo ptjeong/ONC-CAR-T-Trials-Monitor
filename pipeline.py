@@ -1,10 +1,17 @@
 """ETL pipeline for the Oncology CAR-T Trials Monitor.
 
 Fetches studies from ClinicalTrials.gov v2, flattens them, and classifies
-each trial into a three-tier disease hierarchy (Branch → Category → Entity),
-a target-antigen label, and a product-type label.
+each into:
+  • Branch          — Heme-onc / Solid-onc / Mixed / Unknown
+  • DiseaseCategory — Tier-2 category (e.g. B-NHL, Multiple myeloma, CNS, GI)
+  • DiseaseEntity   — Tier-3 leaf (e.g. DLBCL, R/R MM, GBM, HCC)
+  • TargetCategory  — antigen label (CD19, BCMA, GPC3, CLDN18.2, dual combos)
+  • ProductType     — Autologous / Allogeneic / In vivo / Unclear
+Plus PRISMA-style flow accounting, snapshot I/O, and LLM-override support.
 """
 
+import json
+import os
 import re
 import requests
 import pandas as pd
@@ -33,17 +40,54 @@ from config import (
     CAR_GD_T_TERMS,
     ALLOGENEIC_MARKERS,
     AUTOL_MARKERS,
+    IN_VIVO_TERMS,
     HEME_TARGET_TERMS,
     SOLID_TARGET_TERMS,
     DUAL_TARGET_LABELS,
-    NAMED_PRODUCTS,
+    NAMED_PRODUCT_TARGETS,
+    NAMED_PRODUCT_TYPES,
 )
 
 BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 
+# ---------------------------------------------------------------------------
+# LLM override cache  (populated by:  python validate.py)
+# ---------------------------------------------------------------------------
+
+_OVERRIDES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "llm_overrides.json")
+_LLM_OVERRIDES: dict[str, dict] = {}
+
+
+def _load_overrides() -> None:
+    global _LLM_OVERRIDES
+    if not os.path.exists(_OVERRIDES_PATH):
+        _LLM_OVERRIDES = {}
+        return
+    try:
+        with open(_OVERRIDES_PATH) as f:
+            entries = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        _LLM_OVERRIDES = {}
+        return
+    _LLM_OVERRIDES = {
+        e["nct_id"]: e
+        for e in entries
+        if e.get("confidence") in ("high", "medium")
+        and e.get("disease_entity") not in ("Exclude", None)
+    }
+
+
+def reload_overrides() -> int:
+    """Reload LLM overrides from disk. Returns number of active overrides."""
+    _load_overrides()
+    return len(_LLM_OVERRIDES)
+
+
+_load_overrides()
+
 
 # ---------------------------------------------------------------------------
-# Text normalization helpers (mirrors rheum patterns)
+# Text normalization
 # ---------------------------------------------------------------------------
 
 def _safe_text(value) -> str:
@@ -57,9 +101,8 @@ def _normalize_text(text: str) -> str:
     text = text.replace("sjögren", "sjogren")
     text = text.replace("r/r", "relapsed refractory")
     text = re.sub(r"[^a-z0-9/+.\- ]+", " ", text)
-    # Treat hyphens as word separators so "b-cell", "cd19-directed",
-    # "chromosome-positive", "non-hodgkin" etc. collapse to the
-    # space-separated forms used in the term lists.
+    # Treat hyphens as word separators: "b-cell" → "b cell",
+    # "chromosome-positive" → "chromosome positive", "car-t" → "car t".
     text = text.replace("-", " ")
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -78,6 +121,13 @@ def _row_text(row: dict) -> str:
     )
 
 
+def _contains_any(text: str | None, terms: list[str]) -> bool:
+    if not text:
+        return False
+    normalized = _normalize_text(text)
+    return any(_term_in_text(normalized, term) for term in terms)
+
+
 def _term_in_text(normalized_text: str, term: str) -> bool:
     normalized_term = _normalize_text(term)
     if not normalized_term:
@@ -92,13 +142,6 @@ def _term_in_text(normalized_text: str, term: str) -> bool:
     return normalized_term in normalized_text
 
 
-def _contains_any(text: str | None, terms: list[str]) -> bool:
-    if not text:
-        return False
-    normalized = _normalize_text(text)
-    return any(_term_in_text(normalized, term) for term in terms)
-
-
 def _match_terms(text: str, term_map: dict[str, list[str]]) -> list[str]:
     matches = []
     for label, terms in term_map.items():
@@ -107,69 +150,78 @@ def _match_terms(text: str, term_map: dict[str, list[str]]) -> list[str]:
     return matches
 
 
+def _lookup_named_product(text: str, product_dict: dict[str, list[str]]) -> str | None:
+    """Return the first category whose product name appears in normalized text."""
+    for category, names in product_dict.items():
+        if any(_normalize_text(name) in text for name in names):
+            return category
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Tri-level disease classifier
 # ---------------------------------------------------------------------------
 
 def _classify_disease(row: dict) -> dict:
-    """Tri-level classifier.
+    """Return {'branch', 'category', 'entity', 'entities', 'design'}."""
+    nct = _safe_text(row.get("NCTId")).strip()
+    if nct and nct in _LLM_OVERRIDES:
+        ov = _LLM_OVERRIDES[nct]
+        entity = ov.get("disease_entity") or UNCLASSIFIED_LABEL
+        category = ov.get("disease_category")
+        if not category:
+            category = ENTITY_TO_CATEGORY.get(entity, entity)
+        branch = ov.get("branch")
+        if not branch:
+            branch = CATEGORY_TO_BRANCH.get(category, "Unknown")
+        design = "Basket/Multidisease" if entity == BASKET_MULTI_LABEL else "Single disease"
+        return {
+            "branch": branch, "category": category, "entity": entity,
+            "entities": entity, "design": design,
+        }
 
-    Returns a dict with keys: branch, category, entity, entities, design.
-      branch         — 'Heme-onc' | 'Solid-onc' | 'Mixed' | 'Unknown'
-      category       — Tier 2 label
-      entity         — primary leaf label (for charts)
-      entities       — pipe-joined list of matched leaves (for basket detection)
-      design         — 'Single disease' | 'Basket/Multidisease'
-    """
     conditions_raw = _safe_text(row.get("Conditions"))
     full_text = _row_text(row)
     condition_chunks = [
         _normalize_text(c) for c in conditions_raw.split("|") if _normalize_text(c)
     ]
 
-    # 1. Leaf-level term matching — collect matches per condition chunk, then fold into a union.
+    # 1. Leaf-level term matching on conditions and full text.
     cond_matches: list[str] = []
     for chunk in condition_chunks:
         cond_matches.extend(_match_terms(chunk, ENTITY_TERMS))
     cond_matches = sorted(set(cond_matches))
-
     full_matches = sorted(set(_match_terms(full_text, ENTITY_TERMS)))
     all_entities = sorted(set(cond_matches + full_matches))
 
-    # 2. If we have leaf matches — derive category and branch from them.
     if all_entities:
         categories = sorted({ENTITY_TO_CATEGORY[e] for e in all_entities})
         branches = sorted({CATEGORY_TO_BRANCH[c] for c in categories})
-
         branch = branches[0] if len(branches) == 1 else "Mixed"
 
-        # Prefer a leaf that appeared in the Conditions field (stronger signal)
-        if cond_matches:
-            primary_entity = cond_matches[0]
-        else:
-            primary_entity = all_entities[0]
+        primary_entity = cond_matches[0] if cond_matches else all_entities[0]
         primary_category = ENTITY_TO_CATEGORY[primary_entity]
 
-        # Basket: 2+ entities, especially across categories
-        if len(all_entities) >= 2:
-            if len(categories) >= 2:
-                return {
-                    "branch": branch,
-                    "category": BASKET_MULTI_LABEL,
-                    "entity": BASKET_MULTI_LABEL,
-                    "entities": "|".join(all_entities),
-                    "design": "Basket/Multidisease",
-                }
-
+        # Multi-category within one branch → Basket/Multidisease.
+        if len(categories) >= 2:
+            return {
+                "branch": branch,
+                "category": BASKET_MULTI_LABEL,
+                "entity": BASKET_MULTI_LABEL,
+                "entities": "|".join(all_entities),
+                "design": "Basket/Multidisease",
+            }
+        # Same category, multiple entities — keep primary, flag as basket design.
+        design = "Basket/Multidisease" if len(all_entities) >= 2 else "Single disease"
         return {
             "branch": branch,
             "category": primary_category,
             "entity": primary_entity,
             "entities": "|".join(all_entities),
-            "design": "Single disease",
+            "design": design,
         }
 
-    # 3. No leaf matches — try category-level fallback.
+    # 2. No leaf match — category-level fallback.
     cat_matches = _match_terms(full_text, CATEGORY_FALLBACK_TERMS)
     if cat_matches:
         categories = sorted(set(cat_matches))
@@ -192,7 +244,7 @@ def _classify_disease(row: dict) -> dict:
             "design": "Single disease",
         }
 
-    # 4. No category match — try branch-level basket terms.
+    # 3. Branch-level basket fallbacks.
     if _contains_any(full_text, SOLID_BASKET_TERMS):
         return {
             "branch": "Solid-onc",
@@ -210,7 +262,6 @@ def _classify_disease(row: dict) -> dict:
             "design": "Basket/Multidisease",
         }
 
-    # 5. Fall through.
     return {
         "branch": "Unknown",
         "category": UNCLASSIFIED_LABEL,
@@ -221,28 +272,24 @@ def _classify_disease(row: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Exclusion logic
+# Exclusion (autoimmune-only indications)
 # ---------------------------------------------------------------------------
 
-def _exclude_by_indication(row: dict) -> bool:
-    """Exclude trials whose *only* indication is autoimmune / rheumatologic.
+def _is_hard_excluded(nct_id: str) -> bool:
+    return nct_id.strip() in HARD_EXCLUDED_NCT_IDS
 
-    A trial is excluded if:
-      - NCT ID is on the hard-excluded list, OR
-      - The text contains an excluded indication term AND does not contain
-        any oncology-adjacent hit (entity / category / branch basket / target).
+
+def _is_indication_excluded(row: dict) -> bool:
+    """Exclude trials whose only indication is autoimmune / rheumatologic.
+    A trial with an onco hit (entity, category, branch basket, or onco target)
+    is NOT excluded even if the text also mentions an autoimmune term.
     """
-    nct_id = _safe_text(row.get("NCTId")).strip()
-    if nct_id in HARD_EXCLUDED_NCT_IDS:
-        return True
-
     text = _row_text(row)
     if not _contains_any(text, EXCLUDED_INDICATION_TERMS):
         return False
-
-    # Hit on autoimmune term — only exclude if we did NOT find any onco hit.
-    # Check: any entity, any category fallback, any branch basket, or a heme/solid target mention.
-    has_entity = any(any(_term_in_text(text, t) for t in terms) for terms in ENTITY_TERMS.values())
+    has_entity = any(
+        any(_term_in_text(text, t) for t in terms) for terms in ENTITY_TERMS.values()
+    )
     if has_entity:
         return False
     has_category = any(
@@ -255,12 +302,17 @@ def _exclude_by_indication(row: dict) -> bool:
     return True
 
 
+def _exclude_by_indication(row: dict) -> bool:
+    if _is_hard_excluded(_safe_text(row.get("NCTId"))):
+        return True
+    return _is_indication_excluded(row)
+
+
 # ---------------------------------------------------------------------------
-# Target antigen classification
+# Target and product classification
 # ---------------------------------------------------------------------------
 
 def _detect_targets(text: str) -> list[str]:
-    """Return list of target labels found in normalized text (no dual-combining yet)."""
     matches: list[str] = []
     for label, terms in HEME_TARGET_TERMS.items():
         if any(_term_in_text(text, t) for t in terms):
@@ -268,46 +320,43 @@ def _detect_targets(text: str) -> list[str]:
     for label, terms in SOLID_TARGET_TERMS.items():
         if any(_term_in_text(text, t) for t in terms):
             matches.append(label)
-
-    # Resolve known prefix collisions — the more-specific target wins.
+    # Resolve known prefix collisions — more-specific wins.
     if "EGFRvIII" in matches and "EGFR" in matches:
         matches.remove("EGFR")
     return matches
 
 
-def _match_named_product(text: str) -> dict | None:
-    for product_key, info in NAMED_PRODUCTS.items():
-        if _term_in_text(text, product_key):
-            return info
-    return None
-
-
 def _assign_target(row: dict) -> str:
+    nct = _safe_text(row.get("NCTId")).strip()
+    if nct in _LLM_OVERRIDES:
+        t = _LLM_OVERRIDES[nct].get("target_category")
+        if t:
+            return t
+
     text = _row_text(row)
 
-    # 1. Named-product short-circuit.
-    prod = _match_named_product(text)
-    if prod:
-        return prod["target"]
+    # Named-product short-circuit.
+    named = _lookup_named_product(text, NAMED_PRODUCT_TARGETS)
+    if named:
+        return named
 
-    # 2. Platform detection — CAR-NK / CAAR-T / CAR-Treg / CAR-γδ T.
+    # Platform detection.
     has_car_nk = _contains_any(text, CAR_NK_TERMS)
     has_caar_t = _contains_any(text, CAAR_T_TERMS)
     has_car_treg = _contains_any(text, CAR_TREG_TERMS) or ("treg" in text and "car" in text)
     has_car_gd = _contains_any(text, CAR_GD_T_TERMS)
 
-    # 3. Detect all antigens present.
     targets_found = _detect_targets(text)
-
-    # 4. Dual-target combos (ordered by list — first match wins).
     targets_set = set(targets_found)
+
+    # Dual-target combos.
     for (a, b), label in DUAL_TARGET_LABELS:
         if a in targets_set and b in targets_set:
             if has_car_nk:
                 return f"CAR-NK: {label}"
             return label
 
-    # 5. Platforms with no clear antigen.
+    # Platform with no antigen.
     if has_car_nk and not targets_found:
         return "CAR-NK"
     if has_caar_t and not targets_found:
@@ -317,49 +366,60 @@ def _assign_target(row: dict) -> str:
     if has_car_gd and not targets_found:
         return "CAR-γδ T"
 
-    # 6. Single antigen.
     if len(targets_found) == 1:
         label = targets_found[0]
         if has_car_nk:
             return f"CAR-NK: {label}"
         return label
-
-    # 7. Multiple antigens not in DUAL_TARGET_LABELS — return first.
     if targets_found:
         if has_car_nk:
             return f"CAR-NK: {targets_found[0]}"
         return targets_found[0]
 
-    # 8. Generic CAR mention with no identified target.
     if _contains_any(text, CAR_CORE_TERMS):
         return "CAR-T_unspecified"
-
     return "Other_or_unknown"
 
 
 def _assign_product_type(row: dict) -> str:
-    text = _row_text(row)
+    nct = _safe_text(row.get("NCTId")).strip()
+    if nct in _LLM_OVERRIDES:
+        p = _LLM_OVERRIDES[nct].get("product_type")
+        if p:
+            return p
 
-    # Named-product short-circuit.
-    prod = _match_named_product(text)
-    if prod:
-        return prod["type"]
+    text = _row_text(row)
+    title = _normalize_text(_safe_text(row.get("BriefTitle")))
+
+    # In vivo — title is strongest signal.
+    if "in vivo" in title:
+        return "In vivo"
+    if any(term in text for term in IN_VIVO_TERMS):
+        return "In vivo"
+
+    # Named-product short-circuit (ordered: In vivo → Allo → Auto in config).
+    named = _lookup_named_product(text, NAMED_PRODUCT_TYPES)
+    if named == "In vivo":
+        return "In vivo"
 
     if "autoleucel" in text or "autologous" in text:
         return "Autologous"
 
     strong_allo_terms = [
-        "ucart",
-        "ucar",
-        "universal car t",
-        "off the shelf",
-        "allogeneic",
-        "healthy donor",
-        "donor derived",
-        "donor sourced",
+        "ucart", "ucar",
+        "universal car t", "universal car-t",
+        "universal cd19", "universal bcma",
+        "u car t", "u car-t",
+        "off the shelf", "allogeneic",
+        "healthy donor", "donor derived", "donor sourced",
     ]
     if any(term in text for term in strong_allo_terms):
         return "Allogeneic/Off-the-shelf"
+
+    if named == "Allogeneic/Off-the-shelf":
+        return "Allogeneic/Off-the-shelf"
+    if named == "Autologous":
+        return "Autologous"
 
     if _contains_any(text, ALLOGENEIC_MARKERS):
         return "Allogeneic/Off-the-shelf"
@@ -370,12 +430,10 @@ def _assign_product_type(row: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CT.gov fetch / flatten
+# ClinicalTrials.gov fetch
 # ---------------------------------------------------------------------------
 
-def fetch_raw_trials(
-    max_records: int = 5000, statuses: list[str] | None = None
-) -> list[dict]:
+def fetch_raw_trials(max_records: int = 5000, statuses: list[str] | None = None) -> list[dict]:
     """Pull oncology CAR-T trials from ClinicalTrials.gov v2."""
     term_query = (
         '('
@@ -482,26 +540,35 @@ def _extract_sites(study: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Public builders
+# PRISMA-returning builder
 # ---------------------------------------------------------------------------
 
-def build_clean_dataframe(
-    max_records: int = 5000, statuses: list[str] | None = None
-) -> pd.DataFrame:
-    """Fetch, flatten, classify, and filter oncology CAR-T trials."""
-    studies = fetch_raw_trials(max_records=max_records, statuses=statuses)
+def _process_trials_from_studies(studies: list[dict]) -> tuple[pd.DataFrame, dict]:
+    """Classify studies, apply exclusions, and return (df, prisma_counts)."""
     df = pd.DataFrame([_flatten_study(s) for s in studies])
+
+    n_fetched = len(df)
     df = df.dropna(subset=["NCTId"]).drop_duplicates(subset=["NCTId"])
+    n_after_dedup = len(df)
+    n_duplicates = n_fetched - n_after_dedup
 
     classification = df.apply(lambda r: _classify_disease(r.to_dict()), axis=1)
     df["Branch"] = classification.apply(lambda d: d["branch"])
     df["DiseaseCategory"] = classification.apply(lambda d: d["category"])
     df["DiseaseEntity"] = classification.apply(lambda d: d["entity"])
     df["DiseaseEntities"] = classification.apply(lambda d: d["entities"])
-    df["Design"] = classification.apply(lambda d: d["design"])
+    df["TrialDesign"] = classification.apply(lambda d: d["design"])
+    df["LLMOverride"] = df["NCTId"].isin(_LLM_OVERRIDES)
 
-    mask_excl = df.apply(lambda r: _exclude_by_indication(r.to_dict()), axis=1)
-    df = df[~mask_excl].copy()
+    hard_mask = df["NCTId"].apply(_is_hard_excluded)
+    n_hard_excluded = int(hard_mask.sum())
+
+    df_after_hard = df[~hard_mask].copy()
+    indication_mask = df_after_hard.apply(lambda r: _is_indication_excluded(r.to_dict()), axis=1)
+    n_indication_excluded = int(indication_mask.sum())
+
+    df = df_after_hard[~indication_mask].copy()
+    n_included = len(df)
 
     df["TargetCategory"] = df.apply(lambda r: _assign_target(r.to_dict()), axis=1)
     df["ProductType"] = df.apply(lambda r: _assign_product_type(r.to_dict()), axis=1)
@@ -509,15 +576,23 @@ def build_clean_dataframe(
     df["StartDate"] = pd.to_datetime(df["StartDate"], errors="coerce")
     df["StartYear"] = df["StartDate"].dt.year
     df["LastUpdatePostDate"] = pd.to_datetime(df["LastUpdatePostDate"], errors="coerce")
+    df["EnrollmentCount"] = pd.to_numeric(df["EnrollmentCount"], errors="coerce")
     df["SnapshotDate"] = datetime.utcnow().date().isoformat()
 
-    return df.reset_index(drop=True)
+    prisma = {
+        "n_fetched": n_fetched,
+        "n_duplicates_removed": n_duplicates,
+        "n_after_dedup": n_after_dedup,
+        "n_hard_excluded": n_hard_excluded,
+        "n_indication_excluded": n_indication_excluded,
+        "n_total_excluded": n_hard_excluded + n_indication_excluded,
+        "n_included": n_included,
+    }
+
+    return df.reset_index(drop=True), prisma
 
 
-def build_sites_dataframe(
-    max_records: int = 5000, statuses: list[str] | None = None
-) -> pd.DataFrame:
-    studies = fetch_raw_trials(max_records=max_records, statuses=statuses)
+def _sites_from_studies(studies: list[dict]) -> pd.DataFrame:
     site_rows: list[dict] = []
     for s in studies:
         site_rows.extend(_extract_sites(s))
@@ -525,3 +600,105 @@ def build_sites_dataframe(
     if df_sites.empty:
         return df_sites
     return df_sites.dropna(subset=["NCTId"]).drop_duplicates().reset_index(drop=True)
+
+
+def build_all_from_api(
+    max_records: int = 5000, statuses: list[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """Fetch from live API and return (df_trials, df_sites, prisma_counts)."""
+    studies = fetch_raw_trials(max_records=max_records, statuses=statuses)
+    df, prisma = _process_trials_from_studies(studies)
+    df_sites = _sites_from_studies(studies)
+    return df, df_sites, prisma
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible wrappers
+# ---------------------------------------------------------------------------
+
+def build_clean_dataframe(max_records: int = 5000, statuses: list[str] | None = None) -> pd.DataFrame:
+    df, _ = _process_trials_from_studies(fetch_raw_trials(max_records=max_records, statuses=statuses))
+    return df
+
+
+def build_sites_dataframe(max_records: int = 5000, statuses: list[str] | None = None) -> pd.DataFrame:
+    return _sites_from_studies(fetch_raw_trials(max_records=max_records, statuses=statuses))
+
+
+# ---------------------------------------------------------------------------
+# Snapshot I/O
+# ---------------------------------------------------------------------------
+
+def save_snapshot(
+    df: pd.DataFrame,
+    df_sites: pd.DataFrame,
+    prisma: dict,
+    snapshot_dir: str = "snapshots",
+    statuses: list[str] | None = None,
+) -> str:
+    snapshot_date = datetime.utcnow().date().isoformat()
+    out_dir = os.path.join(snapshot_dir, snapshot_date)
+    os.makedirs(out_dir, exist_ok=True)
+
+    df.to_csv(os.path.join(out_dir, "trials.csv"), index=False)
+    df_sites.to_csv(os.path.join(out_dir, "sites.csv"), index=False)
+
+    with open(os.path.join(out_dir, "prisma.json"), "w") as f:
+        json.dump(prisma, f, indent=2)
+
+    metadata = {
+        "snapshot_date": snapshot_date,
+        "created_utc": datetime.utcnow().isoformat(),
+        "statuses_filter": statuses or [],
+        "n_trials": len(df),
+        "n_sites": len(df_sites),
+        "api_base_url": BASE_URL,
+    }
+    with open(os.path.join(out_dir, "metadata.json"), "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    return snapshot_date
+
+
+def load_snapshot(
+    snapshot_date: str,
+    snapshot_dir: str = "snapshots",
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    out_dir = os.path.join(snapshot_dir, snapshot_date)
+
+    df = pd.read_csv(os.path.join(out_dir, "trials.csv"))
+    df["StartDate"] = pd.to_datetime(df["StartDate"], errors="coerce")
+    df["LastUpdatePostDate"] = pd.to_datetime(df["LastUpdatePostDate"], errors="coerce")
+    for col, default in [
+        ("Branch", "Unknown"),
+        ("DiseaseCategory", UNCLASSIFIED_LABEL),
+        ("DiseaseEntities", df.get("DiseaseEntity", "").fillna("") if "DiseaseEntity" in df.columns else ""),
+        ("TrialDesign", "Single disease"),
+    ]:
+        if col not in df.columns:
+            df[col] = default
+    if "LLMOverride" not in df.columns:
+        df["LLMOverride"] = df["NCTId"].isin(_LLM_OVERRIDES)
+
+    sites_path = os.path.join(out_dir, "sites.csv")
+    df_sites = pd.read_csv(sites_path) if os.path.exists(sites_path) else pd.DataFrame()
+
+    prisma_path = os.path.join(out_dir, "prisma.json")
+    if os.path.exists(prisma_path):
+        with open(prisma_path) as f:
+            prisma = json.load(f)
+    else:
+        prisma = {}
+
+    return df, df_sites, prisma
+
+
+def list_snapshots(snapshot_dir: str = "snapshots") -> list[str]:
+    if not os.path.isdir(snapshot_dir):
+        return []
+    dates = [
+        d for d in os.listdir(snapshot_dir)
+        if os.path.isdir(os.path.join(snapshot_dir, d))
+        and os.path.exists(os.path.join(snapshot_dir, d, "trials.csv"))
+    ]
+    return sorted(dates, reverse=True)

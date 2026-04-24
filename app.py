@@ -1434,6 +1434,38 @@ tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = st.
 # ---------------------------------------------------------------------------
 
 with tab_overview:
+    # Shared branch colour key — used across every panel on this tab
+    # (sunburst, trials-by-category, phase, temporal). Rendered once at the
+    # top as a compact chip row so we can drop per-chart branch legends.
+    _branches_present = (
+        df_filt["Branch"].dropna().unique().tolist() if not df_filt.empty else []
+    )
+    _branch_key_order = ["Heme-onc", "Solid-onc", "Mixed", "Unknown"]
+    _branches_in_view = [b for b in _branch_key_order if b in _branches_present]
+    if _branches_in_view:
+        _chips = []
+        for _br in _branches_in_view:
+            _col = BRANCH_COLORS.get(_br, THEME["primary"])
+            _chips.append(
+                f'<span style="display:inline-flex; align-items:center; '
+                f'gap:0.4rem; margin-right:1.4rem; font-size:0.86rem; '
+                f'color:{THEME["text"]};">'
+                f'<span style="display:inline-block; width:14px; height:14px; '
+                f'border-radius:3px; background:{_col};"></span>'
+                f'{_br}</span>'
+            )
+        st.markdown(
+            '<div style="margin: 0.2rem 0 1.2rem 0; padding-bottom: 0.4rem; '
+            'border-bottom: 1px solid #e5e7eb;">'
+            '<div style="font-size:0.78rem; color:#64748b; '
+            'margin-bottom:0.35rem;">'
+            "All panels on this tab share the branch colour key below."
+            "</div>"
+            + "".join(_chips)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
     # Disease hierarchy sunburst (Branch → Category → Entity)
     st.subheader("Disease hierarchy at a glance")
     st.caption(
@@ -1470,8 +1502,8 @@ with tab_overview:
     with ov_r1c1:
         st.subheader("Trials by disease category")
         st.caption(
-            "Heme categories (blue) on the left, solid categories (amber) in the "
-            "middle, cross-cutting baskets on the right — sorted by count within each group."
+            "Grouped by disease family (heme, solid, other) and sorted by count "
+            "within each group; cross-cutting baskets sit at the far right."
         )
         counts_cat = (
             df_filt.groupby(["DiseaseCategory", "Branch"], as_index=False)
@@ -1526,6 +1558,7 @@ with tab_overview:
                 margin=dict(l=10, r=10, t=10, b=10),
                 font=dict(color=THEME["text"]),
                 xaxis_title=None, yaxis_title=None, legend_title=None,
+                showlegend=False,  # shared key at top of Overview carries this
             )
             fig_cat.update_xaxes(color=THEME["muted"])
             fig_cat.update_yaxes(gridcolor=THEME["grid"], color=THEME["muted"])
@@ -1535,11 +1568,15 @@ with tab_overview:
 
     with ov_r1c2:
         st.subheader("Trials by antigen target")
-        st.caption("Top 20 antigens. Platforms (CAR-NK, CAAR-T, …) shown in the Modality figure.")
         counts_target = (
             df_filt.loc[~df_filt["TargetCategory"].isin(_PLATFORM_LABELS), "TargetCategory"]
             .fillna("Unknown").value_counts().rename_axis("TargetCategory")
             .reset_index(name="Count").head(20)
+        )
+        _n_shown_targets = len(counts_target)
+        st.caption(
+            f"Top {_n_shown_targets} antigen{'s' if _n_shown_targets != 1 else ''}. "
+            "Platforms (CAR-NK, CAAR-T, …) shown in the Modality figure."
         )
         if not counts_target.empty:
             st.plotly_chart(
@@ -1577,6 +1614,7 @@ with tab_overview:
                 margin=dict(l=10, r=10, t=10, b=10),
                 font=dict(color=THEME["text"]),
                 xaxis_title=None, yaxis_title=None, legend_title=None,
+                showlegend=False,
             )
             fig_phase.update_xaxes(color=THEME["muted"], categoryorder="array",
                                     categoryarray=[PHASE_LABELS[p] for p in PHASE_ORDER])
@@ -1615,6 +1653,7 @@ with tab_overview:
                 margin=dict(l=10, r=10, t=10, b=10),
                 font=dict(color=THEME["text"]),
                 xaxis_title=None, yaxis_title=None, legend_title=None,
+                showlegend=False,
             )
             _ov_first = _first_meaningful_year(counts_year) or int(counts_year["StartYear"].min())
             _ov_last = int(counts_year["StartYear"].max())
@@ -3089,7 +3128,7 @@ with tab_pub:
     # Fig 3 — Geography, with Heme vs Solid split
     # ------------------------------------------------------------------
     _pub_header("3", "Global distribution of trial sites",
-                "Country-level trial counts for the current filter. Companion 3b breaks the top 10 by branch.")
+                "Country-level trial counts for the current filter. Panel 3b stratifies the top countries by branch when more than one branch is present.")
 
     def _country_branch_long(df_in: pd.DataFrame) -> pd.DataFrame:
         rows = []
@@ -3534,7 +3573,7 @@ with tab_pub:
     # Fig 6 — Heme vs Solid antigen panels (side-by-side)
     # ------------------------------------------------------------------
     _pub_header("6", "Antigen target landscape, heme vs solid",
-                "Top antigens among trials in the current filter, split into heme and solid panels. Long tail of low-count antigens aggregated as 'Other (N antigens)'.")
+                "Top antigens among trials in the current filter. Heme-onc and solid-onc panels render when each has data. Long tail of low-count antigens aggregated as 'Other (N antigens)'.")
 
     _UNCLEAR_BUCKET = "Undisclosed / unclear"
 
@@ -3761,7 +3800,7 @@ with tab_pub:
     # Fig 8 — Disease × Target heatmap (oncology-specific signature)
     # ------------------------------------------------------------------
     _pub_header("8", "Disease × antigen target heatmap",
-                "Trial counts per (category, antigen) pair in the current filter. Top 15 categories × top 18 antigens shown; undisclosed-antigen trials excluded from the matrix.")
+                "Trial counts per (category, antigen) pair in the current filter. Up to the top 15 categories × top 18 antigens are shown; undisclosed-antigen trials are excluded from the matrix.")
 
     # Build disease-target matrix (top N of each for readability)
     hm_df = df_filt.copy()
@@ -3829,7 +3868,9 @@ with tab_pub:
         st.markdown(
             '<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
             'Heme-onc categories shown against a navy background; solid-onc against amber. '
-            'Only the top 15 categories × top 18 antigens are shown.'
+            f'Up to the top {len(top_cats_hm)} categor'
+            f"{'y' if len(top_cats_hm) == 1 else 'ies'} × top "
+            f"{len(top_tgts_hm)} antigen{'s' if len(top_tgts_hm) != 1 else ''} shown."
             '</div>',
             unsafe_allow_html=True,
         )

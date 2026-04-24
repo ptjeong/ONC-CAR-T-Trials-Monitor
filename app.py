@@ -2897,21 +2897,31 @@ with tab_pub:
             zeroline=False, rangemode="tozero",
         )
 
-        # Bottom panel: product labels on y; no grid. Range padded so dots
-        # don't sit on the axis lines.
+        # Bottom panel: product labels on y with subtle alternating-row
+        # shading so the eye tracks approvals across the full year range.
         fig1.update_yaxes(
             row=2, col=1,
             tickmode="array",
             tickvals=list(_brand_to_y.values()) if _has_any_active else [],
             ticktext=list(_brand_to_y.keys())  if _has_any_active else [],
-            tickfont=dict(size=10, color=THEME["text"]),
-            showgrid=True, gridcolor="#f1f5f9", gridwidth=0.7,
+            tickfont=dict(size=11, color=THEME["text"]),
+            showgrid=False,
             showline=True, linewidth=1.2, linecolor=_AX_COLOR,
             zeroline=False,
             range=[-0.6, (len(_brands_display) - 0.4) if _has_any_active else 1],
             fixedrange=True,
             title=None,
+            ticks="",
         )
+        if _has_any_active:
+            # Zebra stripes behind every other product row — faint, just
+            # enough to help the eye track horizontally across the strip.
+            for _i in range(0, len(_brands_display), 2):
+                fig1.add_hrect(
+                    y0=_i - 0.5, y1=_i + 0.5,
+                    fillcolor="rgba(15, 23, 42, 0.025)", line_width=0,
+                    layer="below", row=2, col=1,
+                )
 
         # Shared x-axis on bottom panel (plotly renders it only on the
         # visible bottom subplot when shared_xaxes=True).
@@ -2935,30 +2945,46 @@ with tab_pub:
 
         _current_year = pd.Timestamp.now().year
         if _yr_max is not None and _yr_max >= _current_year:
-            # Shade partial-year band across BOTH panels so the caveat
-            # stays visible regardless of which subplot the reader looks at.
+            # Shade partial-year band across BOTH panels. Band alone
+            # conveys the caveat; text annotation was colliding with
+            # plotly's modebar toolbar in the top-right.
             for _row in (1, 2):
                 fig1.add_vrect(
                     x0=_current_year - 0.5, x1=_current_year + 0.5,
-                    fillcolor="rgba(0,0,0,0.04)", line_width=0,
+                    fillcolor="rgba(0,0,0,0.05)", line_width=0,
                     row=_row, col=1,
                 )
+            # Small italic in-panel note — inside the plot area (top-right),
+            # clear of the toolbar, anchored to data coords so it doesn't
+            # collide with the modebar.
+            _max_trials = year_branch.groupby("StartYear")["Trials"].sum().max()
             fig1.add_annotation(
-                x=_current_year, y=1.03, yref="paper",
-                text=f"{_current_year} (partial year)", showarrow=False,
+                x=_current_year, y=_max_trials * 0.96,
+                xref="x", yref="y",
+                text=f"<i>{_current_year}: partial year</i>",
+                showarrow=False,
                 font=dict(size=10, color=THEME["muted"]),
-                yanchor="bottom", xanchor="center",
+                xanchor="center", yanchor="top",
+                row=1, col=1,
             )
 
         fig1.update_layout(
             **PUB_BASE,
-            height=540 if _has_any_active else 440,
-            margin=dict(l=140, r=36, t=32, b=90),
+            height=560 if _has_any_active else 440,
+            # Generous bottom margin — legend sits comfortably below the
+            # "Start year" axis title without clipping the strip panel.
+            margin=dict(l=140, r=36, t=24, b=130),
             legend=dict(
-                orientation="h", yanchor="top", y=-0.12,
+                orientation="h",
+                yanchor="top", y=-0.22,
                 xanchor="center", x=0.5,
                 font=dict(size=11, color=_AX_COLOR),
-                bgcolor="rgba(0,0,0,0)", borderwidth=0, title=None,
+                bgcolor="rgba(0,0,0,0)", borderwidth=0,
+                title=None,
+                itemsizing="constant",
+                # Branch traces (area fill) and regulator dots get naturally
+                # different visual tokens so they're distinguishable on one row.
+                traceorder="normal",
             ),
         )
 

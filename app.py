@@ -1459,16 +1459,56 @@ with tab_overview:
 
     with ov_r1c1:
         st.subheader("Trials by disease category")
-        st.caption("Stacked by Branch. Basket trials shown under their inferred branch.")
+        st.caption(
+            "Heme categories (blue) on the left, solid categories (amber) in the "
+            "middle, cross-cutting baskets on the right — sorted by count within each group."
+        )
         counts_cat = (
             df_filt.groupby(["DiseaseCategory", "Branch"], as_index=False)
             .size().rename(columns={"size": "Count"})
         )
-        counts_cat = counts_cat.sort_values("Count", ascending=False)
         if not counts_cat.empty:
+            # Semantic ordering instead of pure count-descending. Baskets
+            # (especially the cross-branch "Basket/Multidisease") aren't
+            # disease categories — they're spanning buckets — so sorting them
+            # in-line with single-disease categories misleads the reader.
+            # Group totals for ordering decisions.
+            _total_by_cat = counts_cat.groupby("DiseaseCategory")["Count"].sum()
+            _branch_by_cat = (
+                counts_cat.groupby("DiseaseCategory")["Branch"]
+                .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else "Unknown")
+            )
+
+            _basket_labels = {HEME_BASKET_LABEL, SOLID_BASKET_LABEL, BASKET_MULTI_LABEL}
+            _heme_regular, _solid_regular, _other_regular = [], [], []
+            for cat in _total_by_cat.index:
+                if cat in _basket_labels or cat == UNCLASSIFIED_LABEL:
+                    continue
+                br = _branch_by_cat.get(cat, "Unknown")
+                if br == "Heme-onc":
+                    _heme_regular.append(cat)
+                elif br == "Solid-onc":
+                    _solid_regular.append(cat)
+                else:
+                    _other_regular.append(cat)
+
+            def _by_count_desc(cats):
+                return sorted(cats, key=lambda c: -_total_by_cat.get(c, 0))
+
+            category_order = (
+                _by_count_desc(_heme_regular)
+                + _by_count_desc(_solid_regular)
+                + _by_count_desc(_other_regular)
+                # Cross-cutting baskets at the right, regardless of count.
+                + [lbl for lbl in (HEME_BASKET_LABEL, SOLID_BASKET_LABEL, BASKET_MULTI_LABEL)
+                   if lbl in _total_by_cat.index]
+                + ([UNCLASSIFIED_LABEL] if UNCLASSIFIED_LABEL in _total_by_cat.index else [])
+            )
+
             fig_cat = px.bar(
                 counts_cat, x="DiseaseCategory", y="Count", color="Branch",
                 color_discrete_map=BRANCH_COLORS, template="plotly_white", height=380,
+                category_orders={"DiseaseCategory": category_order},
             )
             fig_cat.update_layout(
                 barmode="stack",

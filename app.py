@@ -2670,60 +2670,75 @@ with tab_pub:
         # dose-escalation trials, few 500+ Phase III). Linear axis crams the
         # bulk of trials at the left. Log-spaced bins + log axis spread the
         # distribution so every decade of enrollment size is legible.
-        # Pre-compute log-spaced bins and render as bar chart. px.histogram
-        # with xaxis.type="log" + manual xbins in log coordinates caused the
-        # x-axis to explode to 10²⁵ (Plotly misinterpreted log-coord bin
-        # edges as data values). Pre-binning is the predictable path.
-        _enrl_vals = df_enroll_known["EnrollmentCount"].astype(float).clip(lower=1)
-        _vmax = float(_enrl_vals.max())
-        _log_edges = np.logspace(np.log10(1), np.log10(max(10, _vmax)), num=25)
-        # Geometric centre of each bin — correct midpoint on a log axis.
-        _bin_centres = np.sqrt(_log_edges[:-1] * _log_edges[1:])
+        # Horizontal box plot by branch with every trial rendered as a dot.
+        # Much more intuitive than a log-scale histogram: the box shows median
+        # + IQR at a glance, whiskers mark the 1.5×IQR range, and the jittered
+        # dots give you the full spread — no binning artifacts, no log-axis
+        # interpretation burden. Branches stack vertically so Heme vs Solid
+        # is a direct visual comparison.
+        _enroll_box = df_enroll_known.copy()
+        _enroll_box["EnrollmentCount"] = _enroll_box["EnrollmentCount"].clip(lower=1)
+        # Order branches so the most common is on top of the chart
+        _branch_order = (
+            _enroll_box["Branch"].value_counts().index.tolist()
+        )
 
-        _hist_rows = []
-        for _branch in sorted(df_enroll_known["Branch"].dropna().unique()):
-            _sub = df_enroll_known[df_enroll_known["Branch"] == _branch]["EnrollmentCount"].astype(float)
-            if _sub.empty:
-                continue
-            _counts, _ = np.histogram(_sub, bins=_log_edges)
-            for _centre, _c in zip(_bin_centres, _counts):
-                if _c > 0:
-                    _hist_rows.append({"Branch": _branch, "Bin": float(_centre), "Count": int(_c)})
-        _hist_df = pd.DataFrame(_hist_rows)
-
-        if not _hist_df.empty:
-            fig4a = px.bar(
-                _hist_df, x="Bin", y="Count", color="Branch",
-                color_discrete_map=BRANCH_COLORS, barmode="overlay",
-                template="plotly_white", height=400,
-            )
-            fig4a.update_traces(
-                opacity=0.6, marker_line_color="white", marker_line_width=0.4,
-                hovertemplate="Enrollment ~%{x:.0f} · %{y} trials<extra></extra>",
-            )
-            _median_line = dict(
-                type="line", x0=med_pts, x1=med_pts, y0=0, y1=1,
-                xref="x", yref="paper",
-                line=dict(color=NEJM_RED, width=1.5, dash="dash"),
-            )
-            fig4a.update_layout(
-                **PUB_LAYOUT,
-                xaxis_title="Planned enrollment (patients, log scale)",
-                yaxis_title="Number of trials",
-                shapes=[_median_line],
-                annotations=[dict(
-                    x=np.log10(med_pts), y=0.97, xref="x", yref="paper",
-                    text=f"  Median = {med_pts}", showarrow=False,
-                    font=dict(size=10, color=NEJM_RED), xanchor="left",
-                )],
-                legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
-                            font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
-                            borderwidth=0, title=None),
-            )
-            fig4a.update_xaxes(type="log", range=[0, np.log10(_vmax) + 0.05])
-            st.plotly_chart(fig4a, width='stretch', config=PUB_EXPORT)
-        else:
-            st.info("Insufficient enrollment data for the distribution chart.")
+        fig4a = px.box(
+            _enroll_box,
+            x="EnrollmentCount", y="Branch",
+            color="Branch", color_discrete_map=BRANCH_COLORS,
+            category_orders={"Branch": list(reversed(_branch_order))},
+            points="all",            # show every trial as a dot
+            orientation="h",
+            template="plotly_white",
+            height=max(260, 70 * len(_branch_order) + 110),
+            hover_data={"EnrollmentCount": True, "Branch": False},
+        )
+        fig4a.update_traces(
+            jitter=0.4, pointpos=0,
+            marker=dict(size=4, opacity=0.45),
+            line=dict(width=1.4),
+            fillcolor="rgba(0,0,0,0)",   # transparent box interior — let dots breathe
+            boxmean=True,                 # add a dashed line at the mean
+        )
+        # Median marker above the overall median — annotation on paper ref
+        _median_line = dict(
+            type="line", x0=med_pts, x1=med_pts, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color=NEJM_RED, width=1.3, dash="dash"),
+        )
+        fig4a.update_layout(
+            **PUB_BASE,
+            margin=dict(l=130, r=40, t=26, b=72),
+            xaxis=dict(
+                title="Planned enrollment (patients, log scale)",
+                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
+                ticks="outside", ticklen=6, tickwidth=1.2,
+                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title=None, showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                ticks="outside", ticklen=4, tickwidth=1.2,
+                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+            ),
+            showlegend=False,
+            shapes=[_median_line],
+            annotations=[dict(
+                x=np.log10(med_pts), y=1.02, xref="x", yref="paper",
+                text=f"  Overall median = {med_pts}",
+                showarrow=False,
+                font=dict(size=10, color=NEJM_RED), xanchor="left", yanchor="bottom",
+            )],
+        )
+        fig4a.update_xaxes(type="log")
+        st.plotly_chart(fig4a, width='stretch', config=PUB_EXPORT)
+        st.caption(
+            "Box: median (line), mean (dashed), IQR (box), 1.5×IQR whiskers. "
+            "Every trial with a reported enrollment is a dot. Log-scale x-axis."
+        )
 
         # 4b — Median enrollment by phase × branch
         st.markdown(
@@ -2837,38 +2852,61 @@ with tab_pub:
                 int(rows.quantile(0.25)), int(rows.quantile(0.75)),
             )
 
+        # Build the forest-plot strata. Three orthogonal comparison axes —
+        # Branch, Geography, Sponsor type — plus an Overall reference row.
+        # When the active filter has collapsed one axis (e.g. only Heme-onc
+        # trials after filtering), redundant rows are de-duplicated below
+        # so the plot never shows two rows with identical (median, IQR, n).
         forest_rows = []
         _all = df_enroll_known["EnrollmentCount"]
         N, M, Q1, Q3 = _stat(_all)
-        forest_rows.append({"Category": "Overall", "Group": "All trials", "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
-        for br in ["Heme-onc", "Solid-onc"]:
+        forest_rows.append({"Category": "Overall", "Group": "All trials",
+                            "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
+        # Branch
+        for br in ["Heme-onc", "Solid-onc", "Mixed"]:
             rows = df_enroll_known[df_enroll_known["Branch"] == br]["EnrollmentCount"]
-            if len(rows):
+            if len(rows) >= 3:
                 N, M, Q1, Q3 = _stat(rows)
-                forest_rows.append({"Category": "Branch", "Group": br, "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
+                forest_rows.append({"Category": "Branch", "Group": br,
+                                    "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
+        # Geography
         for gg in ["China", "Non-China"]:
             rows = df_enroll_known[df_enroll_known["GeoGroup"] == gg]["EnrollmentCount"]
-            if len(rows):
+            if len(rows) >= 3:
                 N, M, Q1, Q3 = _stat(rows)
-                forest_rows.append({"Category": "Geography", "Group": gg, "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
-        # Branch × Geography cross
-        for br in ["Heme-onc", "Solid-onc"]:
-            for gg in ["China", "Non-China"]:
-                rows = df_enroll_known[
-                    (df_enroll_known["Branch"] == br) & (df_enroll_known["GeoGroup"] == gg)
-                ]["EnrollmentCount"]
+                forest_rows.append({"Category": "Geography", "Group": gg,
+                                    "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
+        # Sponsor type — replaces the old Branch × Geography cross-stratum,
+        # which added no information when the filter had collapsed Branch.
+        # Sponsor type is orthogonal to both Branch and Geography, so it
+        # genuinely introduces new comparisons.
+        if "SponsorType" in df_enroll_known.columns:
+            for st_ in ["Industry", "Academic", "Government"]:
+                rows = df_enroll_known[df_enroll_known["SponsorType"] == st_]["EnrollmentCount"]
                 if len(rows) >= 3:
                     N, M, Q1, Q3 = _stat(rows)
-                    forest_rows.append({"Category": "Branch × Geography",
-                                        "Group": f"{br} · {gg}",
+                    forest_rows.append({"Category": "Sponsor type", "Group": st_,
                                         "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
+
         forest_df = pd.DataFrame(forest_rows)
+
+        # ---- Dedupe ----
+        # Drop any row whose (Median, Q1, Q3, N) exactly matches a row that
+        # came before it. Handles the "Overall ≡ Branch: Heme-onc" collapse
+        # when the user's filter has already narrowed to one branch.
+        forest_df = forest_df.drop_duplicates(
+            subset=["Median", "Q1", "Q3", "N"], keep="first"
+        ).reset_index(drop=True)
+
         forest_df["Label"] = forest_df.apply(lambda r: f"{r['Category']}: {r['Group']}", axis=1)
+        # Plotly y-axis renders bottom-up — reverse so Overall sits at top.
         forest_df = forest_df.iloc[::-1].reset_index(drop=True)
 
         _CAT_COLORS = {
-            "Overall": "#0b1220", "Branch": NEJM_BLUE,
-            "Geography": NEJM_GREEN, "Branch × Geography": NEJM_AMBER,
+            "Overall":      "#0b1220",
+            "Branch":       NEJM_BLUE,
+            "Geography":    NEJM_GREEN,
+            "Sponsor type": NEJM_AMBER,
         }
 
         fig4d = px.scatter(

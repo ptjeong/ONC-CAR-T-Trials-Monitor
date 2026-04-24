@@ -1,0 +1,41 @@
+cff-version: 1.2.0
+message: >-
+  If you use this dashboard in scientific work, please cite the software
+  entry below. When citing a specific dataset or figure, also cite the
+  snapshot date that appears in the dashboard's About tab.
+title: CAR-T Oncology Trials Monitor
+type: software
+authors:
+  - family-names: Jeong
+    given-names: Peter
+    email: peter.jeong@uk-koeln.de
+    affiliation: >-
+      Klinik I für Innere Medizin, Hämatologie und Onkologie, Klinische
+      Immunologie und Rheumatologie, Universitätsklinikum Köln
+    orcid: null  # TODO: add ORCID if available
+version: "1.0.0"
+date-released: "2026-04-24"
+repository-code: "https://github.com/ptjeong/ONC-CAR-T-Trials-Monitor"
+url: "https://onc-car-t-trial-monitor.streamlit.app"
+license: MIT
+abstract: >-
+  An interactive Streamlit dashboard that tracks CAR-T, CAR-NK, CAAR-T, and
+  CAR-γδ T clinical trials across hematologic and solid tumors, sourced
+  from the ClinicalTrials.gov v2 API. Provides a three-tier disease
+  ontology (Branch → Category → Entity), cascading filters, antigen-target
+  and product-type classification via a hybrid rule + calibrated-default +
+  LLM-validation pipeline, cell-therapy modality annotation, approved-
+  product overlays (FDA, NMPA, EMA), geographic mapping with country-
+  selectable deep-dives, and eight publication-ready figures with
+  provenance-tagged CSV exports.
+keywords:
+  - CAR-T
+  - chimeric antigen receptor T cells
+  - CAR-NK
+  - oncology
+  - hematologic malignancies
+  - solid tumors
+  - clinical trials
+  - ClinicalTrials.gov
+  - dashboard
+  - streamlit

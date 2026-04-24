@@ -2577,43 +2577,86 @@ with tab_pub:
             ),
         )
 
-        # Approved-product overlays — FDA only on the chart (primary regulator);
-        # NMPA and EMA shown in a secondary caption below so the chart stays
-        # uncluttered and FDA approvals get prominence.
-        fda_products: dict[int, list[str]] = {}
-        nmpa_products: dict[int, list[str]] = {}
-        ema_products: dict[int, list[str]] = {}
-        for p in APPROVED_PRODUCTS:
-            reg = p["regulator"]
-            store = {"FDA": fda_products, "NMPA": nmpa_products, "EMA": ema_products}[reg]
-            store.setdefault(p["year"], []).append(p["name"])
+        # Approved-product overlays. Each regulator has its own tier of
+        # vertical lines and year/brand labels; pills below the chart toggle
+        # each tier on/off. Brand names (the parenthesised marketing name,
+        # e.g. "Kymriah" from "tisa-cel (Kymriah)") are pulled out of the
+        # APPROVED_PRODUCTS entries so each line tells the reader both WHEN
+        # a product landed and WHAT it was.
+        import re as _re_overlay
+        _brand_re = _re_overlay.compile(r"\(([^)]+)\)")
 
-        # Per-regulator pills — sit just below the chart, replacing a prominent
-        # checkbox with three small discreet toggles. State is read here (via
-        # session_state) so chart overlays match the active selection, but the
-        # widget itself is rendered after st.plotly_chart so it visually reads
-        # as a caption-side chip row.
+        def _brand_of(full_name: str) -> str:
+            m = _brand_re.search(full_name)
+            return m.group(1).strip() if m else full_name.strip()
+
+        _regulator_products: dict[str, dict[int, list[str]]] = {
+            "FDA": {}, "EMA": {}, "NMPA": {},
+        }
+        for p in APPROVED_PRODUCTS:
+            _regulator_products[p["regulator"]].setdefault(p["year"], []).append(
+                _brand_of(p["name"])
+            )
+        # Keep full-name dicts for the below-chart caption (fallback reference).
+        fda_products = {yr: [p["name"] for p in APPROVED_PRODUCTS
+                             if p["regulator"] == "FDA" and p["year"] == yr]
+                        for yr in _regulator_products["FDA"]}
+        nmpa_products = {yr: [p["name"] for p in APPROVED_PRODUCTS
+                              if p["regulator"] == "NMPA" and p["year"] == yr]
+                         for yr in _regulator_products["NMPA"]}
+        ema_products = {yr: [p["name"] for p in APPROVED_PRODUCTS
+                             if p["regulator"] == "EMA" and p["year"] == yr]
+                        for yr in _regulator_products["EMA"]}
+
+        # Per-regulator line styling — solid / dashed / dotted so overlapping
+        # years (e.g., 2020 FDA + EMA) stay distinguishable at the same X.
+        _REG_STYLE = {
+            "FDA":  {"dash": "solid",    "color": "#0b3d91", "width": 1.8, "opacity": 0.85, "y": 1.02},
+            "EMA":  {"dash": "dash",     "color": "#1d4ed8", "width": 1.4, "opacity": 0.70, "y": 1.11},
+            "NMPA": {"dash": "dot",      "color": "#b45309", "width": 1.4, "opacity": 0.70, "y": 1.20},
+        }
+
         _reg_labels = ["FDA", "NMPA", "EMA"]
         _active_regs = st.session_state.get("fig1_approval_regs", _reg_labels) or []
         _show_fda = "FDA" in _active_regs
         _show_nmpa = "NMPA" in _active_regs
         _show_ema = "EMA" in _active_regs
 
-        if _show_fda:
-            for yr in sorted(fda_products):
+        def _draw_regulator_tier(reg: str, active: bool) -> None:
+            if not active:
+                return
+            style = _REG_STYLE[reg]
+            for yr, brands in sorted(_regulator_products[reg].items()):
                 if yr < _fig1_first or yr > _fig1_last:
                     continue
-                # Prominent solid navy line for FDA approvals.
                 fig1.add_vline(
-                    x=yr, line_width=1.6, line_dash="solid", line_color="#0b3d91",
-                    opacity=0.85,
+                    x=yr, line_width=style["width"], line_dash=style["dash"],
+                    line_color=style["color"], opacity=style["opacity"],
+                )
+                # Compact label: year + brands on two lines so product names
+                # sit just under each year. Stacked Y offsets by regulator so
+                # tiers don't collide at shared years.
+                brand_str = ", ".join(brands)
+                label_html = (
+                    f"<b>{yr}</b><br>"
+                    f"<span style='font-size:10px'>{brand_str}</span>"
                 )
                 fig1.add_annotation(
-                    x=yr, y=1.015, yref="paper",
-                    text=f"<b>{yr}</b>",
+                    x=yr, y=style["y"], yref="paper",
+                    text=label_html,
                     showarrow=False, xanchor="center", yanchor="bottom",
-                    font=dict(size=12, color="#0b3d91", family="Inter, sans-serif"),
+                    font=dict(size=11, color=style["color"], family="Inter, sans-serif"),
+                    align="center",
                 )
+
+        _draw_regulator_tier("FDA",  _show_fda)
+        _draw_regulator_tier("EMA",  _show_ema)
+        _draw_regulator_tier("NMPA", _show_nmpa)
+
+        # Bump top margin proportionally to active tier count so stacked
+        # year/brand labels don't overflow into the title area.
+        _active_tier_count = sum([_show_fda, _show_ema, _show_nmpa])
+        _top_margin = {0: 40, 1: 70, 2: 105, 3: 135}[_active_tier_count]
 
         _current_year = pd.Timestamp.now().year
         if _yr_max is not None and _yr_max >= _current_year:
@@ -2628,8 +2671,9 @@ with tab_pub:
                 yanchor="bottom", xanchor="center",
             )
 
-        # Extra top margin so the year tags sit clear of the plot area.
-        fig1.update_layout(margin=dict(l=72, r=36, t=50, b=110))
+        # Dynamic top margin — grows with the number of active overlay tiers
+        # so stacked year/brand labels sit clear of the plot area.
+        fig1.update_layout(margin=dict(l=72, r=36, t=_top_margin, b=110))
         # Trim the visible x-range so pre-meaningful-data years don't dominate.
         fig1.update_xaxes(range=[_fig1_first - 0.5, _fig1_last + 0.5])
 
@@ -2646,38 +2690,54 @@ with tab_pub:
             label_visibility="collapsed",
         )
 
-        # Per-regulator caption — each tier only shown when its pill is active.
-        def _fmt_year_list(year_to_names: dict[int, list[str]]) -> str:
-            parts = [f"<b>{yr}</b> {', '.join(names)}" for yr, names in sorted(year_to_names.items())]
-            return " &nbsp;·&nbsp; ".join(parts)
-
-        _caption_parts = []
+        # Legend-style caption — explains the line-style hierarchy and
+        # lists the underlying generic names. Chart labels carry brand names
+        # directly so the caption stays terse.
+        _legend_bits = []
         if _show_fda and fda_products:
-            _caption_parts.append(
-                f'<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
-                f'<span style="color:#0b3d91; font-weight:600;">FDA approvals</span> '
-                f'(vertical lines on chart): {_fmt_year_list(fda_products)}.</div>'
-            )
-        _secondary_bits = []
-        if _show_nmpa and nmpa_products:
-            _secondary_bits.append(
-                f'<span style="color:#475569; font-weight:500;">NMPA (China)</span> '
-                f'<span style="color:#64748b;">{_fmt_year_list(nmpa_products)}</span>'
+            _legend_bits.append(
+                '<span style="color:#0b3d91; font-weight:600;">—— FDA</span>'
             )
         if _show_ema and ema_products:
-            _secondary_bits.append(
-                f'<span style="color:#475569; font-weight:500;">EMA (EU)</span> '
-                f'<span style="color:#64748b;">{_fmt_year_list(ema_products)}</span>'
+            _legend_bits.append(
+                '<span style="color:#1d4ed8; font-weight:500;">- - EMA</span>'
             )
-        if _secondary_bits:
-            _caption_parts.append(
+        if _show_nmpa and nmpa_products:
+            _legend_bits.append(
+                '<span style="color:#b45309; font-weight:500;">· · NMPA</span>'
+            )
+
+        if _legend_bits:
+            # Compact generic-name legend below the chart for anyone who wants
+            # the full (generic) names next to the brand names on-chart.
+            def _fmt_year_list(year_to_names: dict[int, list[str]]) -> str:
+                parts = [f"<b>{yr}</b> {', '.join(names)}" for yr, names in sorted(year_to_names.items())]
+                return " &nbsp;·&nbsp; ".join(parts)
+
+            _detail_parts = []
+            if _show_fda and fda_products:
+                _detail_parts.append(
+                    f'<span style="color:#0b3d91; font-weight:600;">FDA</span> '
+                    f'<span style="color:#475569;">{_fmt_year_list(fda_products)}</span>'
+                )
+            if _show_ema and ema_products:
+                _detail_parts.append(
+                    f'<span style="color:#1d4ed8; font-weight:500;">EMA</span> '
+                    f'<span style="color:#475569;">{_fmt_year_list(ema_products)}</span>'
+                )
+            if _show_nmpa and nmpa_products:
+                _detail_parts.append(
+                    f'<span style="color:#b45309; font-weight:500;">NMPA</span> '
+                    f'<span style="color:#475569;">{_fmt_year_list(nmpa_products)}</span>'
+                )
+            st.markdown(
                 '<div class="pub-fig-caption" '
-                'style="margin-top: 0.15rem; font-size: 0.68rem; color: #64748b;">'
-                + ' &nbsp;&nbsp;|&nbsp;&nbsp; '.join(_secondary_bits)
-                + '.</div>'
+                'style="margin-top: 0.1rem; font-size: 0.72rem; color: #64748b;">'
+                + ' &nbsp;&nbsp;' + ' &nbsp;&nbsp; '.join(_legend_bits) + ' &nbsp;&nbsp; · '
+                + ' &nbsp;|&nbsp; '.join(_detail_parts)
+                + '.</div>',
+                unsafe_allow_html=True,
             )
-        if _caption_parts:
-            st.markdown("".join(_caption_parts), unsafe_allow_html=True)
 
         total_t = len(df_filt)
         fig1_yearly = year_branch.groupby("StartYear")["Trials"].sum().sort_index()

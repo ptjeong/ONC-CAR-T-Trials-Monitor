@@ -150,7 +150,7 @@ THEME = {
 # Heme vs Solid palette (publication-ready; not the primary navy)
 HEME_COLOR  = "#0b3d91"   # deep navy — heme stories
 SOLID_COLOR = "#b45309"   # amber-700 — solid stories (complementary warm tone)
-MIXED_COLOR = "#4f46e5"   # indigo
+MIXED_COLOR = "#475569"   # slate-600 — neutral (replaces indigo per style guide)
 UNKNOWN_COLOR = "#94a3b8" # slate-400
 
 BRANCH_COLORS = {
@@ -161,6 +161,75 @@ BRANCH_COLORS = {
 }
 
 _MODALITY_COLORS: dict[str, str] = {}  # populated below once NEJM palette defined
+
+# ---------------------------------------------------------------------------
+# Shared UI constants — single source of truth (Rheum × Onc style guide).
+# Reference these in new code instead of hard-coding heights or fonts.
+# ---------------------------------------------------------------------------
+PANEL_HEIGHT         = 440  # overview panels (horizontal bars)
+TABLE_HEIGHT_DEFAULT = 360  # st.dataframe default when not auto-sized
+HAIRLINE             = THEME["border"]
+FONT_FAMILY          = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+
+
+# ---------------------------------------------------------------------------
+# Table-config helpers — every st.dataframe in the app should route through
+# one of these to keep column labels, widths, and formatting consistent
+# (Rheum × Onc style guide). Helpers are shared utilities and do not touch
+# data logic.
+# ---------------------------------------------------------------------------
+
+def _landscape_table_cols(dim_key: str, dim_label: str) -> dict:
+    """Summary / 'landscape by …' tables (by disease / product / sponsor / …)."""
+    _enroll_help = (
+        "Planned enrollment from CT.gov (self-reported target, not actual accrual)."
+    )
+    return {
+        dim_key:            st.column_config.TextColumn(dim_label),
+        "Trials":           st.column_config.NumberColumn("Trials", format="%d"),
+        "Open":             st.column_config.NumberColumn("Open / recruiting", format="%d"),
+        "Sponsors":         st.column_config.NumberColumn("Distinct sponsors", format="%d"),
+        "TotalEnrolled":    st.column_config.NumberColumn(
+            "Total planned enrollment", format="%,d", help=_enroll_help),
+        "MedianEnrollment": st.column_config.NumberColumn(
+            "Median enrollment", format="%d", help=_enroll_help),
+    }
+
+
+def _trial_detail_cols(extra: dict | None = None) -> dict:
+    """Drilldown 'Trials' detail tables — configure every shown column."""
+    cfg = {
+        "NCTId":           st.column_config.TextColumn("NCT ID"),
+        "NCTLink":         st.column_config.LinkColumn("Trial link", display_text="Open trial"),
+        "BriefTitle":      st.column_config.TextColumn("Title", width="large"),
+        "Branch":          st.column_config.TextColumn("Branch"),
+        "DiseaseCategory": st.column_config.TextColumn("Category"),
+        "DiseaseEntity":   st.column_config.TextColumn("Disease"),
+        "DiseaseEntities": st.column_config.TextColumn("Disease(s)", width="medium"),
+        "TargetCategory":  st.column_config.TextColumn("Target"),
+        "ProductType":     st.column_config.TextColumn("Product"),
+        "ProductName":     st.column_config.TextColumn("Named product", width="small"),
+        "Phase":           st.column_config.TextColumn("Phase"),
+        "OverallStatus":   st.column_config.TextColumn("Status"),
+        "LeadSponsor":     st.column_config.TextColumn("Lead sponsor", width="medium"),
+        "SponsorType":     st.column_config.TextColumn("Sponsor type", width="small"),
+        "AgeGroup":        st.column_config.TextColumn("Age group", width="small"),
+        "StartYear":       st.column_config.NumberColumn("Start year", format="%d"),
+        "Countries":       st.column_config.TextColumn("Countries", width="medium"),
+        "ClassificationConfidence": st.column_config.TextColumn("Conf.", width="small"),
+    }
+    if extra:
+        cfg.update(extra)
+    return cfg
+
+
+def _mini_count_cols(label: str) -> dict:
+    """2-col count tables ('Antigen targets', 'Products', 'Top sponsors', …)."""
+    return {
+        label:    st.column_config.TextColumn(label, width="medium"),
+        "Trials": st.column_config.NumberColumn("Trials", format="%d", width="small"),
+    }
+
 
 px.defaults.template = "plotly_white"
 
@@ -1285,10 +1354,19 @@ with tab_overview:
             .size().rename(columns={"size": "Count"})
         )
         if not counts_year.empty:
-            fig_year = px.area(
-                counts_year, x="StartYear", y="Count", color="Branch",
-                color_discrete_map=BRANCH_COLORS, template="plotly_white", height=320,
-            )
+            # plotly 6.x: px.area no longer auto-stacks. Use go.Scatter with
+            # stackgroup="one" so Heme and Solid stack instead of overdraw.
+            fig_year = go.Figure()
+            for _branch in sorted(counts_year["Branch"].unique()):
+                _bd = counts_year[counts_year["Branch"] == _branch].sort_values("StartYear")
+                fig_year.add_trace(go.Scatter(
+                    x=_bd["StartYear"], y=_bd["Count"],
+                    name=_branch, mode="lines",
+                    stackgroup="one",
+                    line=dict(width=0.5, color=BRANCH_COLORS.get(_branch, THEME["primary"])),
+                    fillcolor=BRANCH_COLORS.get(_branch, THEME["primary"]),
+                ))
+            fig_year.update_layout(template="plotly_white", height=320)
             fig_year.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 margin=dict(l=10, r=10, t=10, b=10),
@@ -1610,12 +1688,14 @@ with tab_data:
 # Publication figure styling
 # ---------------------------------------------------------------------------
 
-NEJM = ["#0b3d91", "#b45309", "#059669", "#dc2626", "#4f46e5", "#0891b2", "#0d9488", "#64748b"]
+# Categorical palette — navy / amber / green / red / teal / cyan / slate.
+# No purple / violet / indigo per the Rheum × Onc style guide.
+NEJM = ["#0b3d91", "#b45309", "#059669", "#dc2626", "#0f766e", "#0891b2", "#0d9488", "#475569"]
 NEJM_BLUE    = HEME_COLOR
 NEJM_AMBER   = SOLID_COLOR
 NEJM_GREEN   = "#059669"
 NEJM_RED     = "#dc2626"
-NEJM_PURPLE  = "#4f46e5"
+NEJM_TEAL    = "#0f766e"  # replaces the former purple slot
 
 _MODALITY_COLORS.update({
     "Auto CAR-T":      NEJM_BLUE,
@@ -1623,7 +1703,7 @@ _MODALITY_COLORS.update({
     "CAR-T (unclear)": "#a1a1aa",
     "CAR-γδ T":        "#0d9488",
     "CAR-NK":          NEJM_GREEN,
-    "CAR-Treg":        NEJM_PURPLE,
+    "CAR-Treg":        "#6b7280",   # gray-500 (was indigo)
     "CAAR-T":          NEJM_AMBER,
     "In vivo CAR":     NEJM_RED,
 })
@@ -2111,11 +2191,23 @@ with tab_pub:
         _fig1_first = _first_meaningful_year(year_branch, count_col="Trials") or int(year_branch["StartYear"].min())
         _fig1_last = int(year_branch["StartYear"].max())
 
-        fig1 = px.area(
-            year_branch, x="StartYear", y="Trials", color="Branch",
-            color_discrete_map=BRANCH_COLORS, template="plotly_white", height=420,
-        )
-        fig1.update_traces(opacity=0.85)
+        # plotly 6.x: px.area stops auto-stacking. Explicit go.Scatter
+        # (stackgroup="one") so Heme / Solid / Mixed / Unknown stack rather
+        # than overdraw. Pin opacity on the fill for consistency with the
+        # other branch-stacked charts.
+        fig1 = go.Figure()
+        for _branch in sorted(year_branch["Branch"].unique()):
+            _bd = year_branch[year_branch["Branch"] == _branch].sort_values("StartYear")
+            _color = BRANCH_COLORS.get(_branch, THEME["primary"])
+            fig1.add_trace(go.Scatter(
+                x=_bd["StartYear"], y=_bd["Trials"],
+                name=_branch, mode="lines",
+                stackgroup="one",
+                line=dict(width=0.5, color=_color),
+                fillcolor=_color,
+                opacity=0.85,
+            ))
+        fig1.update_layout(template="plotly_white", height=420)
         fig1.update_layout(
             **PUB_BASE,
             margin=dict(l=72, r=36, t=24, b=110),
@@ -3709,6 +3801,7 @@ or decision-support tool.
 - **Data source**: ClinicalTrials.gov API v2 ([{BASE_URL}]({BASE_URL}))
 - **Current data snapshot**: {snap_date}
 - **Software version**: `{sha}` &nbsp;·&nbsp; built {commit_date}
+- **Archival DOI**: [10.5281/zenodo.19738097](https://doi.org/10.5281/zenodo.19738097)
 - **Code license**: MIT
         """
     )
@@ -3768,10 +3861,15 @@ or decision-support tool.
         f"Klinische Immunologie und Rheumatologie, "
         f"Universitätsklinikum Köln; {date.today().year} "
         f"[cited {date.today().isoformat()}]. "
-        f"Data snapshot: {snap_date}. Source: ClinicalTrials.gov API v2."
+        f"DOI: 10.5281/zenodo.19738097. "
+        f"Data snapshot: {snap_date}. "
+        f"Available from: https://onc-car-t-trial-monitor.streamlit.app"
     )
     st.code(citation, language="text")
-    st.caption("Vancouver-style citation.")
+    st.caption(
+        "Vancouver-style citation. "
+        "DOI: [10.5281/zenodo.19738097](https://doi.org/10.5281/zenodo.19738097)"
+    )
 
     st.markdown("---")
     st.subheader("Scientific disclaimer")

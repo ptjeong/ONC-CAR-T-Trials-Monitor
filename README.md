@@ -1,6 +1,7 @@
 # CAR-T Oncology Trials Monitor
 
 **Live app: [onc-car-t-trial-monitor.streamlit.app](https://onc-car-t-trial-monitor.streamlit.app)**
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19738097.svg)](https://doi.org/10.5281/zenodo.19738097)
 
 Sister app to the [Rheumatology CAR-T Trials Monitor](https://github.com/ptjeong/Rheumatology-CAR-T-Trials-Monitor-).
 
@@ -190,8 +191,10 @@ state, row count, and API source — readable via
 ## Citation
 
 > Jeong P. CAR-T Oncology Trials Monitor [Internet].
-> Klinik I für Innere Medizin, Klinische Immunologie und Rheumatologie,
-> Universitätsklinikum Köln; 2026.
+> Klinik I für Innere Medizin, Hämatologie und Onkologie,
+> Klinische Immunologie und Rheumatologie, Universitätsklinikum Köln; 2026.
+> DOI: [10.5281/zenodo.19738097](https://doi.org/10.5281/zenodo.19738097).
+> Available from: https://onc-car-t-trial-monitor.streamlit.app
 > Source: ClinicalTrials.gov API v2.
 
 The live app surfaces an auto-populated citation block under the **About** tab.

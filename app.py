@@ -816,6 +816,11 @@ st.markdown(
             across hematologic and solid tumors — with disease, target-antigen, and
             cell-therapy modality classification; global site-level geography; and
             publication-ready figures.
+            <span style="display:block; margin-top:0.5rem; opacity:0.85;">
+                Use the <b>sidebar filters</b> to narrow to a subgroup of interest — every
+                chart, table, map, and CSV export on every tab respects the active filter
+                state.
+            </span>
         </div>
     </div>
     """,
@@ -2863,13 +2868,9 @@ with tab_deep:
 with tab_pub:
     st.markdown(
         '<p class="small-note" style="color:#555">Publication-ready figures with white backgrounds. '
-        "<b>All figures respect the sidebar filters</b> — narrow Branch, "
-        "Disease category, Phase, Target, Country, etc. to generate a figure "
-        "scoped to your subgroup of interest (e.g., only Heme-onc Phase II+ "
-        "trials, or only solid-tumor GD2 targets). "
-        "Use the camera icon (▷ toolbar) on each chart to download a "
-        "high-resolution PNG; each chart also has a CSV export below it with "
-        "a provenance header capturing the active filter state. "
+        "Use the camera icon (▷ toolbar) on each chart to download a high-resolution PNG; "
+        "each chart has a CSV export below it with a provenance header capturing the active "
+        "filter state so downloads are reproducibly tagged. "
         "Heme-onc shown in navy, Solid-onc in amber throughout.</p>",
         unsafe_allow_html=True,
     )

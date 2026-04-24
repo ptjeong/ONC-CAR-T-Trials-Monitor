@@ -1027,10 +1027,16 @@ def _csv_with_provenance(
         f"# {title}",
         f"# Exported (UTC): {now_utc}",
     ]
-    if data_source == "Frozen snapshot":
-        lines.append(f"# Data source: ClinicalTrials.gov API v2 — frozen snapshot {snap}")
+    # Provenance tag: pinned snapshot if user explicitly selected one, else live.
+    _pinned_for_export = st.session_state.get("pinned_snapshot")
+    if _pinned_for_export:
+        lines.append(
+            f"# Data source: ClinicalTrials.gov API v2 — pinned frozen snapshot {_pinned_for_export}"
+        )
     else:
-        lines.append(f"# Data source: ClinicalTrials.gov API v2 — live fetch (snapshot date {snap})")
+        lines.append(
+            f"# Data source: ClinicalTrials.gov API v2 — live fetch (cached 24h, pulled on {snap})"
+        )
     lines.append(f"# Source URL: {BASE_URL}")
 
     if include_filters:
@@ -1513,132 +1519,138 @@ with tab_geo:
     st.subheader("Global studies by country")
 
     countries_long = split_pipe_values(df_filt["Countries"])
-    if countries_long:
+    if not countries_long:
+        st.info("No country information available for the current filter selection.")
+    else:
         country_df = pd.DataFrame({"Country": countries_long})
         country_counts = (
             country_df["Country"].value_counts().rename_axis("Country").reset_index(name="Count")
         )
-
-        # Use ISO-3 codes (stable) instead of "country names" (deprecated).
         country_counts_iso = country_counts.copy()
         country_counts_iso["ISO3"] = country_counts_iso["Country"].map(_to_iso3)
         country_counts_iso = country_counts_iso.dropna(subset=["ISO3"])
 
-        fig_world = px.choropleth(
-            country_counts_iso, locations="ISO3", locationmode="ISO-3",
-            color="Count", hover_name="Country",
-            color_continuous_scale=[
+        # Prep site-level overlay if coordinates available. Gracefully degrades
+        # to a pure choropleth when snapshot predates lat/lon extraction.
+        _has_coords = (
+            not all_open_sites.empty
+            and "Latitude" in all_open_sites.columns
+            and not all_open_sites["Latitude"].isna().all()
+        )
+        _geo_sites = pd.DataFrame()
+        if _has_coords:
+            _geo_base = all_open_sites.dropna(subset=["Latitude", "Longitude"]).copy()
+            _geo_base = _geo_base.merge(
+                df_filt[["NCTId", "Branch", "BriefTitle"]].drop_duplicates("NCTId"),
+                on="NCTId", how="left",
+            )
+            _geo_base["Branch"] = _geo_base["Branch"].fillna("Unknown")
+            _geo_sites = _geo_base.drop_duplicates(["NCTId", "Facility", "City"]).copy()
+
+        # Compact controls row above the map. Keeps the map itself at full
+        # width so the world is read as one image, not a half-frame.
+        if _has_coords:
+            _c_ctrl1, _c_ctrl2, _c_ctrl3 = st.columns([0.22, 0.28, 0.50])
+            with _c_ctrl1:
+                _show_sites = st.checkbox(
+                    "Show open-site dots",
+                    value=True,
+                    key="world_show_sites",
+                    help="Overlay each open / recruiting site as a colored dot on the country map.",
+                )
+            with _c_ctrl2:
+                _site_color = st.radio(
+                    "Dot colour",
+                    options=["Branch", "Single"],
+                    index=0,
+                    key="world_sites_color_by",
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    disabled=not _show_sites,
+                )
+            with _c_ctrl3:
+                if _show_sites:
+                    st.caption(
+                        f"Country shading = trial count · "
+                        f"**{len(_geo_sites):,}** sites across "
+                        f"**{_geo_sites['NCTId'].nunique():,}** trials."
+                    )
+                else:
+                    st.caption("Country shading = trial count.")
+        else:
+            _show_sites = False
+            _site_color = "Branch"
+            st.caption(
+                "Country shading = trial count. "
+                "Site-level coordinates not available — click **Refresh now** "
+                "in the sidebar to enable site dots."
+            )
+
+        # Base choropleth.
+        fig_world = go.Figure()
+        fig_world.add_trace(go.Choropleth(
+            locations=country_counts_iso["ISO3"],
+            locationmode="ISO-3",
+            z=country_counts_iso["Count"],
+            text=country_counts_iso["Country"],
+            hovertemplate="<b>%{text}</b><br>%{z} trials<extra></extra>",
+            colorscale=[
                 [0.00, "#dbeafe"], [0.30, "#93c5fd"],
                 [0.55, "#3b82f6"], [0.75, "#1d4ed8"], [1.00, "#1e3a8a"],
             ],
-            projection="natural earth", template="plotly_white",
-        )
+            colorbar=dict(
+                title=dict(text="Trials", side="top"),
+                thickness=12, len=0.6, x=1.0, xanchor="left",
+            ),
+            marker_line_color="rgba(0,0,0,0.18)", marker_line_width=0.4,
+            name="",  # blank name so legend doesn't display "trace 0"
+            showscale=True,
+        ))
+
+        # Site dots overlay.
+        if _show_sites and not _geo_sites.empty:
+            if _site_color == "Branch":
+                for _branch in sorted(_geo_sites["Branch"].unique()):
+                    _sub = _geo_sites[_geo_sites["Branch"] == _branch]
+                    fig_world.add_trace(go.Scattergeo(
+                        lat=_sub["Latitude"], lon=_sub["Longitude"],
+                        mode="markers",
+                        name=_branch,
+                        marker=dict(
+                            size=4.5, opacity=0.75, line=dict(width=0.4, color="white"),
+                            color=BRANCH_COLORS.get(_branch, THEME["primary"]),
+                        ),
+                        customdata=_sub[["NCTId", "Facility", "City", "Country", "SiteStatus"]].fillna(""),
+                        hovertemplate=(
+                            "<b>%{customdata[1]}</b><br>"
+                            "%{customdata[2]}, %{customdata[3]}<br>"
+                            "%{customdata[0]} · %{customdata[4]}"
+                            "<extra>" + _branch + "</extra>"
+                        ),
+                    ))
+            else:
+                fig_world.add_trace(go.Scattergeo(
+                    lat=_geo_sites["Latitude"], lon=_geo_sites["Longitude"],
+                    mode="markers",
+                    name="Open sites",
+                    marker=dict(
+                        size=4.5, opacity=0.7, line=dict(width=0.4, color="white"),
+                        color="#dc2626",
+                    ),
+                    customdata=_geo_sites[["NCTId", "Facility", "City", "Country", "SiteStatus"]].fillna(""),
+                    hovertemplate=(
+                        "<b>%{customdata[1]}</b><br>"
+                        "%{customdata[2]}, %{customdata[3]}<br>"
+                        "%{customdata[0]} · %{customdata[4]}<extra></extra>"
+                    ),
+                ))
+
         fig_world.update_layout(
             margin=dict(l=0, r=0, t=10, b=0),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color=THEME["text"]),
             geo=dict(
-                bgcolor="rgba(0,0,0,0)", lakecolor="#ddeeff", landcolor="#e9ecef",
-                showframe=False, showcoastlines=False,
-                showcountries=True, countrycolor="rgba(0,0,0,0.12)",
-            ),
-            coloraxis_colorbar_title="No. of trials",
-        )
-        st.plotly_chart(fig_world, width='stretch')
-
-        c1, c2 = st.columns([1.15, 0.85])
-        with c1:
-            st.markdown("**Country counts**")
-            st.dataframe(country_counts, width='stretch', height=320, hide_index=True)
-        with c2:
-            st.markdown("**Top countries**")
-            st.plotly_chart(
-                make_bar(country_counts.head(12), "Country", "Count", height=320, color=THEME["primary"]),
-                width='stretch',
-            )
-    else:
-        st.info("No country information available for the current filter selection.")
-
-    # Site-level world scatter — every open site as a dot, colored by branch.
-    # Gracefully degrades when the loaded snapshot predates lat/lon extraction.
-    st.subheader("Open sites worldwide")
-    if all_open_sites.empty:
-        st.info("No open or recruiting sites in the current filter selection.")
-    elif "Latitude" not in all_open_sites.columns or all_open_sites["Latitude"].isna().all():
-        st.info(
-            "Site-level coordinates not available in the loaded snapshot. "
-            "Save a fresh snapshot from the sidebar, or run "
-            "`python scripts/backfill_site_geo.py snapshots/<date>` to "
-            "populate Latitude / Longitude."
-        )
-    else:
-        # Attach Branch for coloring. Keep one row per (NCT, Facility, City) so
-        # the dot density reflects unique sites rather than site-status rows.
-        _geo_base = all_open_sites.dropna(subset=["Latitude", "Longitude"]).copy()
-        _geo_base = _geo_base.merge(
-            df_filt[["NCTId", "Branch", "BriefTitle"]].drop_duplicates("NCTId"),
-            on="NCTId", how="left",
-        )
-        _geo_base["Branch"] = _geo_base["Branch"].fillna("Unknown")
-        _geo_sites = _geo_base.drop_duplicates(["NCTId", "Facility", "City"]).copy()
-
-        _c_world_l, _c_world_r = st.columns([0.75, 0.25])
-        _world_color_by = _c_world_r.radio(
-            "Color dots by",
-            options=["Branch", "Single colour"],
-            index=0,
-            key="world_sites_color_by",
-            horizontal=False,
-            label_visibility="collapsed",
-        )
-        _c_world_r.caption("Dot = one site (trial × facility × city).")
-        _c_world_r.caption(
-            f"Showing **{len(_geo_sites):,}** sites "
-            f"across **{_geo_sites['NCTId'].nunique():,}** trials."
-        )
-
-        _site_map = go.Figure()
-        if _world_color_by == "Branch":
-            for _branch in sorted(_geo_sites["Branch"].unique()):
-                _sub = _geo_sites[_geo_sites["Branch"] == _branch]
-                _site_map.add_trace(go.Scattergeo(
-                    lat=_sub["Latitude"], lon=_sub["Longitude"],
-                    mode="markers",
-                    name=_branch,
-                    marker=dict(
-                        size=5, opacity=0.6, line=dict(width=0),
-                        color=BRANCH_COLORS.get(_branch, THEME["primary"]),
-                    ),
-                    customdata=_sub[["NCTId", "Facility", "City", "Country", "SiteStatus"]].fillna(""),
-                    hovertemplate=(
-                        "<b>%{customdata[1]}</b><br>"
-                        "%{customdata[2]}, %{customdata[3]}<br>"
-                        "%{customdata[0]} · %{customdata[4]}"
-                        "<extra>" + _branch + "</extra>"
-                    ),
-                ))
-        else:
-            _site_map.add_trace(go.Scattergeo(
-                lat=_geo_sites["Latitude"], lon=_geo_sites["Longitude"],
-                mode="markers",
-                marker=dict(
-                    size=5, opacity=0.55, line=dict(width=0),
-                    color=THEME["primary"],
-                ),
-                customdata=_geo_sites[["NCTId", "Facility", "City", "Country", "SiteStatus"]].fillna(""),
-                hovertemplate=(
-                    "<b>%{customdata[1]}</b><br>"
-                    "%{customdata[2]}, %{customdata[3]}<br>"
-                    "%{customdata[0]} · %{customdata[4]}<extra></extra>"
-                ),
-            ))
-        _site_map.update_layout(
-            margin=dict(l=0, r=0, t=8, b=0),
-            paper_bgcolor="rgba(0,0,0,0)",
-            geo=dict(
-                bgcolor="rgba(0,0,0,0)",
-                lakecolor="#ddeeff",
-                landcolor="#eef2f7",
+                bgcolor="rgba(0,0,0,0)", lakecolor="#ddeeff", landcolor="#eef2f7",
                 showframe=False, showcoastlines=False,
                 showcountries=True, countrycolor="rgba(0,0,0,0.12)",
                 projection_type="natural earth",
@@ -1649,9 +1661,26 @@ with tab_geo:
                 font=dict(size=11, color=THEME["text"]),
                 bgcolor="rgba(0,0,0,0)", borderwidth=0, title=None,
             ),
-            height=440,
+            height=500,
         )
-        _c_world_l.plotly_chart(_site_map, width='stretch')
+
+        # Map + top-countries bar side-by-side (the bar lets the eye read the
+        # distribution quickly where the map's colour scale alone is dense).
+        _c_map, _c_bar = st.columns([0.65, 0.35])
+        with _c_map:
+            st.plotly_chart(fig_world, width='stretch')
+        with _c_bar:
+            st.markdown("**Top countries by trial count**")
+            st.plotly_chart(
+                make_bar(country_counts.head(12), "Country", "Count", height=500, color=THEME["primary"]),
+                width='stretch',
+            )
+
+        # Country-counts table spans full width below — the wider table wins
+        # over a half-width version at the same height, since country names +
+        # counts are the primary lookup asset for this panel.
+        st.markdown("**Country counts (all)**")
+        st.dataframe(country_counts, width='stretch', height=280, hide_index=True)
 
     st.subheader("Sites by city")
 

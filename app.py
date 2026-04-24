@@ -2863,7 +2863,13 @@ with tab_deep:
 with tab_pub:
     st.markdown(
         '<p class="small-note" style="color:#555">Publication-ready figures with white backgrounds. '
-        "Use the camera icon (▷ toolbar) on each chart to download a high-resolution PNG. "
+        "<b>All figures respect the sidebar filters</b> — narrow Branch, "
+        "Disease category, Phase, Target, Country, etc. to generate a figure "
+        "scoped to your subgroup of interest (e.g., only Heme-onc Phase II+ "
+        "trials, or only solid-tumor GD2 targets). "
+        "Use the camera icon (▷ toolbar) on each chart to download a "
+        "high-resolution PNG; each chart also has a CSV export below it with "
+        "a provenance header capturing the active filter state. "
         "Heme-onc shown in navy, Solid-onc in amber throughout.</p>",
         unsafe_allow_html=True,
     )

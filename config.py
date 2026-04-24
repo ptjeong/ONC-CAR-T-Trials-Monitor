@@ -358,6 +358,8 @@ HEME_TARGET_TERMS: dict[str, list[str]] = {
     "SLAMF7": ["slamf7", "cs1"],
     "CD79b": ["cd79b"],
     "Kappa LC": ["kappa light chain", "kappa-light-chain"],
+    "FLT3": ["flt3", "anti-flt3", "flt3 positive"],
+    "CLL1": ["cll1", "clec12a", "clec 12a"],
 }
 
 SOLID_TARGET_TERMS: dict[str, list[str]] = {
@@ -383,6 +385,9 @@ SOLID_TARGET_TERMS: dict[str, list[str]] = {
     "IL13Rα2": ["il13ra2", "il13r alpha 2", "il13 receptor alpha 2"],
     "HER3": ["her3", "erbb3"],
     "DLL3": ["dll3"],
+    "CDH17": ["cdh17", "cadherin 17", "cadherin-17"],
+    "GUCY2C": ["gucy2c", "guanylyl cyclase 2c"],
+    "GPNMB": ["gpnmb", "glycoprotein nmb"],
 }
 
 # Dual / multi-target combos (checked pair-wise against detected targets)
@@ -421,6 +426,8 @@ NAMED_PRODUCT_TARGETS: dict[str, list[str]] = {
         "relmacabtagene autoleucel", "carteyva", "relma-cel",
         "inaticabtagene autoleucel", "inati-cel",
         "allo-501", "allo-501a",
+        # Curation-loop additions (Chinese / clinical-stage CD19 products)
+        "jy231", "meta10-19", "ct1190b", "ptoc1",
     ],
     "BCMA": [
         "idecabtagene vicleucel", "abecma", "ide-cel",
@@ -428,15 +435,27 @@ NAMED_PRODUCT_TARGETS: dict[str, list[str]] = {
         "equecabtagene autoleucel", "fucaso", "eque-cel",
         "zevorcabtagene autoleucel", "zevor-cel",
         "allo-715", "anito-cel", "ct053",
+        # Curation-loop additions
+        "ct0596", "hbi0101",
     ],
-    "CD19/BCMA dual": ["gc012f"],
+    "CD19/BCMA dual": ["gc012f", "azd0120"],
     "CD19/CD20 dual": ["mb-cart2019.1", "mb-cart2019", "mb-cart19.1"],
     "NKG2D-L": ["cyad-01"],
+    # New target labels seen repeatedly in curation loop
+    "Claudin 18.2": ["ct041", "satricabtagene autoleucel", "satri-cel"],
+    "B7-H3": ["mt027"],
+    "GPC3": ["boxr1030"],
+    "FLT3": ["taa05"],
+    "GPNMB": ["gcar1"],
+    "CDH17": ["cdh17/gucy2c"],
 }
 
 NAMED_PRODUCT_TYPES: dict[str, list[str]] = {
     "In vivo": [],
-    "Allogeneic/Off-the-shelf": ["allo-501", "allo-501a", "allo-715"],
+    "Allogeneic/Off-the-shelf": [
+        "allo-501", "allo-501a", "allo-715",
+        "mt027",  # MT027 explicitly allogeneic in trial titles
+    ],
     "Autologous": [
         "tisagenlecleucel", "kymriah",
         "axicabtagene ciloleucel", "yescarta", "axi-cel",
@@ -450,6 +469,12 @@ NAMED_PRODUCT_TYPES: dict[str, list[str]] = {
         "equecabtagene autoleucel", "fucaso", "eque-cel",
         "zevorcabtagene autoleucel", "zevor-cel",
         "gc012f", "anito-cel", "ct053",
+        # Curation-loop additions
+        "jy231", "meta10-19", "ct1190b", "ptoc1",
+        "ct0596", "hbi0101",
+        "ct041", "satricabtagene autoleucel", "satri-cel",
+        "boxr1030", "taa05", "gcar1",
+        "azd0120",
     ],
 }
 

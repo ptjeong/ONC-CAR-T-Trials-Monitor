@@ -1546,21 +1546,26 @@ with tab_pub:
             ),
         )
 
-        # Approved-product overlays — vertical dashed lines + year-aggregated labels
+        # Approved-product overlays — vertical dashed lines + year labels only;
+        # full product list appears in a caption below the chart (more legible
+        # than cramming 2–3 product names at each tick).
         products_by_year: dict[int, list[str]] = {}
         for p in APPROVED_PRODUCTS:
             products_by_year.setdefault(p["year"], []).append(p["name"])
-        _yrs_present = set(year_branch["StartYear"].tolist())
-        for yr, prods in products_by_year.items():
+
+        for yr in sorted(products_by_year):
             if yr < (_yr_min or 0) or yr > (_yr_max or 9999):
                 continue
-            fig1.add_vline(x=yr, line_width=0.9, line_dash="dot", line_color="#64748b")
+            fig1.add_vline(
+                x=yr, line_width=1.1, line_dash="dot", line_color="#475569",
+                opacity=0.6,
+            )
+            # Just the year as a small tag above the line — clean and unambiguous.
             fig1.add_annotation(
-                x=yr, y=1.02, yref="paper",
-                text="  " + "<br>  ".join(prods),
-                showarrow=False, xanchor="left", yanchor="top",
-                font=dict(size=9, color="#334155"),
-                align="left",
+                x=yr, y=1.015, yref="paper",
+                text=f"<b>{yr}</b>",
+                showarrow=False, xanchor="center", yanchor="bottom",
+                font=dict(size=11, color="#0b3d91", family="Inter, sans-serif"),
             )
 
         _current_year = pd.Timestamp.now().year
@@ -1570,13 +1575,30 @@ with tab_pub:
                 fillcolor="rgba(0,0,0,0.04)", line_width=0,
             )
             fig1.add_annotation(
-                x=_current_year, y=1.10, yref="paper",
+                x=_current_year, y=1.09, yref="paper",
                 text=f"{_current_year} (partial year)", showarrow=False,
                 font=dict(size=10, color=THEME["muted"]),
                 yanchor="bottom", xanchor="center",
             )
 
+        # Extra top margin so the year tags sit clear of the plot area.
+        fig1.update_layout(margin=dict(l=72, r=36, t=50, b=110))
+
         st.plotly_chart(fig1, width='stretch', config=PUB_EXPORT)
+
+        # Legible caption listing each approval — far easier to read than
+        # vertical stacks of product names jammed into the chart header.
+        approval_rows = []
+        for yr in sorted(products_by_year):
+            products = ", ".join(products_by_year[yr])
+            approval_rows.append(f"<b>{yr}</b>: {products}")
+        approvals_text = " &nbsp;·&nbsp; ".join(approval_rows)
+        st.markdown(
+            f'<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
+            f'Landmark CAR-T approvals marked on the chart — '
+            f'{approvals_text}.</div>',
+            unsafe_allow_html=True,
+        )
 
         total_t = len(df_filt)
         fig1_yearly = year_branch.groupby("StartYear")["Trials"].sum().sort_index()
@@ -2084,13 +2106,15 @@ with tab_pub:
 
     _UNCLEAR_BUCKET = "Undisclosed / unclear"
 
-    def _target_counts(df_in: pd.DataFrame) -> pd.DataFrame:
+    def _target_counts(df_in: pd.DataFrame, include_unclear: bool = False) -> pd.DataFrame:
         s = df_in.loc[~df_in["TargetCategory"].isin(_PLATFORM_LABELS), "TargetCategory"].fillna("Unknown")
         s = s.replace({
             "CAR-T_unspecified": _UNCLEAR_BUCKET,
             "Other_or_unknown":  _UNCLEAR_BUCKET,
             "Unknown":           _UNCLEAR_BUCKET,
         })
+        if not include_unclear:
+            s = s[s != _UNCLEAR_BUCKET]
         return s.value_counts().rename_axis("Target").reset_index(name="Trials")
 
     heme_tgt = _target_counts(df_filt[df_filt["Branch"] == "Heme-onc"])
@@ -2098,19 +2122,37 @@ with tab_pub:
 
     col_h, col_s = st.columns(2)
 
+    def _top_n_with_other(df_in: pd.DataFrame, n: int = 15) -> pd.DataFrame:
+        """Keep the top-n targets by trial count; aggregate the rest into an
+        'Other (k antigens)' row so the long tail doesn't crowd the chart."""
+        if len(df_in) <= n:
+            return df_in.sort_values("Trials", ascending=False)
+        top = df_in.sort_values("Trials", ascending=False).head(n)
+        tail = df_in.sort_values("Trials", ascending=False).iloc[n:]
+        tail_total = int(tail["Trials"].sum())
+        tail_row = pd.DataFrame([{
+            "Target": f"Other ({len(tail)} antigens)",
+            "Trials": tail_total,
+        }])
+        return pd.concat([top, tail_row], ignore_index=True)
+
     def _target_hbar(df_in, color, title, height):
-        df_in = df_in.sort_values("Trials", ascending=True).head(20)
+        df_in = _top_n_with_other(df_in, n=15)
+        # For a horizontal bar chart the largest value should sit at the top —
+        # Plotly renders y-categories bottom-up, so sort ascending *after*
+        # truncation (NOT before, which caused CD19 to be dropped entirely).
+        df_in = df_in.sort_values("Trials", ascending=True)
         fig = px.bar(
             df_in, x="Trials", y="Target", orientation="h",
             color_discrete_sequence=[color], template="plotly_white",
-            height=max(height, len(df_in) * 30 + 80), text="Trials",
+            height=max(height, len(df_in) * 28 + 80), text="Trials",
         )
         fig.update_traces(marker_line_width=0, opacity=1, textposition="outside",
                           textfont=dict(size=10, color=_AX_COLOR), cliponaxis=False)
         fig.update_layout(
             **PUB_BASE,
             xaxis_title="Number of trials", yaxis_title=None, showlegend=False,
-            margin=dict(l=150, r=48, t=40, b=56),
+            margin=dict(l=170, r=48, t=40, b=56),
             yaxis=_H_YAXIS, xaxis=_H_XAXIS, title=dict(text=title, x=0, font=dict(size=12, color=_AX_COLOR)),
         )
         return fig
@@ -2128,12 +2170,13 @@ with tab_pub:
         else:
             st.info("No solid-onc trials in filter.")
 
-    # Summary metrics
+    # Summary metrics (based on disclosed antigens only — unclear excluded)
     total_h = int(heme_tgt["Trials"].sum()) if not heme_tgt.empty else 0
     total_s = int(solid_tgt["Trials"].sum()) if not solid_tgt.empty else 0
     cd19_h = int(heme_tgt.loc[heme_tgt["Target"] == "CD19", "Trials"].sum()) if not heme_tgt.empty else 0
     bcma_h = int(heme_tgt.loc[heme_tgt["Target"] == "BCMA", "Trials"].sum()) if not heme_tgt.empty else 0
-    top_s = solid_tgt.iloc[-1] if not solid_tgt.empty else None
+    # iloc[0] = largest (value_counts returns descending order)
+    top_s = solid_tgt.iloc[0] if not solid_tgt.empty else None
     solid_diverse = solid_tgt["Target"].nunique() if not solid_tgt.empty else 0
 
     c1, c2, c3, c4 = st.columns(4)

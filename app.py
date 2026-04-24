@@ -584,16 +584,10 @@ def load_frozen(snapshot_date: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 def metric_card(label: str, value, foot: str = ""):
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-foot">{foot}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Deprecated — forwards to st.metric() per the Rheum × Onc style guide.
+    All in-app call-sites have been migrated; kept as a compat shim in case
+    external code / snapshots reference it."""
+    st.metric(label, value, help=foot or None)
 
 
 def make_bar(df_plot, x, y, height=360, color=HEME_COLOR):
@@ -1199,15 +1193,16 @@ median_enrolled = int(_enroll_known.median()) if not _enroll_known.empty else 0
 
 m1, m2, m3, m4, m5 = st.columns(5)
 with m1:
-    metric_card("Filtered trials", total_trials, "Trials matching current filters")
+    st.metric("Filtered trials", f"{total_trials:,}", help="Trials matching current filters")
 with m2:
-    metric_card("Open / recruiting", recruiting_trials, "Recruiting or not yet recruiting")
+    st.metric("Open / recruiting", f"{recruiting_trials:,}", help="Recruiting or not yet recruiting")
 with m3:
-    metric_card("Heme · Solid", f"{heme_count} · {solid_count}", "Heme-onc / Solid-onc split")
+    st.metric("Heme · Solid", f"{heme_count} · {solid_count}", help="Heme-onc / Solid-onc split")
 with m4:
-    metric_card("Median enrollment", median_enrolled, f"{total_enrolled:,} patients across {len(_enroll_known)} trials")
+    st.metric("Median enrollment", f"{median_enrolled:,}",
+              help=f"{total_enrolled:,} patients across {len(_enroll_known)} trials")
 with m5:
-    metric_card("Top antigen target", top_target, "Most common non-platform target")
+    st.metric("Top antigen target", top_target, help="Most common non-platform target")
 
 st.markdown(
     f"""
@@ -1489,16 +1484,16 @@ with tab_geo:
 
             g1, g2, g3 = st.columns(3)
             with g1:
-                metric_card(f"{selected_country} site rows", len(country_open_sites),
-                            f"Recruiting / active {selected_country} site rows")
+                st.metric(f"{selected_country} site rows", f"{len(country_open_sites):,}",
+                          help=f"Recruiting / active {selected_country} site rows")
             with g2:
-                metric_card("Cities", country_open_sites["City"].dropna().nunique(),
-                            "Cities with open sites")
+                st.metric("Cities", country_open_sites["City"].dropna().nunique(),
+                          help="Cities with open sites")
             with g3:
-                metric_card(
+                st.metric(
                     "Unique trials",
                     country_study_view["NCTId"].nunique() if not country_study_view.empty else 0,
-                    f"NCT IDs with at least one open {selected_country} site",
+                    help=f"NCT IDs with at least one open {selected_country} site",
                 )
 
             c1, c2 = st.columns([1, 1])
@@ -1591,28 +1586,77 @@ with tab_data:
     table_df["Phase"] = table_df["PhaseLabel"]
     table_df["OverallStatus"] = table_df["OverallStatus"].map(STATUS_DISPLAY).fillna(table_df["OverallStatus"])
 
-    st.dataframe(
+    st.caption(
+        f"{len(table_df):,} trials · click any row to open the full trial record below."
+    )
+    _table_event = st.dataframe(
         table_df[show_cols],
         width='stretch', height=460, hide_index=True,
-        column_config={
-            "NCTId": st.column_config.TextColumn("NCT ID"),
-            "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
-            "BriefTitle": st.column_config.TextColumn("Title", width="large"),
-            "Branch": st.column_config.TextColumn("Branch"),
-            "DiseaseCategory": st.column_config.TextColumn("Category"),
-            "DiseaseEntities": st.column_config.TextColumn("Entity(ies)", width="medium"),
-            "TrialDesign": st.column_config.TextColumn("Trial design", width="small"),
-            "TargetCategory": st.column_config.TextColumn("Target"),
-            "ProductType": st.column_config.TextColumn("Product"),
-            "ClassificationConfidence": st.column_config.TextColumn("Conf.", width="small",
-                help="high = explicit markers / LLM-validated; medium = defaults or weak markers; low = Unknown branch/entity or combined Unclear."),
-            "Phase": st.column_config.TextColumn("Phase"),
-            "OverallStatus": st.column_config.TextColumn("Status"),
-            "StartYear": st.column_config.NumberColumn("Start year", format="%d"),
-            "Countries": st.column_config.TextColumn("Countries", width="large"),
-            "LeadSponsor": st.column_config.TextColumn("Lead sponsor", width="medium"),
-        },
+        on_select="rerun", selection_mode="single-row",
+        key="data_table_sel",
+        column_config=_trial_detail_cols({
+            "ClassificationConfidence": st.column_config.TextColumn(
+                "Conf.", width="small",
+                help="high = explicit markers / LLM-validated; medium = defaults or weak markers; low = Unknown branch/entity or combined Unclear.",
+            ),
+        }),
     )
+
+    # Row-click trial detail — scales to any dataset size (a selectbox would
+    # balloon once the filtered set passes 100+ rows).
+    _selected_rows = (
+        _table_event.selection.rows
+        if _table_event and hasattr(_table_event, "selection") else []
+    )
+    if _selected_rows:
+        rec = table_df.iloc[_selected_rows[0]]
+        _sel_nct = rec.get("NCTId", "")
+        with st.expander(f"**{_sel_nct}** — {rec.get('BriefTitle', '')}", expanded=True):
+            d1, d2 = st.columns([1, 1])
+            with d1:
+                st.markdown(
+                    f"""
+**Branch**: {rec.get('Branch', '—')}  ·  **Category**: {rec.get('DiseaseCategory', '—')}
+**Entity**: {rec.get('DiseaseEntity', '—')}
+**All entities matched**: {rec.get('DiseaseEntities', '—') or '—'}
+**Trial design**: {rec.get('TrialDesign', '—')}
+**Phase**: {rec.get('Phase', '—')}  ·  **Status**: {rec.get('OverallStatus', '—')}
+**Start year**: {int(rec['StartYear']) if pd.notna(rec.get('StartYear')) else '—'}
+                    """
+                )
+            with d2:
+                _enroll_raw = rec.get('EnrollmentCount', None)
+                _enroll_display = int(_enroll_raw) if pd.notna(_enroll_raw) else '—'
+                st.markdown(
+                    f"""
+**Target**: {rec.get('TargetCategory', '—')}
+**Product type**: {rec.get('ProductType', '—')}  ·  **Named product**: {rec.get('ProductName', '—') or '—'}
+**Modality**: {rec.get('Modality', '—')}
+**Age group**: {rec.get('AgeGroup', '—')}  ·  **Sponsor type**: {rec.get('SponsorType', '—')}
+**Lead sponsor**: {rec.get('LeadSponsor', '—')}
+**Enrollment**: {_enroll_display}
+**Classification confidence**: {rec.get('ClassificationConfidence', '—')}
+                    """
+                )
+            # External link + full record
+            if rec.get("NCTLink"):
+                st.markdown(f"[Open on ClinicalTrials.gov ↗]({rec['NCTLink']})")
+            if rec.get("Conditions"):
+                st.markdown(f"**Conditions**: {rec['Conditions']}")
+            if rec.get("Interventions"):
+                st.markdown(f"**Interventions**: {rec['Interventions']}")
+            if rec.get("PrimaryEndpoints"):
+                st.markdown(f"**Primary endpoints**: {rec['PrimaryEndpoints']}")
+            if rec.get("Countries"):
+                st.markdown(f"**Countries**: {rec['Countries']}")
+            if rec.get("BriefSummary"):
+                st.markdown("**Brief summary**")
+                st.markdown(f"> {rec['BriefSummary']}")
+    else:
+        st.info(
+            "Select a row in the table above to see the full trial record "
+            "and classification breakdown."
+        )
 
     # Country-selectable "studies active in …" view. Reuses the sites_country
     # session key so the Geography tab and this one stay in sync.
@@ -1869,10 +1913,10 @@ with tab_deep:
             med_e = int(_enroll.median()) if not _enroll.empty else 0
 
             m1, m2, m3, m4 = st.columns(4)
-            with m1: metric_card("Trials", n_focus, "Matching this disease focus")
-            with m2: metric_card("Open / recruiting", _rec)
-            with m3: metric_card("Unique sponsors", _sponsors)
-            with m4: metric_card("Median enrollment", med_e, f"across {len(_countries)} countries")
+            with m1: st.metric("Trials", f"{n_focus:,}", help="Matching this disease focus")
+            with m2: st.metric("Open / recruiting", f"{_rec:,}")
+            with m3: st.metric("Unique sponsors", f"{_sponsors:,}")
+            with m4: st.metric("Median enrollment", f"{med_e:,}", help=f"across {len(_countries)} countries")
 
             dc1, dc2 = st.columns(2)
 
@@ -2020,11 +2064,15 @@ with tab_deep:
             )
 
             m1, m2, m3 = st.columns(3)
-            with m1: metric_card("Named products", len(pivot), "In the current filter")
-            with m2: metric_card("Total trials", int(pivot["Trials"].sum()))
-            with m3: metric_card("Top product", pivot.iloc[0]["ProductName"] if not pivot.empty else "—",
-                                 f"{int(pivot.iloc[0]['Trials'])} trials" if not pivot.empty else "")
+            with m1: st.metric("Named products", f"{len(pivot):,}", help="In the current filter")
+            with m2: st.metric("Total trials", f"{int(pivot['Trials'].sum()):,}")
+            with m3: st.metric(
+                "Top product",
+                pivot.iloc[0]["ProductName"] if not pivot.empty else "—",
+                help=f"{int(pivot.iloc[0]['Trials'])} trials" if not pivot.empty else "",
+            )
 
+            st.caption(f"{len(pivot):,} named products · sorted by trial count")
             st.dataframe(
                 pivot, width='stretch', height=460, hide_index=True,
                 column_config={
@@ -2091,16 +2139,10 @@ with tab_deep:
             )
             sp_agg["MedianEnrollment"] = sp_agg["MedianEnrollment"].fillna(0).astype(int)
 
+            st.caption(f"{len(sp_agg)} sponsor types · sorted by trial count")
             st.dataframe(
                 sp_agg, width='stretch', hide_index=True,
-                column_config={
-                    "SponsorType":      st.column_config.TextColumn("Sponsor type"),
-                    "Trials":           st.column_config.NumberColumn("Trials", format="%d"),
-                    "Open":             st.column_config.NumberColumn("Open / recruiting", format="%d"),
-                    "Sponsors":         st.column_config.NumberColumn("Distinct sponsors", format="%d"),
-                    "TotalEnrolled":    st.column_config.NumberColumn("Total planned enrollment", format="%,d"),
-                    "MedianEnrollment": st.column_config.NumberColumn("Median enrollment", format="%d"),
-                },
+                column_config=_landscape_table_cols("SponsorType", "Sponsor type"),
             )
 
             sp_choices = sp_agg["SponsorType"].tolist()
@@ -2115,7 +2157,11 @@ with tab_deep:
                     sub["LeadSponsor"].dropna().value_counts().head(10)
                     .rename_axis("Lead sponsor").reset_index(name="Trials")
                 )
-                st.dataframe(top_sponsors, width='stretch', hide_index=True)
+                st.caption(f"{len(top_sponsors)} sponsors · top-10 by trial count")
+                st.dataframe(
+                    top_sponsors, width='stretch', hide_index=True,
+                    column_config=_mini_count_cols("Lead sponsor"),
+                )
 
                 # Antigen target and product-type breakdowns for this sponsor class
                 cA, cB = st.columns(2)
@@ -2126,14 +2172,22 @@ with tab_deep:
                         .fillna("Unknown").value_counts().head(15)
                         .rename_axis("Target").reset_index(name="Trials")
                     )
-                    st.dataframe(_tgt_sub, width='stretch', hide_index=True)
+                    st.caption(f"{len(_tgt_sub)} antigens · top 15")
+                    st.dataframe(
+                        _tgt_sub, width='stretch', hide_index=True,
+                        column_config=_mini_count_cols("Target"),
+                    )
                 with cB:
                     st.markdown("**Product types**")
                     _prod_sub = (
                         sub["ProductType"].fillna("Unclear").value_counts()
                         .rename_axis("Product type").reset_index(name="Trials")
                     )
-                    st.dataframe(_prod_sub, width='stretch', hide_index=True)
+                    st.caption(f"{len(_prod_sub)} product types")
+                    st.dataframe(
+                        _prod_sub, width='stretch', hide_index=True,
+                        column_config=_mini_count_cols("Product type"),
+                    )
 
                 # Branch split (useful signal: is industry concentrating on heme or solid?)
                 _branch_sub = (
@@ -2141,7 +2195,11 @@ with tab_deep:
                     .rename_axis("Branch").reset_index(name="Trials")
                 )
                 st.markdown("**Branch split**")
-                st.dataframe(_branch_sub, width='stretch', hide_index=True)
+                st.caption(f"{len(_branch_sub)} branches")
+                st.dataframe(
+                    _branch_sub, width='stretch', hide_index=True,
+                    column_config=_mini_count_cols("Branch"),
+                )
 
             st.download_button(
                 "Download sponsor-type aggregation (CSV)",

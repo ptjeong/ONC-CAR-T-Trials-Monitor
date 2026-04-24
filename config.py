@@ -295,6 +295,18 @@ EXCLUDED_INDICATION_TERMS: list[str] = [
     "membranous nephropathy", "anti gbm",
     "antiphospholipid syndrome",
     "hidradenitis suppurativa",
+    # Generic autoimmune / non-onco wrappers (caught 24+ Unknown-branch trials)
+    "autoimmune disease", "autoimmune diseases",
+    "systemic autoimmune disease", "systemic autoimmune diseases",
+    "refractory autoimmune diseases",
+    "relapsed/refractory autoimmune diseases",
+    "rheumatic diseases", "rheumatologic disease",
+    "b cell mediated autoimmune", "b-cell mediated autoimmune",
+    # Meta / non-therapeutic (CAR-T follow-up, CRS registries, COVID etc.)
+    "covid-19", "covid 19", "sars-cov-2",
+    "neurotoxicity",
+    "cytokine release syndrome",
+    "nephrotic syndrome",
 ]
 
 HARD_EXCLUDED_NCT_IDS: set[str] = set()  # seed empty; fill via curation loop
@@ -342,7 +354,13 @@ IN_VIVO_TERMS: list[str] = [
 # ---------------------------------------------------------------------------
 
 HEME_TARGET_TERMS: dict[str, list[str]] = {
-    "CD19": ["cd19", "anti-cd19", "cd19-directed", "cd19 directed", "cd19-targeted", "cd19 targeted", "car19"],
+    "CD19": [
+        "cd19", "anti-cd19", "cd19-directed", "cd19 directed",
+        "cd19-targeted", "cd19 targeted", "car19",
+        # Common intervention-field variants missed before:
+        "cart-19", "cart19", "cd19 cart", "cd19-cart", "cd19 car t", "cd19-car-t",
+        "cd19 positive", "cd19 specific", "anti cd19",
+    ],
     "BCMA": ["bcma", "anti-bcma", "bcma-directed", "bcma-targeted", "b cell maturation antigen"],
     "CD20": ["cd20", "anti-cd20"],
     "CD22": ["cd22", "anti-cd22"],
@@ -360,6 +378,7 @@ HEME_TARGET_TERMS: dict[str, list[str]] = {
     "Kappa LC": ["kappa light chain", "kappa-light-chain"],
     "FLT3": ["flt3", "anti-flt3", "flt3 positive"],
     "CLL1": ["cll1", "clec12a", "clec 12a"],
+    "CD147": ["cd147", "basigin", "emmprin"],
 }
 
 SOLID_TARGET_TERMS: dict[str, list[str]] = {

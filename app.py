@@ -643,12 +643,11 @@ if data_source == "Frozen snapshot":
         df, df_sites, prisma_counts = load_frozen(selected_snapshot)
     st.sidebar.caption(f"Loaded: {selected_snapshot} ({len(df)} trials)")
 else:
-    st.sidebar.header("Data pull")
-    selected_statuses = st.sidebar.multiselect(
-        "Statuses to pull",
-        STATUS_OPTIONS,
-        default=["RECRUITING", "NOT_YET_RECRUITING", "ACTIVE_NOT_RECRUITING"],
-    )
+    # Pull ALL statuses by default — the "Overall status" filter below lets the
+    # user narrow to recruiting/active as needed. This way the cached pull covers
+    # historical (COMPLETED/TERMINATED) trials too, so Fig 1's temporal view shows
+    # the real pre-2017 CAR-T landscape without forcing a refetch.
+    selected_statuses: list[str] = []
     try:
         with st.spinner("Fetching and processing ClinicalTrials.gov data..."):
             df, df_sites, prisma_counts = load_live(statuses=tuple(selected_statuses))
@@ -1316,6 +1315,7 @@ with tab_data:
         "NCTId", "NCTLink", "BriefTitle",
         "Branch", "DiseaseCategory", "DiseaseEntities",
         "TrialDesign", "TargetCategory", "ProductType",
+        "ClassificationConfidence",
         "Phase", "OverallStatus", "StartYear", "Countries", "LeadSponsor",
     ]
 
@@ -1339,6 +1339,8 @@ with tab_data:
             "TrialDesign": st.column_config.TextColumn("Trial design", width="small"),
             "TargetCategory": st.column_config.TextColumn("Target"),
             "ProductType": st.column_config.TextColumn("Product"),
+            "ClassificationConfidence": st.column_config.TextColumn("Conf.", width="small",
+                help="high = explicit markers / LLM-validated; medium = defaults or weak markers; low = Unknown branch/entity or combined Unclear."),
             "Phase": st.column_config.TextColumn("Phase"),
             "OverallStatus": st.column_config.TextColumn("Status"),
             "StartYear": st.column_config.NumberColumn("Start year", format="%d"),
@@ -3016,7 +3018,7 @@ or decision-support tool.
     <div style="
         font-size: 0.82rem; color: {THEME['muted']};
         line-height: 1.5; margin-bottom: 0.6rem;
-    ">Klinik I für Innere Medizin<br>Klinische Immunologie und Rheumatologie</div>
+    ">Klinik I für Innere Medizin<br>Hämatologie und Onkologie<br>Klinische Immunologie und Rheumatologie</div>
     <div style="
         font-size: 0.80rem; color: {THEME['muted']};
         line-height: 1.55; padding-top: 0.55rem;
@@ -3043,7 +3045,8 @@ or decision-support tool.
     st.subheader("Suggested citation")
     citation = (
         f"Jeong P. CAR-T Oncology Trials Monitor (version {sha}) [Internet]. "
-        f"Klinik I für Innere Medizin, Klinische Immunologie und Rheumatologie, "
+        f"Klinik I für Innere Medizin, Hämatologie und Onkologie, "
+        f"Klinische Immunologie und Rheumatologie, "
         f"Universitätsklinikum Köln; {date.today().year} "
         f"[cited {date.today().isoformat()}]. "
         f"Data snapshot: {snap_date}. Source: ClinicalTrials.gov API v2."
@@ -3076,7 +3079,9 @@ medical advice and must not be used to guide individual patient care.
 
 Peter Jeong
 Universitätsklinikum Köln
-Klinik I für Innere Medizin — Klinische Immunologie und Rheumatologie
+Klinik I für Innere Medizin
+Hämatologie und Onkologie
+Klinische Immunologie und Rheumatologie
 Kerpener Straße 62
 50937 Köln
 Germany

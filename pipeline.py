@@ -409,29 +409,39 @@ def _assign_target(row: dict) -> str:
     return "Other_or_unknown"
 
 
-def _assign_product_type(row: dict) -> str:
+def _assign_product_type(row: dict) -> tuple[str, str]:
+    """Return (product_type, confidence_source).
+
+    confidence_source is a short tag indicating *why* this label was chosen,
+    later aggregated into a user-facing ClassificationConfidence column:
+      "llm_override"      → LLM-validated, treat as high confidence
+      "explicit_*"        → explicit keyword/named product, high confidence
+      "named_product"     → known product lookup, high confidence
+      "weak_*"            → loose keyword, medium confidence
+      "default_autologous_no_allo_markers" → default rule, medium confidence
+      "no_signal"         → truly unclear, Unclear label, low confidence
+    """
     nct = _safe_text(row.get("NCTId")).strip()
     if nct in _LLM_OVERRIDES:
         p = _LLM_OVERRIDES[nct].get("product_type")
         if p:
-            return p
+            return p, "llm_override"
 
     text = _row_text(row)
     title = _normalize_text(_safe_text(row.get("BriefTitle")))
 
     # In vivo — title is strongest signal.
     if "in vivo" in title:
-        return "In vivo"
+        return "In vivo", "explicit_in_vivo_title"
     if any(term in text for term in IN_VIVO_TERMS):
-        return "In vivo"
+        return "In vivo", "explicit_in_vivo_text"
 
-    # Named-product short-circuit (ordered: In vivo → Allo → Auto in config).
     named = _lookup_named_product(text, NAMED_PRODUCT_TYPES)
     if named == "In vivo":
-        return "In vivo"
+        return "In vivo", "named_product"
 
     if "autoleucel" in text or "autologous" in text:
-        return "Autologous"
+        return "Autologous", "explicit_autologous"
 
     strong_allo_terms = [
         "ucart", "ucar",
@@ -442,19 +452,26 @@ def _assign_product_type(row: dict) -> str:
         "healthy donor", "donor derived", "donor sourced",
     ]
     if any(term in text for term in strong_allo_terms):
-        return "Allogeneic/Off-the-shelf"
+        return "Allogeneic/Off-the-shelf", "explicit_allogeneic"
 
     if named == "Allogeneic/Off-the-shelf":
-        return "Allogeneic/Off-the-shelf"
+        return "Allogeneic/Off-the-shelf", "named_product"
     if named == "Autologous":
-        return "Autologous"
+        return "Autologous", "named_product"
 
     if _contains_any(text, ALLOGENEIC_MARKERS):
-        return "Allogeneic/Off-the-shelf"
+        return "Allogeneic/Off-the-shelf", "weak_allogeneic_marker"
     if _contains_any(text, AUTOL_MARKERS):
-        return "Autologous"
+        return "Autologous", "weak_autologous_marker"
 
-    return "Unclear"
+    # Smart default: if the trial is confirmed as CAR-T but no product-type
+    # markers surfaced, default to Autologous. Rationale: autologous is the
+    # dominant modality in the current CAR-T landscape (~85% of approvals
+    # and active trials). Mark as medium-confidence so users see it flagged.
+    if _contains_any(text, CAR_CORE_TERMS):
+        return "Autologous", "default_autologous_no_allo_markers"
+
+    return "Unclear", "no_signal"
 
 
 # ---------------------------------------------------------------------------
@@ -599,7 +616,32 @@ def _process_trials_from_studies(studies: list[dict]) -> tuple[pd.DataFrame, dic
     n_included = len(df)
 
     df["TargetCategory"] = df.apply(lambda r: _assign_target(r.to_dict()), axis=1)
-    df["ProductType"] = df.apply(lambda r: _assign_product_type(r.to_dict()), axis=1)
+    product_results = df.apply(lambda r: _assign_product_type(r.to_dict()), axis=1)
+    df["ProductType"] = product_results.apply(lambda t: t[0])
+    df["ProductTypeSource"] = product_results.apply(lambda t: t[1])
+
+    # Per-trial ClassificationConfidence — summarises the strength of signal
+    # behind each row's Branch/Category/Entity/Target/Product labels. Surfaced
+    # in the Data tab and data-quality expander so users know which rows to
+    # trust at face value vs investigate.
+    def _confidence(row) -> str:
+        if row["LLMOverride"]:
+            return "high"
+        if row["Branch"] == "Unknown" or row["DiseaseEntity"] == UNCLASSIFIED_LABEL:
+            return "low"
+        unclear_target = row["TargetCategory"] in ("CAR-T_unspecified", "Other_or_unknown")
+        default_product = row["ProductTypeSource"] in (
+            "default_autologous_no_allo_markers",
+            "weak_autologous_marker",
+            "weak_allogeneic_marker",
+        )
+        if unclear_target and default_product:
+            return "low"
+        if unclear_target or default_product:
+            return "medium"
+        return "high"
+
+    df["ClassificationConfidence"] = df.apply(_confidence, axis=1)
 
     df["StartDate"] = pd.to_datetime(df["StartDate"], errors="coerce")
     df["StartYear"] = df["StartDate"].dt.year

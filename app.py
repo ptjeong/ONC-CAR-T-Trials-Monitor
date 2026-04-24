@@ -1730,10 +1730,10 @@ with tab_pub:
             **PUB_BASE,
             barmode="stack",
             xaxis_title="Number of trials", yaxis_title=None,
-            margin=dict(l=120, r=56, t=24, b=80),
+            margin=dict(l=120, r=56, t=24, b=130),
             yaxis=_H_YAXIS, xaxis=_H_XAXIS,
             legend=dict(
-                orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5,
+                orientation="h", yanchor="top", y=-0.28, xanchor="center", x=0.5,
                 font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
                 borderwidth=0, title=None,
             ),
@@ -1762,10 +1762,19 @@ with tab_pub:
     _pub_header("4", "Trial enrollment landscape",
                 "Solid-onc trials tend to enroll smaller cohorts than heme-onc, with distinct phase and geography patterns.")
 
+    # Enrollment outlier handling: ClinicalTrials.gov lets registries and
+    # real-world-data studies report absurd counts (e.g., 99,999,999 sentinel
+    # for the CIBMTR database; 160,602 for a claims-data DLBCL cost study).
+    # A prospective CAR-T trial tops out around ~800 patients (CARTITUDE).
+    # We cap at 1,000 for the enrollment panels and report the exclusion.
+    ENROLL_PLAUSIBLE_CAP = 1000
+
     df_enroll = df_filt.copy()
     df_enroll["EnrollmentCount"] = pd.to_numeric(df_enroll["EnrollmentCount"], errors="coerce")
-    df_enroll_known = df_enroll.dropna(subset=["EnrollmentCount"]).copy()
-    df_enroll_known["EnrollmentCount"] = df_enroll_known["EnrollmentCount"].astype(int)
+    df_enroll_all = df_enroll.dropna(subset=["EnrollmentCount"]).copy()
+    df_enroll_all["EnrollmentCount"] = df_enroll_all["EnrollmentCount"].astype(int)
+    df_enroll_known = df_enroll_all[df_enroll_all["EnrollmentCount"] <= ENROLL_PLAUSIBLE_CAP].copy()
+    n_excluded_outliers = len(df_enroll_all) - len(df_enroll_known)
 
     if len(df_enroll_known) >= 3:
         pct_known = 100 * len(df_enroll_known) / len(df_enroll)
@@ -1778,6 +1787,13 @@ with tab_pub:
         c2.metric("Total enrolled patients", f"{total_pts:,}")
         c3.metric("Median enrollment", med_pts)
         c4.metric("IQR", f"{p25}–{p75}")
+
+        if n_excluded_outliers > 0:
+            st.caption(
+                f"Note: {n_excluded_outliers} trial(s) with EnrollmentCount > {ENROLL_PLAUSIBLE_CAP:,} "
+                "(registries, real-world-data studies, or sentinel values like 99,999,999) "
+                "are excluded from the enrollment panels below but remain in all other analyses."
+            )
 
         # 4a — Enrollment distribution split by Branch (overlaid)
         st.markdown(
@@ -1885,9 +1901,9 @@ with tab_pub:
                 **PUB_BASE, barmode="stack",
                 xaxis_title="Total planned patients (reported trials)",
                 yaxis_title=None, showlegend=True,
-                margin=dict(l=155, r=72, t=24, b=80),
+                margin=dict(l=155, r=72, t=24, b=130),
                 yaxis=_H_YAXIS, xaxis=_H_XAXIS,
-                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5,
+                legend=dict(orientation="h", yanchor="top", y=-0.28, xanchor="center", x=0.5,
                             font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
                             borderwidth=0, title=None),
             )
@@ -2211,7 +2227,8 @@ with tab_pub:
         fig7b = px.bar(
             mod_branch, x="Trials", y="Modality", color="Branch",
             color_discrete_map=BRANCH_COLORS, orientation="h",
-            template="plotly_white", height=max(320, len(mod_branch["Modality"].unique()) * 40 + 80),
+            template="plotly_white",
+            height=max(340, len(mod_branch["Modality"].unique()) * 44 + 160),
             text="Trials",
         )
         fig7b.update_traces(marker_line_width=0, opacity=1, textposition="inside",
@@ -2219,9 +2236,9 @@ with tab_pub:
         fig7b.update_layout(
             **PUB_BASE, barmode="stack",
             xaxis_title="Number of trials", yaxis_title=None,
-            margin=dict(l=120, r=56, t=24, b=80),
+            margin=dict(l=120, r=56, t=24, b=130),
             yaxis=_H_YAXIS, xaxis=_H_XAXIS,
-            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5,
+            legend=dict(orientation="h", yanchor="top", y=-0.32, xanchor="center", x=0.5,
                         font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
                         borderwidth=0, title=None),
         )

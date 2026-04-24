@@ -1016,6 +1016,33 @@ with tab_overview:
             },
         )
 
+    # Disease hierarchy sunburst (Branch → Category → Entity)
+    st.subheader("Disease hierarchy at a glance")
+    st.caption("Click a wedge to zoom in. Publication-quality version in Figure 5.")
+    if not df_filt.empty:
+        _ov_sun = (
+            df_filt[["Branch", "DiseaseCategory", "DiseaseEntity"]]
+            .fillna("Unknown").assign(Count=1)
+            .groupby(["Branch", "DiseaseCategory", "DiseaseEntity"], as_index=False).sum()
+        )
+        fig_ov_sun = px.sunburst(
+            _ov_sun, path=["Branch", "DiseaseCategory", "DiseaseEntity"],
+            values="Count", color="Branch", color_discrete_map=BRANCH_COLORS,
+            height=460, template="plotly_white",
+        )
+        fig_ov_sun.update_traces(
+            insidetextorientation="radial",
+            marker=dict(line=dict(color="white", width=1.2)),
+        )
+        fig_ov_sun.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=8, r=8, t=8, b=8),
+            font=dict(family="Inter, sans-serif", size=12, color=THEME["text"]),
+        )
+        st.plotly_chart(fig_ov_sun, width='stretch')
+    else:
+        st.info("No trials for the current filter selection.")
+
     # Row 1: Branch summary + Heme vs Solid targets
     ov_r1c1, ov_r1c2 = st.columns(2)
 

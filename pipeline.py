@@ -105,6 +105,11 @@ def _normalize_text(text: str) -> str:
     # "chromosome-positive" → "chromosome positive", "car-t" → "car t".
     text = text.replace("-", " ")
     text = re.sub(r"\s+", " ", text).strip()
+    # Collapse "non hodgkin" into a single token so "hodgkin lymphoma" terms
+    # do NOT match B-NHL text by accident. After this pass, "b cell non
+    # hodgkin lymphoma" becomes "b cell nonhodgkin lymphoma", which lets the
+    # word-boundary lookbehind in _term_in_text correctly reject the match.
+    text = re.sub(r"\bnon\s+hodgkin\b", "nonhodgkin", text)
     return text
 
 
@@ -132,14 +137,16 @@ def _term_in_text(normalized_text: str, term: str) -> bool:
     normalized_term = _normalize_text(term)
     if not normalized_term:
         return False
-    if len(normalized_term) <= 3:
-        return bool(
-            re.search(
-                rf"(?<![a-z0-9]){re.escape(normalized_term)}(?![a-z0-9])",
-                normalized_text,
-            )
+    # Word-boundary match for ALL term lengths — prevents false positives like:
+    #   • "hodgkin lymphoma" matching inside "nonhodgkin lymphoma"
+    #   • "egfr" matching inside "egfrviii"
+    #   • "cd19" matching inside "cd190"
+    return bool(
+        re.search(
+            rf"(?<![a-z0-9]){re.escape(normalized_term)}(?![a-z0-9])",
+            normalized_text,
         )
-    return normalized_term in normalized_text
+    )
 
 
 def _match_terms(text: str, term_map: dict[str, list[str]]) -> list[str]:
@@ -320,9 +327,8 @@ def _detect_targets(text: str) -> list[str]:
     for label, terms in SOLID_TARGET_TERMS.items():
         if any(_term_in_text(text, t) for t in terms):
             matches.append(label)
-    # Resolve known prefix collisions — more-specific wins.
-    if "EGFRvIII" in matches and "EGFR" in matches:
-        matches.remove("EGFR")
+    # Prefix collisions like EGFR / EGFRvIII are now handled by the word-boundary
+    # match in _term_in_text. No post-filter needed.
     return matches
 
 

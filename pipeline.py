@@ -475,6 +475,138 @@ def _assign_product_type(row: dict) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Derived-column helpers (product identity, age group, sponsor type)
+# ---------------------------------------------------------------------------
+
+def _extract_product_name(row: dict) -> str | None:
+    """Return the canonical named product if the trial text contains one.
+
+    Scans NAMED_PRODUCT_TARGETS in order — first hit wins. The returned
+    string is the canonical product name (the lookup key). Useful for
+    per-product aggregation across multiple trials.
+    """
+    text = _row_text(row)
+    best = None
+    for _target, products in NAMED_PRODUCT_TARGETS.items():
+        for p in products:
+            if _normalize_text(p) in text:
+                # Prefer longer / more specific names when multiple match
+                if best is None or len(p) > len(best):
+                    best = p
+    return best
+
+
+_AGE_YEAR_RE = re.compile(r"(\d+)\s*year", re.IGNORECASE)
+
+
+def _age_to_years(age_str: str | None) -> float | None:
+    """Parse CT.gov eligibility age strings like '18 Years', '6 Months' → years."""
+    if not age_str or not isinstance(age_str, str):
+        return None
+    s = age_str.strip().lower()
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(year|month|week|day)", s)
+    if not m:
+        return None
+    n = float(m.group(1))
+    unit = m.group(2)
+    if unit.startswith("year"):
+        return n
+    if unit.startswith("month"):
+        return n / 12
+    if unit.startswith("week"):
+        return n / 52
+    if unit.startswith("day"):
+        return n / 365
+    return None
+
+
+def _age_group(row: dict) -> str:
+    """Categorise a trial as Pediatric / Adult / Both / Unknown.
+
+    Uses StdAges when present (CT.gov's authoritative enum: CHILD / ADULT /
+    OLDER_ADULT), else derives from MinAge / MaxAge bounds.
+    """
+    std_ages = (row.get("StdAges") or "").upper().split("|")
+    std_ages = {a.strip() for a in std_ages if a.strip()}
+    has_child = "CHILD" in std_ages
+    has_adult = "ADULT" in std_ages or "OLDER_ADULT" in std_ages
+    if has_child and has_adult:
+        return "Both"
+    if has_child:
+        return "Pediatric"
+    if has_adult:
+        return "Adult"
+
+    # Fallback to age bounds
+    min_yrs = _age_to_years(row.get("MinAge"))
+    max_yrs = _age_to_years(row.get("MaxAge"))
+    if min_yrs is None and max_yrs is None:
+        return "Unknown"
+    if max_yrs is not None and max_yrs <= 18:
+        return "Pediatric"
+    if min_yrs is not None and min_yrs >= 18:
+        return "Adult"
+    if min_yrs is not None and max_yrs is not None and min_yrs < 18 < max_yrs:
+        return "Both"
+    if min_yrs is not None and min_yrs < 18:
+        return "Both"  # conservative: includes children if lower bound < 18
+    return "Adult"
+
+
+_SPONSOR_CLASS_MAP = {
+    "INDUSTRY": "Industry",
+    "NIH": "Government",
+    "FED": "Government",
+    "OTHER_GOV": "Government",
+    "NETWORK": "Academic",
+    "OTHER": "Academic",
+    "AMBIG": "Unknown",
+    "INDIV": "Academic",
+    "UNKNOWN": "Unknown",
+}
+
+_ACAD_TOKENS = [
+    "hospital", "university", "universit", "medical center", "medical centre",
+    "medical college", "medical school", "children", "school of medicine",
+    "general hospital", "affiliated hospital",
+    "national institute", "research center", "research centre",
+    "cancer center", "cancer centre", "comprehensive cancer",
+    "institute for", "institute of",
+    "pla ", "armed forces", "faculty of", "nhs", "inserm",
+    "klinik", "klinikum",
+]
+_INDUS_TOKENS = [
+    "therapeutics", "pharma", "pharmaceutical",
+    "biotechnology", "biotech", "bioscience", "biotherapy",
+    "biopharmaceutical", "biopharma", "biologics",
+    " inc", " ltd", " co.,", " llc", " corp", " gmbh", " ag ",
+]
+
+
+def _sponsor_type(row: dict) -> str:
+    """Academic / Industry / Government / Unknown.
+
+    First trusts the CT.gov LeadSponsorClass field if set; falls back to
+    keyword matching on the sponsor name.
+    """
+    cls = (row.get("LeadSponsorClass") or "").upper().strip()
+    if cls in _SPONSOR_CLASS_MAP:
+        return _SPONSOR_CLASS_MAP[cls]
+
+    name = str(row.get("LeadSponsor") or "").lower()
+    if not name:
+        return "Unknown"
+    if any(t in name for t in _ACAD_TOKENS):
+        return "Academic"
+    if any(t in name for t in _INDUS_TOKENS):
+        return "Industry"
+    # Short PI-like strings without corporate suffixes treated as Academic
+    if len(name.split()) <= 4 and "." not in name:
+        return "Academic"
+    return "Industry"
+
+
+# ---------------------------------------------------------------------------
 # ClinicalTrials.gov fetch
 # ---------------------------------------------------------------------------
 
@@ -526,6 +658,8 @@ def _flatten_study(study: dict) -> dict:
     loc_mod = ps.get("contactsLocationsModule", {})
     arms_mod = ps.get("armsInterventionsModule", {})
     sponsor_mod = ps.get("sponsorCollaboratorsModule", {})
+    elig_mod = ps.get("eligibilityModule", {})
+    outcomes_mod = ps.get("outcomesModule", {})
 
     phase_list = design.get("phases") or []
     phase = (
@@ -544,6 +678,9 @@ def _flatten_study(study: dict) -> dict:
         {loc.get("country") for loc in (loc_mod.get("locations") or []) if loc.get("country")}
     )
 
+    primary_outcomes = outcomes_mod.get("primaryOutcomes") or []
+    primary_endpoints = "|".join(o.get("measure", "") for o in primary_outcomes if o.get("measure")) or None
+
     return {
         "NCTId": ident.get("nctId"),
         "BriefTitle": ident.get("briefTitle"),
@@ -557,6 +694,11 @@ def _flatten_study(study: dict) -> dict:
         "Countries": "|".join(countries) or None,
         "BriefSummary": desc.get("briefSummary"),
         "LeadSponsor": (sponsor_mod.get("leadSponsor") or {}).get("name"),
+        "LeadSponsorClass": (sponsor_mod.get("leadSponsor") or {}).get("class"),
+        "MinAge": elig_mod.get("minimumAge"),
+        "MaxAge": elig_mod.get("maximumAge"),
+        "StdAges": "|".join(elig_mod.get("stdAges") or []) or None,
+        "PrimaryEndpoints": primary_endpoints,
     }
 
 
@@ -619,6 +761,15 @@ def _process_trials_from_studies(studies: list[dict]) -> tuple[pd.DataFrame, dic
     product_results = df.apply(lambda r: _assign_product_type(r.to_dict()), axis=1)
     df["ProductType"] = product_results.apply(lambda t: t[0])
     df["ProductTypeSource"] = product_results.apply(lambda t: t[1])
+
+    # ---- Derived: ProductName (named CAR-T product if recognised) ----
+    df["ProductName"] = df.apply(lambda r: _extract_product_name(r.to_dict()), axis=1)
+
+    # ---- Derived: AgeGroup from MinAge/MaxAge or StdAges ----
+    df["AgeGroup"] = df.apply(lambda r: _age_group(r.to_dict()), axis=1)
+
+    # ---- Derived: SponsorType (Academic / Industry / Government / Unknown) ----
+    df["SponsorType"] = df.apply(lambda r: _sponsor_type(r.to_dict()), axis=1)
 
     # Per-trial ClassificationConfidence — summarises the strength of signal
     # behind each row's Branch/Category/Entity/Target/Product labels. Surfaced

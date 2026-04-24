@@ -701,7 +701,8 @@ _FILTER_KEYS = [
     "filter_branch", "filter_category", "filter_entity",
     "filter_design", "filter_phase", "filter_target",
     "filter_status", "filter_product", "filter_modality",
-    "filter_country",
+    "filter_country", "filter_agegroup", "filter_sponsortype",
+    "filter_confidence",
 ]
 if st.sidebar.button("↺ Reset all filters", use_container_width=True):
     for _k in _FILTER_KEYS:
@@ -802,6 +803,28 @@ for cs in df["Countries"].dropna():
 country_options = sorted(all_countries)
 country_sel = st.sidebar.multiselect(
     "Country", options=country_options, default=country_options, key="filter_country",
+)
+
+# Age group (Pediatric / Adult / Both / Unknown)
+age_options = sorted(df["AgeGroup"].dropna().unique().tolist()) if "AgeGroup" in df.columns else []
+age_sel = st.sidebar.multiselect(
+    "Age group", options=age_options, default=age_options, key="filter_agegroup",
+    help="Derived from the trial's StdAges / MinAge / MaxAge fields.",
+)
+
+# Sponsor type (Academic / Industry / Government / Unknown)
+sponsor_options = sorted(df["SponsorType"].dropna().unique().tolist()) if "SponsorType" in df.columns else []
+sponsor_sel = st.sidebar.multiselect(
+    "Sponsor type", options=sponsor_options, default=sponsor_options, key="filter_sponsortype",
+    help="From CT.gov LeadSponsor.class; name-token fallback for uncategorised sponsors.",
+)
+
+# Classification confidence (high / medium / low)
+conf_options = ["high", "medium", "low"]
+conf_present = [c for c in conf_options if c in set(df["ClassificationConfidence"].dropna())]
+conf_sel = st.sidebar.multiselect(
+    "Classification confidence", options=conf_present, default=conf_present, key="filter_confidence",
+    help="Filter to high-confidence rows for strict analyses (see Methods §Classification Confidence).",
 )
 
 
@@ -935,6 +958,12 @@ if modality_sel:
 if country_sel:
     country_pattern = "|".join([re.escape(c) for c in country_sel])
     mask &= df["Countries"].fillna("").str.contains(country_pattern, case=False, na=False, regex=True)
+if age_sel:
+    mask &= df["AgeGroup"].isin(age_sel)
+if sponsor_sel:
+    mask &= df["SponsorType"].isin(sponsor_sel)
+if conf_sel:
+    mask &= df["ClassificationConfidence"].isin(conf_sel)
 
 _df_filt = df[mask].copy()
 df_filt = add_phase_columns(_df_filt)
@@ -1041,8 +1070,9 @@ st.markdown(
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_overview, tab_geo, tab_data, tab_pub, tab_methods, tab_about = st.tabs(
-    ["Overview", "Geography / Map", "Data", "Publication Figures", "Methods & Appendix", "About"]
+tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = st.tabs(
+    ["Overview", "Geography / Map", "Data", "Deep Dive",
+     "Publication Figures", "Methods & Appendix", "About"]
 )
 
 
@@ -1539,6 +1569,271 @@ def _cagr(first_count: int, last_count: int, n_years: int) -> float | None:
     if n_years <= 0 or first_count <= 0:
         return None
     return (last_count / first_count) ** (1 / n_years) - 1
+
+
+# ---------------------------------------------------------------------------
+# TAB: Deep Dive  (disease-entity focused view + per-product aggregation)
+# ---------------------------------------------------------------------------
+
+with tab_deep:
+    st.markdown(
+        '<p class="small-note">Two focused views that complement the aggregate dashboards: '
+        "(1) drill into a single disease entity (category or Tier-3 leaf) to see all trials, "
+        "sponsors, phases and targets in one place; (2) aggregate trials by named CAR-T product "
+        "so you can track each product's portfolio across indications and phases.</p>",
+        unsafe_allow_html=True,
+    )
+
+    deep_sub_disease, deep_sub_product = st.tabs(["By disease", "By product"])
+
+    # ===== By-disease focus =====
+    with deep_sub_disease:
+        st.subheader("Disease-entity focus")
+
+        # Use the full (unfiltered) df so users can switch entity independently of filters.
+        _branch_opts = sorted(df["Branch"].dropna().unique().tolist())
+        _cat_opts = sorted(df["DiseaseCategory"].dropna().unique().tolist())
+        _ent_opts = set()
+        for _s in df["DiseaseEntity"].dropna():
+            _ent_opts.add(str(_s))
+        for _s in df["DiseaseEntities"].dropna():
+            for _e in str(_s).split("|"):
+                _e = _e.strip()
+                if _e:
+                    _ent_opts.add(_e)
+        _ent_opts = sorted(_ent_opts)
+
+        cdd1, cdd2, cdd3 = st.columns([1, 1, 1.2])
+        with cdd1:
+            dd_branch = st.selectbox("Branch", ["(any)"] + _branch_opts, key="dd_branch")
+        _cat_filtered = (
+            [c for c in _cat_opts if CATEGORY_TO_BRANCH.get(c, "Unknown") == dd_branch or dd_branch == "(any)"]
+            if dd_branch != "(any)" else _cat_opts
+        )
+        with cdd2:
+            dd_cat = st.selectbox("Category", ["(any)"] + _cat_filtered, key="dd_cat")
+        # Entities scoped by the chosen category if any
+        if dd_cat != "(any)":
+            _ent_in_cat = sorted(
+                [e for e in _ent_opts
+                 if ENTITY_TO_CATEGORY.get(e) == dd_cat or e == dd_cat]
+            )
+            _ent_choices = ["(any)"] + _ent_in_cat
+        else:
+            _ent_choices = ["(any)"] + _ent_opts
+        with cdd3:
+            dd_ent = st.selectbox("Entity (leaf)", _ent_choices, key="dd_ent")
+
+        # Build the focus cohort
+        focus = df.copy()
+        if dd_branch != "(any)":
+            focus = focus[focus["Branch"] == dd_branch]
+        if dd_cat != "(any)":
+            focus = focus[focus["DiseaseCategory"] == dd_cat]
+        if dd_ent != "(any)":
+            _mask = focus["DiseaseEntity"] == dd_ent
+            _mask |= focus["DiseaseEntities"].fillna("").apply(
+                lambda s: dd_ent in [e.strip() for e in str(s).split("|") if e.strip()]
+            )
+            focus = focus[_mask]
+
+        focus = add_phase_columns(focus)
+
+        if focus.empty:
+            st.info("No trials match this disease selection. Broaden the filters above.")
+        else:
+            st.caption(f"**{len(focus)}** trials in focus.")
+
+            # Headline metrics for the focus cohort
+            n_focus = len(focus)
+            _rec = int(focus["OverallStatus"].isin(["RECRUITING", "NOT_YET_RECRUITING"]).sum())
+            _sponsors = focus["LeadSponsor"].dropna().nunique()
+            _countries = set()
+            for cs in focus["Countries"].dropna():
+                for c in str(cs).split("|"):
+                    c = c.strip()
+                    if c:
+                        _countries.add(c)
+            _enroll = pd.to_numeric(focus["EnrollmentCount"], errors="coerce").dropna()
+            _enroll = _enroll[_enroll <= 1000]  # clip outliers per enrollment convention
+            med_e = int(_enroll.median()) if not _enroll.empty else 0
+
+            m1, m2, m3, m4 = st.columns(4)
+            with m1: metric_card("Trials", n_focus, "Matching this disease focus")
+            with m2: metric_card("Open / recruiting", _rec)
+            with m3: metric_card("Unique sponsors", _sponsors)
+            with m4: metric_card("Median enrollment", med_e, f"across {len(_countries)} countries")
+
+            dc1, dc2 = st.columns(2)
+
+            with dc1:
+                st.markdown("**Phase distribution**")
+                _phase_counts = (
+                    focus.groupby("PhaseOrdered", observed=False).size()
+                    .reset_index(name="Count")
+                )
+                _phase_counts["Phase"] = _phase_counts["PhaseOrdered"].astype(str).map(PHASE_LABELS)
+                _phase_counts = _phase_counts[_phase_counts["Count"] > 0]
+                if not _phase_counts.empty:
+                    st.plotly_chart(
+                        make_bar(_phase_counts, "Phase", "Count", color=HEME_COLOR, height=280),
+                        width='stretch',
+                    )
+                else:
+                    st.info("No phase data.")
+
+                st.markdown("**Antigen target breakdown (top 12)**")
+                _tgt = (
+                    focus.loc[~focus["TargetCategory"].isin(_PLATFORM_LABELS), "TargetCategory"]
+                    .fillna("Unknown").value_counts().head(12)
+                    .rename_axis("Target").reset_index(name="Count")
+                )
+                if not _tgt.empty:
+                    st.plotly_chart(
+                        make_bar(_tgt, "Target", "Count", color=SOLID_COLOR, height=280),
+                        width='stretch',
+                    )
+
+            with dc2:
+                st.markdown("**Trials by start year**")
+                _yr = pd.to_numeric(focus["StartYear"], errors="coerce").dropna().astype(int)
+                if not _yr.empty:
+                    _yr_counts = _yr.value_counts().sort_index().rename_axis("StartYear").reset_index(name="Count")
+                    st.plotly_chart(
+                        make_bar(_yr_counts, "StartYear", "Count", color=HEME_COLOR, height=280),
+                        width='stretch',
+                    )
+                else:
+                    st.info("No start-year data.")
+
+                st.markdown("**Top sponsors (top 10)**")
+                _sp = focus["LeadSponsor"].dropna().value_counts().head(10).rename_axis("Sponsor").reset_index(name="Count")
+                if not _sp.empty:
+                    _sp_sorted = _sp.sort_values("Count", ascending=True)
+                    import plotly.express as _px2
+                    _sp_fig = _px2.bar(
+                        _sp_sorted, x="Count", y="Sponsor", orientation="h",
+                        height=max(280, len(_sp_sorted) * 28 + 60),
+                        color_discrete_sequence=[MIXED_COLOR], template="plotly_white",
+                    )
+                    _sp_fig.update_traces(marker_line_width=0, opacity=0.9)
+                    _sp_fig.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        margin=dict(l=160, r=16, t=8, b=8),
+                        font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
+                        xaxis_title=None, yaxis_title=None, showlegend=False,
+                    )
+                    st.plotly_chart(_sp_fig, width='stretch')
+
+            st.markdown("**Trial list (focus cohort)**")
+            focus_show = focus.copy()
+            focus_show["NCTLink"] = focus_show["NCTId"].apply(
+                lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
+            )
+            focus_show["Phase"] = focus_show["PhaseLabel"].fillna(focus_show["Phase"])
+            focus_show["OverallStatus"] = focus_show["OverallStatus"].map(STATUS_DISPLAY).fillna(focus_show["OverallStatus"])
+            show_cols_focus = [
+                "NCTId", "NCTLink", "BriefTitle",
+                "Branch", "DiseaseCategory", "DiseaseEntity",
+                "TargetCategory", "ProductType", "ProductName",
+                "AgeGroup", "SponsorType", "Phase", "OverallStatus",
+                "StartYear", "Countries", "LeadSponsor",
+            ]
+            st.dataframe(
+                focus_show[[c for c in show_cols_focus if c in focus_show.columns]]
+                    .sort_values(["PhaseOrdered", "StartYear", "NCTId"], na_position="last"),
+                width='stretch', height=420, hide_index=True,
+                column_config={
+                    "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
+                    "BriefTitle": st.column_config.TextColumn("Title", width="large"),
+                    "ProductName": st.column_config.TextColumn("Product", width="medium"),
+                    "LeadSponsor": st.column_config.TextColumn("Lead sponsor", width="medium"),
+                    "Countries": st.column_config.TextColumn("Countries", width="medium"),
+                },
+            )
+
+            st.download_button(
+                "Download focus cohort as CSV",
+                data=_csv_with_provenance(focus, f"Deep-dive: {dd_branch} / {dd_cat} / {dd_ent}", include_filters=False),
+                file_name=f"deep_dive_{dd_branch}_{dd_cat}_{dd_ent}.csv".replace("(any)", "all").replace(" ", "_"),
+                mime="text/csv",
+            )
+
+    # ===== By-product aggregation =====
+    with deep_sub_product:
+        st.subheader("Per-product pipeline view")
+        st.caption(
+            "Each row is one named CAR-T product (from NAMED_PRODUCT_TARGETS). "
+            "Shows the product's portfolio across the filtered dataset: number of trials, "
+            "targets, modality, phase distribution, sponsor, countries, median enrollment."
+        )
+
+        prod_df = df_filt.dropna(subset=["ProductName"]).copy()
+        if prod_df.empty:
+            st.info("No named-product trials in the current filter selection.")
+        else:
+            prod_df["EnrollmentCount"] = pd.to_numeric(prod_df["EnrollmentCount"], errors="coerce")
+            prod_df_clean = prod_df.copy()
+            prod_df_clean["EnrollCapped"] = prod_df_clean["EnrollmentCount"].where(
+                prod_df_clean["EnrollmentCount"] <= 1000
+            )
+
+            def _phase_max_rank(phases: "pd.Series") -> str:
+                """Return the most-advanced phase label among a set of phase labels."""
+                try:
+                    cat = pd.Categorical(phases.dropna(), categories=PHASE_ORDER, ordered=True)
+                    if len(cat) == 0:
+                        return "—"
+                    return PHASE_LABELS.get(str(cat.max()), str(cat.max()))
+                except Exception:
+                    return "—"
+
+            pivot = (
+                prod_df_clean.groupby("ProductName")
+                .agg(
+                    Trials=("NCTId", "nunique"),
+                    Target=("TargetCategory", lambda s: s.value_counts().index[0] if not s.empty else "—"),
+                    Modality=("Modality", lambda s: s.value_counts().index[0] if not s.empty else "—"),
+                    ProductType=("ProductType", lambda s: s.value_counts().index[0] if not s.empty else "—"),
+                    FurthestPhase=("PhaseNormalized", _phase_max_rank),
+                    Sponsors=("LeadSponsor", lambda s: s.dropna().nunique()),
+                    Branches=("Branch", lambda s: ", ".join(sorted(set(s.dropna())))),
+                    Categories=("DiseaseCategory", lambda s: ", ".join(sorted(set(s.dropna())))),
+                    Countries=("Countries", lambda s: ", ".join(sorted(set(split_pipe_values(s)))[:8])),
+                    MedianEnroll=("EnrollCapped", lambda s: int(s.median()) if s.notna().any() else 0),
+                )
+                .reset_index()
+                .sort_values("Trials", ascending=False)
+            )
+
+            m1, m2, m3 = st.columns(3)
+            with m1: metric_card("Named products", len(pivot), "In the current filter")
+            with m2: metric_card("Total trials", int(pivot["Trials"].sum()))
+            with m3: metric_card("Top product", pivot.iloc[0]["ProductName"] if not pivot.empty else "—",
+                                 f"{int(pivot.iloc[0]['Trials'])} trials" if not pivot.empty else "")
+
+            st.dataframe(
+                pivot, width='stretch', height=460, hide_index=True,
+                column_config={
+                    "ProductName": st.column_config.TextColumn("Product", width="medium"),
+                    "Target": st.column_config.TextColumn("Primary target", width="small"),
+                    "Modality": st.column_config.TextColumn("Modality", width="small"),
+                    "ProductType": st.column_config.TextColumn("Product type", width="small"),
+                    "FurthestPhase": st.column_config.TextColumn("Furthest phase", width="small"),
+                    "Sponsors": st.column_config.NumberColumn("# Sponsors", width="small"),
+                    "Branches": st.column_config.TextColumn("Branches", width="small"),
+                    "Categories": st.column_config.TextColumn("Categories", width="medium"),
+                    "Countries": st.column_config.TextColumn("Countries (top)", width="large"),
+                    "MedianEnroll": st.column_config.NumberColumn("Median enrollment", width="small"),
+                },
+            )
+
+            st.download_button(
+                "Download per-product CSV",
+                data=_csv_with_provenance(pivot, "Per-product pipeline view", include_filters=True),
+                file_name="per_product_pipeline.csv",
+                mime="text/csv",
+            )
 
 
 # ---------------------------------------------------------------------------

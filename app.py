@@ -6,6 +6,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from datetime import date, datetime, timezone
 
@@ -2772,55 +2773,10 @@ with tab_pub:
         _fig1_first = _first_meaningful_year(year_branch, count_col="Trials") or int(year_branch["StartYear"].min())
         _fig1_last = int(year_branch["StartYear"].max())
 
-        # plotly 6.x: px.area stops auto-stacking. Explicit go.Scatter
-        # (stackgroup="one") so Heme / Solid / Mixed / Unknown stack rather
-        # than overdraw. Pin opacity on the fill for consistency with the
-        # other branch-stacked charts.
-        fig1 = go.Figure()
-        for _branch in sorted(year_branch["Branch"].unique()):
-            _bd = year_branch[year_branch["Branch"] == _branch].sort_values("StartYear")
-            _color = BRANCH_COLORS.get(_branch, THEME["primary"])
-            fig1.add_trace(go.Scatter(
-                x=_bd["StartYear"], y=_bd["Trials"],
-                name=_branch, mode="lines",
-                stackgroup="one",
-                line=dict(width=0.5, color=_color),
-                fillcolor=_color,
-                opacity=0.85,
-            ))
-        fig1.update_layout(template="plotly_white", height=420)
-        fig1.update_layout(
-            **PUB_BASE,
-            margin=dict(l=72, r=36, t=24, b=110),
-            xaxis=dict(
-                tickmode="linear", dtick=1, tickformat="d", showgrid=False,
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title="Start year", title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-            ),
-            yaxis=dict(
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title="Number of trials",
-                title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-                zeroline=False, rangemode="tozero",
-            ),
-            legend=dict(
-                orientation="h", yanchor="top", y=-0.20, xanchor="center", x=0.5,
-                font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
-                borderwidth=0, title=None,
-            ),
-        )
-
-        # Approved-product overlays. Each regulator has its own tier of
-        # vertical lines and year/brand labels; pills below the chart toggle
-        # each tier on/off. Brand names (the parenthesised marketing name,
-        # e.g. "Kymriah" from "tisa-cel (Kymriah)") are pulled out of the
-        # APPROVED_PRODUCTS entries so each line tells the reader both WHEN
-        # a product landed and WHAT it was.
+        # Two-panel design: annual-trial-starts trend on top, regulatory
+        # milestone strip on the bottom, sharing the x-axis. This lets the
+        # reader see WHEN approvals landed relative to trial-start trends
+        # without cluttering the trend panel itself.
         import re as _re_overlay
         _brand_re = _re_overlay.compile(r"\(([^)]+)\)")
 
@@ -2828,137 +2784,195 @@ with tab_pub:
             m = _brand_re.search(full_name)
             return m.group(1).strip() if m else full_name.strip()
 
-        _regulator_products: dict[str, dict[int, list[str]]] = {
-            "FDA": {}, "EMA": {}, "NMPA": {},
-        }
-        for p in APPROVED_PRODUCTS:
-            _regulator_products[p["regulator"]].setdefault(p["year"], []).append(
-                _brand_of(p["name"])
-            )
-        # Keep full-name dicts for the below-chart caption (fallback reference).
-        fda_products = {yr: [p["name"] for p in APPROVED_PRODUCTS
-                             if p["regulator"] == "FDA" and p["year"] == yr]
-                        for yr in _regulator_products["FDA"]}
-        nmpa_products = {yr: [p["name"] for p in APPROVED_PRODUCTS
-                              if p["regulator"] == "NMPA" and p["year"] == yr]
-                         for yr in _regulator_products["NMPA"]}
-        ema_products = {yr: [p["name"] for p in APPROVED_PRODUCTS
-                             if p["regulator"] == "EMA" and p["year"] == yr]
-                        for yr in _regulator_products["EMA"]}
+        def _generic_of(full_name: str) -> str:
+            return full_name.split("(")[0].strip() if "(" in full_name else full_name.strip()
 
-        # Per-regulator line styling — solid / dashed / dotted so overlapping
-        # years (e.g., 2020 FDA + EMA) stay distinguishable at the same X.
-        # No on-chart text labels: stacking year+brand annotations across
-        # three regulator tiers produced collisions at shared years (2020,
-        # 2021, 2022). All product detail lives in the caption below instead.
-        _REG_STYLE = {
-            "FDA":  {"dash": "solid", "color": "#0b3d91", "width": 1.8, "opacity": 0.85},
-            "EMA":  {"dash": "dash",  "color": "#1d4ed8", "width": 1.4, "opacity": 0.65},
-            "NMPA": {"dash": "dot",   "color": "#b45309", "width": 1.4, "opacity": 0.65},
-        }
+        _REG_COLOR = {"FDA": "#0b3d91", "EMA": "#1d4ed8", "NMPA": "#b45309"}
 
-        _reg_labels = ["FDA", "NMPA", "EMA"]
+        _reg_labels = ["FDA", "EMA", "NMPA"]
         _active_regs = st.session_state.get("fig1_approval_regs", _reg_labels) or []
-        _show_fda = "FDA" in _active_regs
-        _show_nmpa = "NMPA" in _active_regs
-        _show_ema = "EMA" in _active_regs
 
-        def _draw_regulator_tier(reg: str, active: bool) -> None:
-            if not active:
-                return
-            style = _REG_STYLE[reg]
-            for yr in sorted(_regulator_products[reg]):
-                if yr < _fig1_first or yr > _fig1_last:
+        # Enumerate approvals and their brand canonicalisation.
+        _approvals = []
+        for p in APPROVED_PRODUCTS:
+            _approvals.append({
+                "year": p["year"],
+                "regulator": p["regulator"],
+                "brand": _brand_of(p["name"]),
+                "generic": _generic_of(p["name"]),
+                "target": p.get("target", ""),
+                "full": p["name"],
+            })
+        _appr_df = pd.DataFrame(_approvals)
+
+        # Products order = first FDA-approval year asc, tie-break to first
+        # any-approval year. This reads Kymriah/Yescarta at the bottom row,
+        # Aucatzyl near the top — chronological left-to-right per row.
+        _brand_order_key = {}
+        for b, grp in _appr_df.groupby("brand"):
+            fda_years = grp.loc[grp["regulator"] == "FDA", "year"]
+            any_years = grp["year"]
+            _brand_order_key[b] = (
+                fda_years.min() if not fda_years.empty else 9999,
+                any_years.min(),
+                b,
+            )
+        _brands_ordered = sorted(_brand_order_key, key=_brand_order_key.get)
+        # Reversed so the earliest lands at the bottom of the strip
+        _brands_display = list(reversed(_brands_ordered))
+        _brand_to_y = {b: i for i, b in enumerate(_brands_display)}
+
+        # Filter approvals by pill selection.
+        _appr_active = _appr_df[_appr_df["regulator"].isin(_active_regs)].copy()
+        _has_any_active = not _appr_active.empty
+
+        # Subplot — fixed 0.72 / 0.28 split. The strip grows/shrinks only
+        # when the pill set is empty (entire bottom panel hidden).
+        _panel_heights = [0.80, 0.20] if not _has_any_active else [0.72, 0.28]
+        fig1 = make_subplots(
+            rows=2, cols=1, shared_xaxes=True,
+            row_heights=_panel_heights,
+            vertical_spacing=0.04,
+        )
+
+        # --- Top panel: trial-start trend area --------------------------
+        for _branch in sorted(year_branch["Branch"].unique()):
+            _bd = year_branch[year_branch["Branch"] == _branch].sort_values("StartYear")
+            _color = BRANCH_COLORS.get(_branch, THEME["primary"])
+            fig1.add_trace(
+                go.Scatter(
+                    x=_bd["StartYear"], y=_bd["Trials"],
+                    name=_branch, mode="lines",
+                    stackgroup="one",
+                    line=dict(width=0.5, color=_color),
+                    fillcolor=_color, opacity=0.85,
+                ),
+                row=1, col=1,
+            )
+
+        # --- Bottom panel: approval milestones strip --------------------
+        if _has_any_active:
+            for reg in _reg_labels:
+                if reg not in _active_regs:
                     continue
-                fig1.add_vline(
-                    x=yr, line_width=style["width"], line_dash=style["dash"],
-                    line_color=style["color"], opacity=style["opacity"],
+                _sub = _appr_active[_appr_active["regulator"] == reg]
+                if _sub.empty:
+                    continue
+                fig1.add_trace(
+                    go.Scatter(
+                        x=_sub["year"],
+                        y=_sub["brand"].map(_brand_to_y),
+                        mode="markers",
+                        name=reg,
+                        marker=dict(
+                            size=13,
+                            color=_REG_COLOR[reg],
+                            opacity=0.9,
+                            line=dict(width=1.2, color="white"),
+                            symbol="circle",
+                        ),
+                        customdata=_sub[["brand", "generic", "target", "regulator", "year"]].values,
+                        hovertemplate=(
+                            "<b>%{customdata[0]}</b> (%{customdata[1]})<br>"
+                            "%{customdata[3]} approval · %{customdata[4]}<br>"
+                            "Target: %{customdata[2]}"
+                            "<extra></extra>"
+                        ),
+                        legendgroup=reg,
+                        showlegend=True,
+                    ),
+                    row=2, col=1,
                 )
 
-        _draw_regulator_tier("FDA",  _show_fda)
-        _draw_regulator_tier("EMA",  _show_ema)
-        _draw_regulator_tier("NMPA", _show_nmpa)
+        # --- Layout -----------------------------------------------------
+        # Top panel: trial-start y-axis with existing styling.
+        fig1.update_yaxes(
+            row=1, col=1,
+            showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+            showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
+            ticks="outside", ticklen=6, tickwidth=1.2,
+            tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+            title="Number of trials",
+            title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
+            zeroline=False, rangemode="tozero",
+        )
 
-        # Compact top margin — no stacked annotations means we only need
-        # room for the partial-year indicator.
-        _top_margin = 40
+        # Bottom panel: product labels on y; no grid. Range padded so dots
+        # don't sit on the axis lines.
+        fig1.update_yaxes(
+            row=2, col=1,
+            tickmode="array",
+            tickvals=list(_brand_to_y.values()) if _has_any_active else [],
+            ticktext=list(_brand_to_y.keys())  if _has_any_active else [],
+            tickfont=dict(size=10, color=THEME["text"]),
+            showgrid=True, gridcolor="#f1f5f9", gridwidth=0.7,
+            showline=True, linewidth=1.2, linecolor=_AX_COLOR,
+            zeroline=False,
+            range=[-0.6, (len(_brands_display) - 0.4) if _has_any_active else 1],
+            fixedrange=True,
+            title=None,
+        )
+
+        # Shared x-axis on bottom panel (plotly renders it only on the
+        # visible bottom subplot when shared_xaxes=True).
+        fig1.update_xaxes(
+            row=2, col=1,
+            tickmode="linear", dtick=1, tickformat="d", showgrid=False,
+            showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+            ticks="outside", ticklen=6, tickwidth=1.2,
+            tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+            title="Start year",
+            title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
+            range=[_fig1_first - 0.5, _fig1_last + 0.5],
+        )
+        # Top panel x-axis still gets a spine for framing, no tick labels.
+        fig1.update_xaxes(
+            row=1, col=1,
+            showgrid=False, showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+            ticks="", showticklabels=False,
+            range=[_fig1_first - 0.5, _fig1_last + 0.5],
+        )
 
         _current_year = pd.Timestamp.now().year
         if _yr_max is not None and _yr_max >= _current_year:
-            fig1.add_vrect(
-                x0=_current_year - 0.5, x1=_current_year + 0.5,
-                fillcolor="rgba(0,0,0,0.04)", line_width=0,
-            )
+            # Shade partial-year band across BOTH panels so the caveat
+            # stays visible regardless of which subplot the reader looks at.
+            for _row in (1, 2):
+                fig1.add_vrect(
+                    x0=_current_year - 0.5, x1=_current_year + 0.5,
+                    fillcolor="rgba(0,0,0,0.04)", line_width=0,
+                    row=_row, col=1,
+                )
             fig1.add_annotation(
-                x=_current_year, y=1.09, yref="paper",
+                x=_current_year, y=1.03, yref="paper",
                 text=f"{_current_year} (partial year)", showarrow=False,
                 font=dict(size=10, color=THEME["muted"]),
                 yanchor="bottom", xanchor="center",
             )
 
-        # Dynamic top margin — grows with the number of active overlay tiers
-        # so stacked year/brand labels sit clear of the plot area.
-        fig1.update_layout(margin=dict(l=72, r=36, t=_top_margin, b=110))
-        # Trim the visible x-range so pre-meaningful-data years don't dominate.
-        fig1.update_xaxes(range=[_fig1_first - 0.5, _fig1_last + 0.5])
+        fig1.update_layout(
+            **PUB_BASE,
+            height=540 if _has_any_active else 440,
+            margin=dict(l=140, r=36, t=32, b=90),
+            legend=dict(
+                orientation="h", yanchor="top", y=-0.12,
+                xanchor="center", x=0.5,
+                font=dict(size=11, color=_AX_COLOR),
+                bgcolor="rgba(0,0,0,0)", borderwidth=0, title=None,
+            ),
+        )
 
         st.plotly_chart(fig1, width='stretch', config=PUB_EXPORT)
 
-        # Pill row — visually reads as a caption-side chip row. Clicking a pill
-        # toggles its overlay tier on/off on the chart and below the chart.
+        # Pill row — filters which regulators' dots appear in the strip.
         st.pills(
-            "Approval overlays",
+            "Regulators",
             options=_reg_labels,
             default=_reg_labels,
             selection_mode="multi",
             key="fig1_approval_regs",
             label_visibility="collapsed",
         )
-
-        # Caption is now the sole source of product information (chart has
-        # lines only). One line per active regulator, color-coded to match
-        # its line style, listing year + brand names for fast scanning.
-        def _fmt_brand_years(year_to_brands: dict[int, list[str]]) -> str:
-            parts = [
-                f"<b>{yr}</b>&nbsp;{', '.join(brands)}"
-                for yr, brands in sorted(year_to_brands.items())
-            ]
-            return " &nbsp;·&nbsp; ".join(parts)
-
-        _rows = []
-        if _show_fda and _regulator_products["FDA"]:
-            _rows.append(
-                f'<div style="margin: 0.05rem 0;">'
-                f'<span style="color:#0b3d91; font-weight:600;">'
-                f'<span style="letter-spacing:-1px;">———</span>&nbsp;FDA</span>'
-                f'<span style="color:#64748b;">&nbsp;&nbsp;'
-                f'{_fmt_brand_years(_regulator_products["FDA"])}</span></div>'
-            )
-        if _show_ema and _regulator_products["EMA"]:
-            _rows.append(
-                f'<div style="margin: 0.05rem 0;">'
-                f'<span style="color:#1d4ed8; font-weight:600;">'
-                f'<span style="letter-spacing:-1px;">- - -</span>&nbsp;EMA</span>'
-                f'<span style="color:#64748b;">&nbsp;&nbsp;'
-                f'{_fmt_brand_years(_regulator_products["EMA"])}</span></div>'
-            )
-        if _show_nmpa and _regulator_products["NMPA"]:
-            _rows.append(
-                f'<div style="margin: 0.05rem 0;">'
-                f'<span style="color:#b45309; font-weight:600;">'
-                f'<span style="letter-spacing:-1px;">·&nbsp;·&nbsp;·</span>&nbsp;NMPA</span>'
-                f'<span style="color:#64748b;">&nbsp;&nbsp;'
-                f'{_fmt_brand_years(_regulator_products["NMPA"])}</span></div>'
-            )
-
-        if _rows:
-            st.markdown(
-                '<div class="pub-fig-caption" '
-                'style="margin-top: 0.25rem; font-size: 0.72rem; line-height: 1.4;">'
-                + "".join(_rows)
-                + '</div>',
-                unsafe_allow_html=True,
-            )
 
         total_t = len(df_filt)
         fig1_yearly = year_branch.groupby("StartYear")["Trials"].sum().sort_index()

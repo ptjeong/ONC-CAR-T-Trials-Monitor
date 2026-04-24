@@ -56,24 +56,45 @@ BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 
 _OVERRIDES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "llm_overrides.json")
 _LLM_OVERRIDES: dict[str, dict] = {}
+_LLM_EXCLUDED_NCT_IDS: set[str] = set()
 
 
 def _load_overrides() -> None:
-    global _LLM_OVERRIDES
+    """Populate two caches from llm_overrides.json:
+      _LLM_OVERRIDES        — per-trial classification overrides the pipeline applies.
+      _LLM_EXCLUDED_NCT_IDS — trials the LLM flagged for exclusion (off-scope).
+    Only high/medium confidence entries are honoured.
+    """
+    global _LLM_OVERRIDES, _LLM_EXCLUDED_NCT_IDS
     if not os.path.exists(_OVERRIDES_PATH):
         _LLM_OVERRIDES = {}
+        _LLM_EXCLUDED_NCT_IDS = set()
         return
     try:
         with open(_OVERRIDES_PATH) as f:
             entries = json.load(f)
     except (json.JSONDecodeError, OSError):
         _LLM_OVERRIDES = {}
+        _LLM_EXCLUDED_NCT_IDS = set()
         return
+
+    def _is_exclude(e: dict) -> bool:
+        return bool(e.get("exclude")) or e.get("disease_entity") == "Exclude"
+
     _LLM_OVERRIDES = {
         e["nct_id"]: e
         for e in entries
         if e.get("confidence") in ("high", "medium")
-        and e.get("disease_entity") not in ("Exclude", None)
+        and not _is_exclude(e)
+        and e.get("disease_entity") not in (None,)
+        and e.get("nct_id")
+    }
+    _LLM_EXCLUDED_NCT_IDS = {
+        e["nct_id"]
+        for e in entries
+        if e.get("confidence") in ("high", "medium")
+        and _is_exclude(e)
+        and e.get("nct_id")
     }
 
 
@@ -283,7 +304,8 @@ def _classify_disease(row: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _is_hard_excluded(nct_id: str) -> bool:
-    return nct_id.strip() in HARD_EXCLUDED_NCT_IDS
+    nct = nct_id.strip()
+    return nct in HARD_EXCLUDED_NCT_IDS or nct in _LLM_EXCLUDED_NCT_IDS
 
 
 def _is_indication_excluded(row: dict) -> bool:
@@ -440,19 +462,19 @@ def _assign_product_type(row: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def fetch_raw_trials(max_records: int = 5000, statuses: list[str] | None = None) -> list[dict]:
-    """Pull oncology CAR-T trials from ClinicalTrials.gov v2."""
+    """Pull all CAR-based cell-therapy trials from ClinicalTrials.gov v2.
+
+    Intentionally broad: no condition-search restriction. Downstream handling —
+    the tri-level classifier assigns Branch/Category/Entity, and
+    _exclude_by_indication drops trials whose only indication is autoimmune /
+    rheumatologic. This is more robust than trying to enumerate every onco
+    condition term ClinicalTrials.gov might use (generic labels like "Neoplasms"
+    or "Hematological Malignancies" were being missed before).
+    """
     term_query = (
-        '('
-        ' "CAR T" OR "CAR-T" OR "chimeric antigen receptor" '
-        ' OR "CAR-NK" OR "CAR NK" OR "CAAR-T" OR "CAR-Treg" '
-        ' OR "gamma delta CAR" OR "CAR gamma delta" '
-        ') AND AREA[ConditionSearch] ('
-        ' leukemia OR lymphoma OR myeloma OR "multiple myeloma" '
-        ' OR "solid tumor" OR "solid tumors" OR glioma OR glioblastoma '
-        ' OR hepatocellular OR pancreatic OR gastric OR colorectal '
-        ' OR ovarian OR breast OR prostate OR sarcoma OR melanoma '
-        ' OR neuroblastoma OR mesothelioma OR carcinoma '
-        ')'
+        '"CAR T" OR "CAR-T" OR "chimeric antigen receptor" '
+        'OR "CAR-NK" OR "CAR NK" OR "CAAR-T" OR "CAR-Treg" '
+        'OR "gamma delta CAR" OR "CAR gamma delta"'
     )
 
     params = {"query.term": term_query, "pageSize": 200, "countTotal": "true"}

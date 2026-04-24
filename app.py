@@ -105,15 +105,26 @@ _PLATFORM_LABELS = {"CAR-NK", "CAR-Treg", "CAAR-T", "CAR-γδ T"}
 # Approved CAR-T products — used for temporal overlay annotations
 # ---------------------------------------------------------------------------
 APPROVED_PRODUCTS = [
-    {"year": 2017, "name": "tisa-cel (Kymriah)",    "target": "CD19", "branch": "Heme-onc"},
-    {"year": 2017, "name": "axi-cel (Yescarta)",    "target": "CD19", "branch": "Heme-onc"},
-    {"year": 2020, "name": "brexu-cel (Tecartus)",  "target": "CD19", "branch": "Heme-onc"},
-    {"year": 2021, "name": "liso-cel (Breyanzi)",   "target": "CD19", "branch": "Heme-onc"},
-    {"year": 2021, "name": "ide-cel (Abecma)",      "target": "BCMA", "branch": "Heme-onc"},
-    {"year": 2022, "name": "cilta-cel (Carvykti)",  "target": "BCMA", "branch": "Heme-onc"},
-    {"year": 2024, "name": "obe-cel (Aucatzyl)",    "target": "CD19", "branch": "Heme-onc"},
-    {"year": 2025, "name": "eque-cel (Fucaso)",     "target": "BCMA", "branch": "Heme-onc"},
-    {"year": 2025, "name": "zevor-cel",             "target": "BCMA", "branch": "Heme-onc"},
+    # FDA approvals (primary — drawn as prominent vertical lines)
+    {"year": 2017, "name": "tisa-cel (Kymriah)",   "target": "CD19", "regulator": "FDA"},
+    {"year": 2017, "name": "axi-cel (Yescarta)",   "target": "CD19", "regulator": "FDA"},
+    {"year": 2020, "name": "brexu-cel (Tecartus)", "target": "CD19", "regulator": "FDA"},
+    {"year": 2021, "name": "liso-cel (Breyanzi)",  "target": "CD19", "regulator": "FDA"},
+    {"year": 2021, "name": "ide-cel (Abecma)",     "target": "BCMA", "regulator": "FDA"},
+    {"year": 2022, "name": "cilta-cel (Carvykti)", "target": "BCMA", "regulator": "FDA"},
+    {"year": 2024, "name": "obe-cel (Aucatzyl)",   "target": "CD19", "regulator": "FDA"},
+    # NMPA approvals (China — listed in caption only, no chart line)
+    {"year": 2021, "name": "relma-cel (Carteyva)", "target": "CD19", "regulator": "NMPA"},
+    {"year": 2023, "name": "eque-cel (Fucaso)",    "target": "BCMA", "regulator": "NMPA"},
+    {"year": 2024, "name": "zevor-cel",            "target": "BCMA", "regulator": "NMPA"},
+    # EMA approvals (EU — listed in caption only, no chart line)
+    {"year": 2018, "name": "tisa-cel (Kymriah)",   "target": "CD19", "regulator": "EMA"},
+    {"year": 2018, "name": "axi-cel (Yescarta)",   "target": "CD19", "regulator": "EMA"},
+    {"year": 2020, "name": "brexu-cel (Tecartus)", "target": "CD19", "regulator": "EMA"},
+    {"year": 2021, "name": "ide-cel (Abecma)",     "target": "BCMA", "regulator": "EMA"},
+    {"year": 2022, "name": "liso-cel (Breyanzi)",  "target": "CD19", "regulator": "EMA"},
+    {"year": 2022, "name": "cilta-cel (Carvykti)", "target": "BCMA", "regulator": "EMA"},
+    {"year": 2025, "name": "obe-cel (Aucatzyl)",   "target": "CD19", "regulator": "EMA"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -1502,7 +1513,10 @@ with tab_pub:
     _yr_min = int(years_raw.min()) if len(years_raw) else None
     _yr_max = int(years_raw.max()) if len(years_raw) else None
     _fig1_sub = (
-        f"Annual trial starts by branch, {_yr_min}–{_yr_max}. Vertical lines mark approvals of landmark CAR-T products."
+        f"Annual trial starts by branch, {_yr_min}–{_yr_max}. Pre-2017 years "
+        "will look sparse with the default status filter — most early CAR-T "
+        "trials are now COMPLETED and filtered out. Add COMPLETED in the "
+        "sidebar to see historical activity. Vertical lines mark FDA approvals."
         if _yr_min is not None else "Annual trial starts by branch."
     )
     _pub_header("1", "Temporal trends by branch, with approved-product overlay", _fig1_sub)
@@ -1546,26 +1560,30 @@ with tab_pub:
             ),
         )
 
-        # Approved-product overlays — vertical dashed lines + year labels only;
-        # full product list appears in a caption below the chart (more legible
-        # than cramming 2–3 product names at each tick).
-        products_by_year: dict[int, list[str]] = {}
+        # Approved-product overlays — FDA only on the chart (primary regulator);
+        # NMPA and EMA shown in a secondary caption below so the chart stays
+        # uncluttered and FDA approvals get prominence.
+        fda_products: dict[int, list[str]] = {}
+        nmpa_products: dict[int, list[str]] = {}
+        ema_products: dict[int, list[str]] = {}
         for p in APPROVED_PRODUCTS:
-            products_by_year.setdefault(p["year"], []).append(p["name"])
+            reg = p["regulator"]
+            store = {"FDA": fda_products, "NMPA": nmpa_products, "EMA": ema_products}[reg]
+            store.setdefault(p["year"], []).append(p["name"])
 
-        for yr in sorted(products_by_year):
+        for yr in sorted(fda_products):
             if yr < (_yr_min or 0) or yr > (_yr_max or 9999):
                 continue
+            # Prominent solid navy line for FDA approvals.
             fig1.add_vline(
-                x=yr, line_width=1.1, line_dash="dot", line_color="#475569",
-                opacity=0.6,
+                x=yr, line_width=1.6, line_dash="solid", line_color="#0b3d91",
+                opacity=0.85,
             )
-            # Just the year as a small tag above the line — clean and unambiguous.
             fig1.add_annotation(
                 x=yr, y=1.015, yref="paper",
                 text=f"<b>{yr}</b>",
                 showarrow=False, xanchor="center", yanchor="bottom",
-                font=dict(size=11, color="#0b3d91", family="Inter, sans-serif"),
+                font=dict(size=12, color="#0b3d91", family="Inter, sans-serif"),
             )
 
         _current_year = pd.Timestamp.now().year
@@ -1586,19 +1604,39 @@ with tab_pub:
 
         st.plotly_chart(fig1, width='stretch', config=PUB_EXPORT)
 
-        # Legible caption listing each approval — far easier to read than
-        # vertical stacks of product names jammed into the chart header.
-        approval_rows = []
-        for yr in sorted(products_by_year):
-            products = ", ".join(products_by_year[yr])
-            approval_rows.append(f"<b>{yr}</b>: {products}")
-        approvals_text = " &nbsp;·&nbsp; ".join(approval_rows)
-        st.markdown(
+        # Two-tier caption: FDA bolded/navy-prominent, NMPA + EMA muted below.
+        def _fmt_year_list(year_to_names: dict[int, list[str]]) -> str:
+            parts = [f"<b>{yr}</b> {', '.join(names)}" for yr, names in sorted(year_to_names.items())]
+            return " &nbsp;·&nbsp; ".join(parts)
+
+        fda_line = _fmt_year_list(fda_products)
+        nmpa_line = _fmt_year_list(nmpa_products)
+        ema_line = _fmt_year_list(ema_products)
+
+        caption_html_parts = [
             f'<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
-            f'Landmark CAR-T approvals marked on the chart — '
-            f'{approvals_text}.</div>',
-            unsafe_allow_html=True,
-        )
+            f'<span style="color:#0b3d91; font-weight:600;">FDA approvals</span> '
+            f'(vertical lines on chart): {fda_line}.</div>',
+        ]
+        secondary_bits = []
+        if nmpa_line:
+            secondary_bits.append(
+                f'<span style="color:#475569; font-weight:500;">NMPA (China)</span> '
+                f'<span style="color:#64748b;">{nmpa_line}</span>'
+            )
+        if ema_line:
+            secondary_bits.append(
+                f'<span style="color:#475569; font-weight:500;">EMA (EU)</span> '
+                f'<span style="color:#64748b;">{ema_line}</span>'
+            )
+        if secondary_bits:
+            caption_html_parts.append(
+                '<div class="pub-fig-caption" '
+                'style="margin-top: 0.15rem; font-size: 0.68rem; color: #64748b;">'
+                + ' &nbsp;&nbsp;|&nbsp;&nbsp; '.join(secondary_bits)
+                + '.</div>'
+            )
+        st.markdown("".join(caption_html_parts), unsafe_allow_html=True)
 
         total_t = len(df_filt)
         fig1_yearly = year_branch.groupby("StartYear")["Trials"].sum().sort_index()

@@ -1726,39 +1726,28 @@ with tab_geo:
                     help=f"NCT IDs with at least one open {selected_country} site",
                 )
 
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                st.markdown("**Open sites by city**")
-                st.plotly_chart(
-                    make_bar(country_city_counts, "City", "OpenSiteCount",
-                             height=min(300, max(180, len(country_city_counts) * 20 + 48)),
-                             color=THEME["primary"]),
-                    width='stretch',
-                )
-            with c2:
-                st.markdown(f"**{selected_country} city table**")
-                city_event = st.dataframe(
-                    country_city_counts, width='stretch',
-                    height=min(300, max(180, len(country_city_counts) * 20 + 48)),
-                    hide_index=True,
-                    on_select="rerun", selection_mode="single-row",
-                    key=f"city_table_{selected_country}",
-                )
-
-            # Country-scoped site scatter — city-level dots within the selected
-            # country's bounds. Sized by trial count so dense hubs pop out.
-            if (
+            # Mirror the Global-view pattern: map + top-cities bar side by
+            # side (primary visuals), then the full city table below spans
+            # full width (lookup surface). This keeps the country's map next
+            # to its ranking instead of floating at the bottom disconnected.
+            _has_country_coords = (
                 "Latitude" in country_open_sites.columns
                 and not country_open_sites["Latitude"].isna().all()
-            ):
+            )
+            _cgeo = pd.DataFrame()
+            if _has_country_coords:
                 _cgeo = country_open_sites.dropna(subset=["Latitude", "Longitude"]).copy()
                 _cgeo = (
                     _cgeo.groupby(["City", "Latitude", "Longitude"], dropna=False)
                     .agg(Trials=("NCTId", "nunique"), Sites=("NCTId", "count"))
                     .reset_index()
                 )
-                if not _cgeo.empty:
-                    st.markdown(f"**{selected_country} site map**")
+
+            _primary_h = 420
+            _c_cmap, _c_cbar = st.columns([0.60, 0.40])
+            with _c_cmap:
+                st.markdown(f"**{selected_country} site map**")
+                if _has_country_coords and not _cgeo.empty:
                     _c_fig = go.Figure()
                     _c_fig.add_trace(go.Scattergeo(
                         lat=_cgeo["Latitude"], lon=_cgeo["Longitude"],
@@ -1787,9 +1776,54 @@ with tab_geo:
                             fitbounds="locations",
                             projection_type="natural earth",
                         ),
-                        height=360,
+                        height=_primary_h,
                     )
                     st.plotly_chart(_c_fig, width='stretch')
+                else:
+                    st.info(
+                        "Site-level coordinates unavailable for this country "
+                        "in the current data. Click **Refresh now** in the "
+                        "sidebar to enable site dots."
+                    )
+            with _c_cbar:
+                # Cap the bar to top 15 so dense countries (China, US, …)
+                # don't produce an unreadable crammed x-axis. Full list is
+                # in the table below.
+                _top_cities = country_city_counts.head(15)
+                st.markdown(
+                    f"**Top cities** "
+                    f"<span style='color:#64748b; font-weight:400;'>"
+                    f"(showing {len(_top_cities)} of {len(country_city_counts)})</span>",
+                    unsafe_allow_html=True,
+                )
+                st.plotly_chart(
+                    make_bar(_top_cities, "City", "OpenSiteCount",
+                             height=_primary_h, color=THEME["primary"]),
+                    width='stretch',
+                )
+
+            # Full city table below — spans full width. Click any row for
+            # the trial drilldown.
+            st.markdown(
+                f"**{selected_country} city table** "
+                f"<span style='color:#64748b; font-weight:400;'>"
+                f"— click a row to see its trials</span>",
+                unsafe_allow_html=True,
+            )
+            city_event = st.dataframe(
+                country_city_counts, width='stretch',
+                height=min(340, max(200, len(country_city_counts) * 32 + 48)),
+                hide_index=True,
+                on_select="rerun", selection_mode="single-row",
+                key=f"city_table_{selected_country}",
+                column_config={
+                    "City": st.column_config.TextColumn("City", width="medium"),
+                    "OpenSiteCount": st.column_config.NumberColumn(
+                        "Open sites", format="%d",
+                        help="Recruiting / active site rows in this city.",
+                    ),
+                },
+            )
 
             if city_event and city_event.selection.rows:
                 selected_idx = city_event.selection.rows[0]

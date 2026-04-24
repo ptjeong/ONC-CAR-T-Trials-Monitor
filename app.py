@@ -3444,11 +3444,11 @@ with tab_pub:
             fig4a.update_layout(
                 **PUB_BASE,
                 barmode="stack",
-                # Extra bottom margin so the horizontal legend clears both
-                # the x-ticks and the (now removed) x-axis title. The
-                # "% of trials" title was redundant with the %-suffix ticks
-                # and was overlapping the legend; dropping it is cleaner.
-                margin=dict(l=100, r=24, t=16, b=70),
+                # Bottom margin needs to fit: x-ticks + tick labels ("0%"…
+                # "100%") + horizontal legend stack. At y=-0.18 the legend
+                # landed on the same visual row as the tick labels; push
+                # it further down with a matching bottom margin bump.
+                margin=dict(l=100, r=24, t=16, b=110),
                 xaxis=dict(
                     title=None,
                     range=[0, 100],
@@ -3466,7 +3466,8 @@ with tab_pub:
                     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
                 ),
                 legend=dict(
-                    orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
+                    orientation="h", yanchor="top", y=-0.35,
+                    xanchor="center", x=0.5,
                     font=dict(size=10, color=_AX_COLOR),
                     bgcolor="rgba(0,0,0,0)", borderwidth=0, title=None,
                     traceorder="normal",

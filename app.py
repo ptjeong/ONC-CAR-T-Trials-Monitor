@@ -2918,9 +2918,11 @@ with tab_pub:
         _REG_SYMBOL = {"FDA": "circle",   "EMA": "diamond",  "NMPA": "square"}
 
         _reg_labels = ["FDA", "EMA", "NMPA"]
-        _active_regs = st.session_state.get("fig1_approval_regs", _reg_labels) or []
 
         # Enumerate approvals and their brand canonicalisation.
+        # Everything from here through _brand_to_y is pure data prep: depends
+        # only on APPROVED_PRODUCTS, not on the pill selection. Computed once
+        # outside the fragment so pill clicks don't redo it.
         _approvals = []
         for p in APPROVED_PRODUCTS:
             _approvals.append({
@@ -2933,9 +2935,6 @@ with tab_pub:
             })
         _appr_df = pd.DataFrame(_approvals)
 
-        # Products order = first FDA-approval year asc, tie-break to first
-        # any-approval year. This reads Kymriah/Yescarta at the bottom row,
-        # Aucatzyl near the top — chronological left-to-right per row.
         _brand_order_key = {}
         for b, grp in _appr_df.groupby("brand"):
             fda_years = grp.loc[grp["regulator"] == "FDA", "year"]
@@ -2946,187 +2945,174 @@ with tab_pub:
                 b,
             )
         _brands_ordered = sorted(_brand_order_key, key=_brand_order_key.get)
-        # Reversed so the earliest lands at the bottom of the strip
         _brands_display = list(reversed(_brands_ordered))
         _brand_to_y = {b: i for i, b in enumerate(_brands_display)}
 
-        # Filter approvals by pill selection.
-        _appr_active = _appr_df[_appr_df["regulator"].isin(_active_regs)].copy()
-        _has_any_active = not _appr_active.empty
+        @st.fragment
+        def _render_fig1() -> None:
+            # Fragment-scoped rerun: pill clicks below only re-execute this
+            # function, not the whole Publication Figures tab.
+            _active_regs = st.session_state.get("fig1_approval_regs", _reg_labels) or []
 
-        # Subplot — fixed 0.72 / 0.28 split. The strip grows/shrinks only
-        # when the pill set is empty (entire bottom panel hidden).
-        _panel_heights = [0.80, 0.20] if not _has_any_active else [0.72, 0.28]
-        fig1 = make_subplots(
-            rows=2, cols=1, shared_xaxes=True,
-            row_heights=_panel_heights,
-            vertical_spacing=0.04,
-        )
+            # Filter approvals by pill selection.
+            _appr_active = _appr_df[_appr_df["regulator"].isin(_active_regs)].copy()
+            _has_any_active = not _appr_active.empty
 
-        # --- Top panel: trial-start trend area --------------------------
-        for _branch in sorted(year_branch["Branch"].unique()):
-            _bd = year_branch[year_branch["Branch"] == _branch].sort_values("StartYear")
-            _color = BRANCH_COLORS.get(_branch, THEME["primary"])
-            fig1.add_trace(
-                go.Scatter(
-                    x=_bd["StartYear"], y=_bd["Trials"],
-                    name=_branch, mode="lines",
-                    stackgroup="one",
-                    line=dict(width=0.5, color=_color),
-                    fillcolor=_color, opacity=0.85,
-                ),
-                row=1, col=1,
+            # Subplot — fixed 0.72 / 0.28 split. The strip grows/shrinks only
+            # when the pill set is empty (entire bottom panel hidden).
+            _panel_heights = [0.80, 0.20] if not _has_any_active else [0.72, 0.28]
+            fig1 = make_subplots(
+                rows=2, cols=1, shared_xaxes=True,
+                row_heights=_panel_heights,
+                vertical_spacing=0.04,
             )
 
-        # --- Bottom panel: approval milestones strip --------------------
-        if _has_any_active:
-            for reg in _reg_labels:
-                if reg not in _active_regs:
-                    continue
-                _sub = _appr_active[_appr_active["regulator"] == reg]
-                if _sub.empty:
-                    continue
+            # --- Top panel: trial-start trend area ------------------------
+            for _branch in sorted(year_branch["Branch"].unique()):
+                _bd = year_branch[year_branch["Branch"] == _branch].sort_values("StartYear")
+                _color = BRANCH_COLORS.get(_branch, THEME["primary"])
                 fig1.add_trace(
                     go.Scatter(
-                        x=_sub["year"],
-                        y=_sub["brand"].map(_brand_to_y),
-                        mode="markers",
-                        name=reg,
-                        marker=dict(
-                            size=13,
-                            color=_REG_COLOR[reg],
-                            opacity=0.92,
-                            line=dict(width=1.2, color="white"),
-                            symbol=_REG_SYMBOL[reg],
-                        ),
-                        customdata=_sub[["brand", "generic", "target", "regulator", "year"]].values,
-                        hovertemplate=(
-                            "<b>%{customdata[0]}</b> (%{customdata[1]})<br>"
-                            "%{customdata[3]} approval · %{customdata[4]}<br>"
-                            "Target: %{customdata[2]}"
-                            "<extra></extra>"
-                        ),
-                        legendgroup=reg,
-                        showlegend=True,
+                        x=_bd["StartYear"], y=_bd["Trials"],
+                        name=_branch, mode="lines",
+                        stackgroup="one",
+                        line=dict(width=0.5, color=_color),
+                        fillcolor=_color, opacity=0.85,
                     ),
-                    row=2, col=1,
+                    row=1, col=1,
                 )
 
-        # --- Layout -----------------------------------------------------
-        # Top panel: trial-start y-axis with existing styling.
-        fig1.update_yaxes(
-            row=1, col=1,
-            showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-            showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-            ticks="outside", ticklen=6, tickwidth=1.2,
-            tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-            title="Number of trials",
-            title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-            zeroline=False, rangemode="tozero",
-        )
+            # --- Bottom panel: approval milestones strip ------------------
+            if _has_any_active:
+                for reg in _reg_labels:
+                    if reg not in _active_regs:
+                        continue
+                    _sub = _appr_active[_appr_active["regulator"] == reg]
+                    if _sub.empty:
+                        continue
+                    fig1.add_trace(
+                        go.Scatter(
+                            x=_sub["year"],
+                            y=_sub["brand"].map(_brand_to_y),
+                            mode="markers",
+                            name=reg,
+                            marker=dict(
+                                size=13,
+                                color=_REG_COLOR[reg],
+                                opacity=0.92,
+                                line=dict(width=1.2, color="white"),
+                                symbol=_REG_SYMBOL[reg],
+                            ),
+                            customdata=_sub[["brand", "generic", "target", "regulator", "year"]].values,
+                            hovertemplate=(
+                                "<b>%{customdata[0]}</b> (%{customdata[1]})<br>"
+                                "%{customdata[3]} approval · %{customdata[4]}<br>"
+                                "Target: %{customdata[2]}"
+                                "<extra></extra>"
+                            ),
+                            legendgroup=reg,
+                            showlegend=True,
+                        ),
+                        row=2, col=1,
+                    )
 
-        # Bottom panel: product labels on y with subtle alternating-row
-        # shading so the eye tracks approvals across the full year range.
-        fig1.update_yaxes(
-            row=2, col=1,
-            tickmode="array",
-            tickvals=list(_brand_to_y.values()) if _has_any_active else [],
-            ticktext=list(_brand_to_y.keys())  if _has_any_active else [],
-            tickfont=dict(size=11, color=THEME["text"]),
-            showgrid=False,
-            showline=True, linewidth=1.2, linecolor=_AX_COLOR,
-            zeroline=False,
-            range=[-0.6, (len(_brands_display) - 0.4) if _has_any_active else 1],
-            fixedrange=True,
-            title=None,
-            ticks="",
-        )
-        if _has_any_active:
-            # Zebra stripes behind every other product row — faint, just
-            # enough to help the eye track horizontally across the strip.
-            for _i in range(0, len(_brands_display), 2):
-                fig1.add_hrect(
-                    y0=_i - 0.5, y1=_i + 0.5,
-                    fillcolor="rgba(15, 23, 42, 0.025)", line_width=0,
-                    layer="below", row=2, col=1,
-                )
-
-        # Shared x-axis on bottom panel (plotly renders it only on the
-        # visible bottom subplot when shared_xaxes=True).
-        fig1.update_xaxes(
-            row=2, col=1,
-            tickmode="linear", dtick=1, tickformat="d", showgrid=False,
-            showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-            ticks="outside", ticklen=6, tickwidth=1.2,
-            tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-            title="Start year",
-            title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-            range=[_fig1_first - 0.5, _fig1_last + 0.5],
-        )
-        # Top panel x-axis still gets a spine for framing, no tick labels.
-        fig1.update_xaxes(
-            row=1, col=1,
-            showgrid=False, showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-            ticks="", showticklabels=False,
-            range=[_fig1_first - 0.5, _fig1_last + 0.5],
-        )
-
-        _current_year = pd.Timestamp.now().year
-        if _yr_max is not None and _yr_max >= _current_year:
-            # Shade partial-year band across BOTH panels. Band alone
-            # conveys the caveat; text annotation was colliding with
-            # plotly's modebar toolbar in the top-right.
-            for _row in (1, 2):
-                fig1.add_vrect(
-                    x0=_current_year - 0.5, x1=_current_year + 0.5,
-                    fillcolor="rgba(0,0,0,0.05)", line_width=0,
-                    row=_row, col=1,
-                )
-            # Small italic in-panel note — inside the plot area (top-right),
-            # clear of the toolbar, anchored to data coords so it doesn't
-            # collide with the modebar.
-            _max_trials = year_branch.groupby("StartYear")["Trials"].sum().max()
-            fig1.add_annotation(
-                x=_current_year, y=_max_trials * 0.96,
-                xref="x", yref="y",
-                text=f"<i>{_current_year}: partial year</i>",
-                showarrow=False,
-                font=dict(size=10, color=THEME["muted"]),
-                xanchor="center", yanchor="top",
+            # --- Layout ---------------------------------------------------
+            fig1.update_yaxes(
                 row=1, col=1,
+                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
+                ticks="outside", ticklen=6, tickwidth=1.2,
+                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                title="Number of trials",
+                title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
+                zeroline=False, rangemode="tozero",
+            )
+            fig1.update_yaxes(
+                row=2, col=1,
+                tickmode="array",
+                tickvals=list(_brand_to_y.values()) if _has_any_active else [],
+                ticktext=list(_brand_to_y.keys())  if _has_any_active else [],
+                tickfont=dict(size=11, color=THEME["text"]),
+                showgrid=False,
+                showline=True, linewidth=1.2, linecolor=_AX_COLOR,
+                zeroline=False,
+                range=[-0.6, (len(_brands_display) - 0.4) if _has_any_active else 1],
+                fixedrange=True,
+                title=None,
+                ticks="",
+            )
+            if _has_any_active:
+                for _i in range(0, len(_brands_display), 2):
+                    fig1.add_hrect(
+                        y0=_i - 0.5, y1=_i + 0.5,
+                        fillcolor="rgba(15, 23, 42, 0.025)", line_width=0,
+                        layer="below", row=2, col=1,
+                    )
+            fig1.update_xaxes(
+                row=2, col=1,
+                tickmode="linear", dtick=1, tickformat="d", showgrid=False,
+                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                ticks="outside", ticklen=6, tickwidth=1.2,
+                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                title="Start year",
+                title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
+                range=[_fig1_first - 0.5, _fig1_last + 0.5],
+            )
+            fig1.update_xaxes(
+                row=1, col=1,
+                showgrid=False, showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                ticks="", showticklabels=False,
+                range=[_fig1_first - 0.5, _fig1_last + 0.5],
             )
 
-        fig1.update_layout(
-            **PUB_BASE,
-            height=560 if _has_any_active else 440,
-            # Generous bottom margin — legend sits comfortably below the
-            # "Start year" axis title without clipping the strip panel.
-            margin=dict(l=140, r=36, t=24, b=130),
-            legend=dict(
-                orientation="h",
-                yanchor="top", y=-0.22,
-                xanchor="center", x=0.5,
-                font=dict(size=11, color=_AX_COLOR),
-                bgcolor="rgba(0,0,0,0)", borderwidth=0,
-                title=None,
-                itemsizing="constant",
-                # Branch traces (area fill) and regulator dots get naturally
-                # different visual tokens so they're distinguishable on one row.
-                traceorder="normal",
-            ),
-        )
+            _current_year = pd.Timestamp.now().year
+            if _yr_max is not None and _yr_max >= _current_year:
+                for _row in (1, 2):
+                    fig1.add_vrect(
+                        x0=_current_year - 0.5, x1=_current_year + 0.5,
+                        fillcolor="rgba(0,0,0,0.05)", line_width=0,
+                        row=_row, col=1,
+                    )
+                _max_trials = year_branch.groupby("StartYear")["Trials"].sum().max()
+                fig1.add_annotation(
+                    x=_current_year, y=_max_trials * 0.96,
+                    xref="x", yref="y",
+                    text=f"<i>{_current_year}: partial year</i>",
+                    showarrow=False,
+                    font=dict(size=10, color=THEME["muted"]),
+                    xanchor="center", yanchor="top",
+                    row=1, col=1,
+                )
 
-        st.plotly_chart(fig1, width='stretch', config=PUB_EXPORT)
+            fig1.update_layout(
+                **PUB_BASE,
+                height=560 if _has_any_active else 440,
+                margin=dict(l=140, r=36, t=24, b=130),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top", y=-0.22,
+                    xanchor="center", x=0.5,
+                    font=dict(size=11, color=_AX_COLOR),
+                    bgcolor="rgba(0,0,0,0)", borderwidth=0,
+                    title=None,
+                    itemsizing="constant",
+                    traceorder="normal",
+                ),
+            )
 
-        # Pill row — filters which regulators' dots appear in the strip.
-        st.pills(
-            "Regulators",
-            options=_reg_labels,
-            default=_reg_labels,
-            selection_mode="multi",
-            key="fig1_approval_regs",
-            label_visibility="collapsed",
-        )
+            st.plotly_chart(fig1, width='stretch', config=PUB_EXPORT)
+
+            # Pill row — filters which regulators' dots appear in the strip.
+            st.pills(
+                "Regulators",
+                options=_reg_labels,
+                default=_reg_labels,
+                selection_mode="multi",
+                key="fig1_approval_regs",
+                label_visibility="collapsed",
+            )
+
+        _render_fig1()
 
         total_t = len(df_filt)
         fig1_yearly = year_branch.groupby("StartYear")["Trials"].sum().sort_index()
@@ -3808,87 +3794,93 @@ with tab_pub:
             unsafe_allow_html=True,
         )
 
-        # Small pill toggle — "Absolute" shows trial counts, "% share" shows
-        # a 100%-stacked bar where each year's bar sums to 100% (composition
-        # over time, orthogonal to volume).
-        _c7b_1, _c7b_2 = st.columns([0.30, 0.70])
-        with _c7b_1:
-            _mod_mode = st.pills(
-                "Y-axis mode",
-                options=["Absolute", "% share"],
-                default="Absolute",
-                key="fig7b_mode",
-                label_visibility="collapsed",
-            ) or "Absolute"
-        _is_pct = (_mod_mode == "% share")
-
-        mod_year = (
+        # Data prep (outside the fragment) — runs once per script rerun, i.e.
+        # when filters change. The pill toggle inside the fragment reruns only
+        # this fragment when clicked, so the groupby isn't recomputed.
+        _mod_year_raw = (
             df_innov.groupby(["StartYear", "Modality"]).size().reset_index(name="Trials")
         )
-        present_mods = [m for m in MODALITY_ORDER if m in mod_year["Modality"].unique()]
-        mod_year = mod_year[mod_year["Modality"].isin(present_mods)].copy()
+        _present_mods = [m for m in MODALITY_ORDER if m in _mod_year_raw["Modality"].unique()]
+        _mod_year_raw = _mod_year_raw[_mod_year_raw["Modality"].isin(_present_mods)].copy()
 
-        if _is_pct:
-            # Normalise per year so each year sums to 100%.
-            mod_year["Value"] = (
-                mod_year["Trials"]
-                / mod_year.groupby("StartYear")["Trials"].transform("sum")
-                * 100
+        @st.fragment
+        def _render_fig7b(mod_year_base: pd.DataFrame) -> None:
+            # Small pill toggle — fragment rerun scope means clicking this
+            # pill does NOT re-run the rest of the publication figures tab.
+            _c7b_1, _c7b_2 = st.columns([0.30, 0.70])
+            with _c7b_1:
+                _mod_mode = st.pills(
+                    "Y-axis mode",
+                    options=["Absolute", "% share"],
+                    default="Absolute",
+                    key="fig7b_mode",
+                    label_visibility="collapsed",
+                ) or "Absolute"
+            _is_pct = (_mod_mode == "% share")
+            mod_year = mod_year_base.copy()
+
+            if _is_pct:
+                mod_year["Value"] = (
+                    mod_year["Trials"]
+                    / mod_year.groupby("StartYear")["Trials"].transform("sum")
+                    * 100
+                )
+                _y_col = "Value"
+                _y_title = "% share of trials"
+                _hover_value = "%{y:.1f}%"
+                _y_axis_kwargs = dict(ticksuffix="%", range=[0, 100])
+            else:
+                _y_col = "Trials"
+                _y_title = "Number of trials"
+                _hover_value = "%{y}"
+                _y_axis_kwargs = dict()
+
+            fig7c = px.bar(
+                mod_year,
+                x="StartYear", y=_y_col, color="Modality",
+                barmode="stack", height=400, template="plotly_white",
+                color_discrete_map=_MODALITY_COLORS,
+                category_orders={"Modality": MODALITY_ORDER},
+                labels={"StartYear": "Start year", _y_col: _y_title},
+                custom_data=["Modality", "Trials"],
             )
-            _y_col = "Value"
-            _y_title = "% share of trials"
-            _hover_value = "%{y:.1f}%"
-            _y_axis_kwargs = dict(ticksuffix="%", range=[0, 100])
-        else:
-            _y_col = "Trials"
-            _y_title = "Number of trials"
-            _hover_value = "%{y}"
-            _y_axis_kwargs = dict()
+            fig7c.update_traces(
+                marker_line_width=0, opacity=1,
+                hovertemplate=(
+                    "%{x}<br><b>%{customdata[0]}</b><br>"
+                    + _hover_value
+                    + " · %{customdata[1]} trials<extra></extra>"
+                ),
+            )
+            fig7c.update_layout(
+                **PUB_BASE,
+                margin=dict(l=64, r=36, t=24, b=110),
+                xaxis=dict(
+                    tickmode="linear", dtick=1, tickformat="d", showgrid=False,
+                    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                    ticks="outside", ticklen=6, tickwidth=1.2,
+                    tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                    title="Start year", title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
+                ),
+                yaxis=dict(
+                    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                    showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
+                    ticks="outside", ticklen=6, tickwidth=1.2,
+                    tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                    title=_y_title,
+                    title_font=dict(size=_LAB_SZ, color=_AX_COLOR), zeroline=False,
+                    **_y_axis_kwargs,
+                ),
+                legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
+                            font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
+                            borderwidth=0, title=None),
+            )
+            _f7c_first = _first_meaningful_year(mod_year, count_col="Trials") or int(mod_year["StartYear"].min())
+            _f7c_last = int(mod_year["StartYear"].max())
+            fig7c.update_xaxes(range=[_f7c_first - 0.5, _f7c_last + 0.5])
+            st.plotly_chart(fig7c, width='stretch', config=PUB_EXPORT)
 
-        fig7c = px.bar(
-            mod_year,
-            x="StartYear", y=_y_col, color="Modality",
-            barmode="stack", height=400, template="plotly_white",
-            color_discrete_map=_MODALITY_COLORS,
-            category_orders={"Modality": MODALITY_ORDER},
-            labels={"StartYear": "Start year", _y_col: _y_title},
-            custom_data=["Modality", "Trials"],
-        )
-        fig7c.update_traces(
-            marker_line_width=0, opacity=1,
-            hovertemplate=(
-                "%{x}<br><b>%{customdata[0]}</b><br>"
-                + _hover_value
-                + " · %{customdata[1]} trials<extra></extra>"
-            ),
-        )
-        fig7c.update_layout(
-            **PUB_BASE,
-            margin=dict(l=64, r=36, t=24, b=110),
-            xaxis=dict(
-                tickmode="linear", dtick=1, tickformat="d", showgrid=False,
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title="Start year", title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-            ),
-            yaxis=dict(
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title=_y_title,
-                title_font=dict(size=_LAB_SZ, color=_AX_COLOR), zeroline=False,
-                **_y_axis_kwargs,
-            ),
-            legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
-                        font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
-                        borderwidth=0, title=None),
-        )
-        _f7c_first = _first_meaningful_year(mod_year, count_col="Trials") or int(mod_year["StartYear"].min())
-        _f7c_last = int(mod_year["StartYear"].max())
-        fig7c.update_xaxes(range=[_f7c_first - 0.5, _f7c_last + 0.5])
-        st.plotly_chart(fig7c, width='stretch', config=PUB_EXPORT)
+        _render_fig7b(_mod_year_raw)
 
         total_prod = len(df_innov)
         auto_n = int((df_innov["ProductType"] == "Autologous").sum())

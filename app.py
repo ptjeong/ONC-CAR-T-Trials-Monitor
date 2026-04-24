@@ -2875,7 +2875,13 @@ with tab_pub:
         def _generic_of(full_name: str) -> str:
             return full_name.split("(")[0].strip() if "(" in full_name else full_name.strip()
 
-        _REG_COLOR = {"FDA": "#0b3d91", "EMA": "#1d4ed8", "NMPA": "#b45309"}
+        # Regulator palette — deliberately distinct from the branch palette
+        # (Heme-onc navy / Solid-onc amber) so readers don't conflate an
+        # FDA dot with a Heme-onc area or an NMPA dot with Solid-onc amber.
+        # Marker shapes are also varied (circle / diamond / square) so the
+        # distinction survives greyscale printing.
+        _REG_COLOR  = {"FDA": "#059669", "EMA": "#0891b2", "NMPA": "#dc2626"}
+        _REG_SYMBOL = {"FDA": "circle",   "EMA": "diamond",  "NMPA": "square"}
 
         _reg_labels = ["FDA", "EMA", "NMPA"]
         _active_regs = st.session_state.get("fig1_approval_regs", _reg_labels) or []
@@ -2955,9 +2961,9 @@ with tab_pub:
                         marker=dict(
                             size=13,
                             color=_REG_COLOR[reg],
-                            opacity=0.9,
+                            opacity=0.92,
                             line=dict(width=1.2, color="white"),
-                            symbol="circle",
+                            symbol=_REG_SYMBOL[reg],
                         ),
                         customdata=_sub[["brand", "generic", "target", "regulator", "year"]].values,
                         hovertemplate=(

@@ -598,6 +598,22 @@ def add_phase_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _first_meaningful_year(counts_df: pd.DataFrame, year_col: str = "StartYear",
+                            count_col: str = "Count", threshold: int = 5) -> int | None:
+    """Earliest year where the total count (summed across stacked groups)
+    reaches `threshold`. Used to trim near-empty leading years from temporal
+    charts — underlying data is unchanged; only the visible x-axis range is
+    tightened so 2-trial-years don't render as visually empty against the
+    100+-trial peak years."""
+    if counts_df is None or counts_df.empty:
+        return None
+    totals = counts_df.groupby(year_col)[count_col].sum().sort_index()
+    meaningful = totals[totals >= threshold]
+    if meaningful.empty:
+        return int(totals.index.min())
+    return int(meaningful.index.min())
+
+
 # ---------------------------------------------------------------------------
 # Hero
 # ---------------------------------------------------------------------------
@@ -1211,7 +1227,12 @@ with tab_overview:
                 font=dict(color=THEME["text"]),
                 xaxis_title=None, yaxis_title=None, legend_title=None,
             )
-            fig_year.update_xaxes(color=THEME["muted"], tickmode="linear", dtick=1, tickformat="d")
+            _ov_first = _first_meaningful_year(counts_year) or int(counts_year["StartYear"].min())
+            _ov_last = int(counts_year["StartYear"].max())
+            fig_year.update_xaxes(
+                color=THEME["muted"], tickmode="linear", dtick=1, tickformat="d",
+                range=[_ov_first - 0.5, _ov_last + 0.5],
+            )
             fig_year.update_yaxes(gridcolor=THEME["grid"], color=THEME["muted"])
             st.plotly_chart(fig_year, width='stretch')
         else:
@@ -1877,6 +1898,11 @@ with tab_pub:
     )
 
     if not year_branch.empty:
+        # Trim leading sparse years (<5 trials total) to avoid a long
+        # visually-empty left tail; data itself is preserved for CSV export.
+        _fig1_first = _first_meaningful_year(year_branch, count_col="Trials") or int(year_branch["StartYear"].min())
+        _fig1_last = int(year_branch["StartYear"].max())
+
         fig1 = px.area(
             year_branch, x="StartYear", y="Trials", color="Branch",
             color_discrete_map=BRANCH_COLORS, template="plotly_white", height=420,
@@ -1920,7 +1946,7 @@ with tab_pub:
             store.setdefault(p["year"], []).append(p["name"])
 
         for yr in sorted(fda_products):
-            if yr < (_yr_min or 0) or yr > (_yr_max or 9999):
+            if yr < _fig1_first or yr > _fig1_last:
                 continue
             # Prominent solid navy line for FDA approvals.
             fig1.add_vline(
@@ -1949,6 +1975,8 @@ with tab_pub:
 
         # Extra top margin so the year tags sit clear of the plot area.
         fig1.update_layout(margin=dict(l=72, r=36, t=50, b=110))
+        # Trim the visible x-range so pre-meaningful-data years don't dominate.
+        fig1.update_xaxes(range=[_fig1_first - 0.5, _fig1_last + 0.5])
 
         st.plotly_chart(fig1, width='stretch', config=PUB_EXPORT)
 
@@ -2211,21 +2239,52 @@ with tab_pub:
             '</div>',
             unsafe_allow_html=True,
         )
-        fig4a = px.histogram(
-            df_enroll_known, x="EnrollmentCount", color="Branch",
-            color_discrete_map=BRANCH_COLORS, nbins=40, height=400,
-            template="plotly_white", barmode="overlay",
-            labels={"EnrollmentCount": "Planned enrollment (patients)"},
+        # Log-scale x-axis — enrollment is right-skewed (many 10–40 patient
+        # dose-escalation trials, few 500+ Phase III). Linear axis crams the
+        # bulk of trials at the left. Log-spaced bins + log axis spread the
+        # distribution so every decade of enrollment size is legible.
+        import numpy as _np
+        _enrl_vals = df_enroll_known["EnrollmentCount"].astype(float).clip(lower=1)
+        _log_bins = _np.logspace(
+            _np.log10(max(1, _enrl_vals.min())),
+            _np.log10(_enrl_vals.max()),
+            num=30,
         )
-        fig4a.update_traces(marker_line_color="white", marker_line_width=0.4, opacity=0.6)
+        fig4a = px.histogram(
+            df_enroll_known.assign(EnrollmentCount=_enrl_vals),
+            x="EnrollmentCount", color="Branch",
+            color_discrete_map=BRANCH_COLORS, height=400,
+            template="plotly_white", barmode="overlay",
+            labels={"EnrollmentCount": "Planned enrollment (patients, log scale)"},
+        )
+        fig4a.update_traces(
+            marker_line_color="white", marker_line_width=0.4, opacity=0.6,
+            xbins=dict(
+                start=float(_np.log10(_log_bins[0])),
+                end=float(_np.log10(_log_bins[-1])),
+                size=(_np.log10(_log_bins[-1]) - _np.log10(_log_bins[0])) / 30,
+            ),
+        )
+        _median_line = dict(
+            type="line", x0=med_pts, x1=med_pts, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color=NEJM_RED, width=1.5, dash="dash"),
+        )
         fig4a.update_layout(
             **PUB_LAYOUT,
-            xaxis_title="Planned enrollment (patients)",
+            xaxis_title="Planned enrollment (patients, log scale)",
             yaxis_title="Number of trials",
+            shapes=[_median_line],
+            annotations=[dict(
+                x=med_pts, y=0.97, xref="x", yref="paper",
+                text=f" Median = {med_pts}", showarrow=False,
+                font=dict(size=10, color=NEJM_RED), xanchor="left",
+            )],
             legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
                         font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
                         borderwidth=0, title=None),
         )
+        fig4a.update_xaxes(type="log", dtick="D2")
         st.plotly_chart(fig4a, width='stretch', config=PUB_EXPORT)
 
         # 4b — Median enrollment by phase × branch
@@ -2637,6 +2696,9 @@ with tab_pub:
                         font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
                         borderwidth=0, title=None),
         )
+        _f7a_first = _first_meaningful_year(product_year, count_col="Trials") or int(product_year["StartYear"].min())
+        _f7a_last = int(product_year["StartYear"].max())
+        fig7a.update_xaxes(range=[_f7a_first - 0.5, _f7a_last + 0.5])
         st.plotly_chart(fig7a, width='stretch', config=PUB_EXPORT)
 
         # 7b — Modality by branch
@@ -2716,6 +2778,9 @@ with tab_pub:
                         font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
                         borderwidth=0, title=None),
         )
+        _f7c_first = _first_meaningful_year(mod_year, count_col="Trials") or int(mod_year["StartYear"].min())
+        _f7c_last = int(mod_year["StartYear"].max())
+        fig7c.update_xaxes(range=[_f7c_first - 0.5, _f7c_last + 0.5])
         st.plotly_chart(fig7c, width='stretch', config=PUB_EXPORT)
 
         total_prod = len(df_innov)

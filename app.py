@@ -2338,13 +2338,6 @@ with tab_pub:
     )
     _pub_header("1", "Temporal trends by branch, with approved-product overlay", _fig1_sub)
 
-    _show_approvals = st.checkbox(
-        "Show approved-product overlay",
-        value=True,
-        key="fig1_show_approvals",
-        help="Toggle the FDA vertical lines and the NMPA / EMA caption below the chart.",
-    )
-
     year_branch = (
         df_filt.dropna(subset=["StartYear"])
         .assign(StartYear=lambda d: d["StartYear"].astype(int))
@@ -2412,7 +2405,18 @@ with tab_pub:
             store = {"FDA": fda_products, "NMPA": nmpa_products, "EMA": ema_products}[reg]
             store.setdefault(p["year"], []).append(p["name"])
 
-        if _show_approvals:
+        # Per-regulator pills — sit just below the chart, replacing a prominent
+        # checkbox with three small discreet toggles. State is read here (via
+        # session_state) so chart overlays match the active selection, but the
+        # widget itself is rendered after st.plotly_chart so it visually reads
+        # as a caption-side chip row.
+        _reg_labels = ["FDA", "NMPA", "EMA"]
+        _active_regs = st.session_state.get("fig1_approval_regs", _reg_labels) or []
+        _show_fda = "FDA" in _active_regs
+        _show_nmpa = "NMPA" in _active_regs
+        _show_ema = "EMA" in _active_regs
+
+        if _show_fda:
             for yr in sorted(fda_products):
                 if yr < _fig1_first or yr > _fig1_last:
                     continue
@@ -2448,40 +2452,49 @@ with tab_pub:
 
         st.plotly_chart(fig1, width='stretch', config=PUB_EXPORT)
 
-        if _show_approvals:
-            # Two-tier caption: FDA bolded/navy-prominent, NMPA + EMA muted below.
-            def _fmt_year_list(year_to_names: dict[int, list[str]]) -> str:
-                parts = [f"<b>{yr}</b> {', '.join(names)}" for yr, names in sorted(year_to_names.items())]
-                return " &nbsp;·&nbsp; ".join(parts)
+        # Pill row — visually reads as a caption-side chip row. Clicking a pill
+        # toggles its overlay tier on/off on the chart and below the chart.
+        st.pills(
+            "Approval overlays",
+            options=_reg_labels,
+            default=_reg_labels,
+            selection_mode="multi",
+            key="fig1_approval_regs",
+            label_visibility="collapsed",
+        )
 
-            fda_line = _fmt_year_list(fda_products)
-            nmpa_line = _fmt_year_list(nmpa_products)
-            ema_line = _fmt_year_list(ema_products)
+        # Per-regulator caption — each tier only shown when its pill is active.
+        def _fmt_year_list(year_to_names: dict[int, list[str]]) -> str:
+            parts = [f"<b>{yr}</b> {', '.join(names)}" for yr, names in sorted(year_to_names.items())]
+            return " &nbsp;·&nbsp; ".join(parts)
 
-            caption_html_parts = [
+        _caption_parts = []
+        if _show_fda and fda_products:
+            _caption_parts.append(
                 f'<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
                 f'<span style="color:#0b3d91; font-weight:600;">FDA approvals</span> '
-                f'(vertical lines on chart): {fda_line}.</div>',
-            ]
-            secondary_bits = []
-            if nmpa_line:
-                secondary_bits.append(
-                    f'<span style="color:#475569; font-weight:500;">NMPA (China)</span> '
-                    f'<span style="color:#64748b;">{nmpa_line}</span>'
-                )
-            if ema_line:
-                secondary_bits.append(
-                    f'<span style="color:#475569; font-weight:500;">EMA (EU)</span> '
-                    f'<span style="color:#64748b;">{ema_line}</span>'
-                )
-            if secondary_bits:
-                caption_html_parts.append(
-                    '<div class="pub-fig-caption" '
-                    'style="margin-top: 0.15rem; font-size: 0.68rem; color: #64748b;">'
-                    + ' &nbsp;&nbsp;|&nbsp;&nbsp; '.join(secondary_bits)
-                    + '.</div>'
-                )
-            st.markdown("".join(caption_html_parts), unsafe_allow_html=True)
+                f'(vertical lines on chart): {_fmt_year_list(fda_products)}.</div>'
+            )
+        _secondary_bits = []
+        if _show_nmpa and nmpa_products:
+            _secondary_bits.append(
+                f'<span style="color:#475569; font-weight:500;">NMPA (China)</span> '
+                f'<span style="color:#64748b;">{_fmt_year_list(nmpa_products)}</span>'
+            )
+        if _show_ema and ema_products:
+            _secondary_bits.append(
+                f'<span style="color:#475569; font-weight:500;">EMA (EU)</span> '
+                f'<span style="color:#64748b;">{_fmt_year_list(ema_products)}</span>'
+            )
+        if _secondary_bits:
+            _caption_parts.append(
+                '<div class="pub-fig-caption" '
+                'style="margin-top: 0.15rem; font-size: 0.68rem; color: #64748b;">'
+                + ' &nbsp;&nbsp;|&nbsp;&nbsp; '.join(_secondary_bits)
+                + '.</div>'
+            )
+        if _caption_parts:
+            st.markdown("".join(_caption_parts), unsafe_allow_html=True)
 
         total_t = len(df_filt)
         fig1_yearly = year_branch.groupby("StartYear")["Trials"].sum().sort_index()

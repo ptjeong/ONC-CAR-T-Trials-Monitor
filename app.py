@@ -1814,7 +1814,7 @@ with tab_geo:
                     name="Open sites",
                     marker=dict(
                         size=5.5, opacity=0.75, line=dict(width=0.5, color="white"),
-                        color="#dc2626",
+                        color=THEME["primary"],  # style-guide primary navy
                     ),
                     customdata=_geo_sites[["NCTId", "Facility", "City", "Country", "SiteStatus"]].fillna(""),
                     hovertemplate=(
@@ -1968,9 +1968,16 @@ with tab_geo:
                 )
 
             _primary_h = 420
+            _tbl_key = f"city_table_{selected_country}"
+            _map_key = f"city_map_{selected_country}"
+            _map_last_key = f"last_map_pi_{selected_country}"
+
             _c_cmap, _c_cbar = st.columns([0.60, 0.40])
             with _c_cmap:
-                st.markdown(f"**{selected_country} site map**")
+                st.markdown(f"**{selected_country} site map** "
+                            "<span style='color:#64748b; font-weight:400;'>"
+                            "— click a dot to select its city below</span>",
+                            unsafe_allow_html=True)
                 if _has_country_coords and not _cgeo.empty:
                     _c_fig = go.Figure()
                     _c_fig.add_trace(go.Scattergeo(
@@ -2002,7 +2009,39 @@ with tab_geo:
                         ),
                         height=_primary_h,
                     )
-                    st.plotly_chart(_c_fig, width='stretch')
+                    _map_event = st.plotly_chart(
+                        _c_fig, width='stretch',
+                        on_select="rerun", key=_map_key,
+                        selection_mode=("points",),
+                    )
+
+                    # If the user clicked a dot (and it's a NEW click —
+                    # compare against the last-seen point_index so a
+                    # stale click from an earlier rerun doesn't fight
+                    # a fresh table click), push the matching city row
+                    # into the city table's selection state. Must happen
+                    # BEFORE the st.dataframe below is instantiated.
+                    try:
+                        _points = (_map_event.selection.points
+                                   if _map_event and _map_event.selection else None)
+                    except Exception:
+                        _points = None
+                    if _points:
+                        _pi = _points[0].get("point_index")
+                        _last_pi = st.session_state.get(_map_last_key)
+                        if _pi is not None and _pi != _last_pi and _pi < len(_cgeo):
+                            _clicked_city = _cgeo.iloc[_pi]["City"]
+                            _match = country_city_counts.index[
+                                country_city_counts["City"] == _clicked_city
+                            ]
+                            if len(_match) > 0:
+                                st.session_state[_tbl_key] = {
+                                    "selection": {
+                                        "rows": [int(_match[0])],
+                                        "columns": [],
+                                    }
+                                }
+                            st.session_state[_map_last_key] = _pi
                 else:
                     st.info(
                         "Site-level coordinates unavailable for this country "
@@ -3363,16 +3402,19 @@ with tab_pub:
             fig4a.update_layout(
                 **PUB_BASE,
                 barmode="stack",
-                margin=dict(l=100, r=24, t=16, b=92),
+                # Extra bottom margin so the horizontal legend clears both
+                # the x-ticks and the (now removed) x-axis title. The
+                # "% of trials" title was redundant with the %-suffix ticks
+                # and was overlapping the legend; dropping it is cleaner.
+                margin=dict(l=100, r=24, t=16, b=70),
                 xaxis=dict(
-                    title="% of trials",
+                    title=None,
                     range=[0, 100],
                     ticksuffix="%",
                     showline=True, linewidth=1.5, linecolor=_AX_COLOR,
                     showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
                     ticks="outside", ticklen=6, tickwidth=1.2,
                     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                    title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
                     zeroline=False,
                 ),
                 yaxis=dict(
@@ -3382,7 +3424,7 @@ with tab_pub:
                     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
                 ),
                 legend=dict(
-                    orientation="h", yanchor="top", y=-0.28, xanchor="center", x=0.5,
+                    orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
                     font=dict(size=10, color=_AX_COLOR),
                     bgcolor="rgba(0,0,0,0)", borderwidth=0, title=None,
                     traceorder="normal",

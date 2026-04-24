@@ -173,6 +173,65 @@ FONT_FAMILY          = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 
 # ---------------------------------------------------------------------------
+# Country name → ISO-3 mapping for Plotly choropleth. The library behind
+# `locationmode="country names"` is being deprecated (DeprecationWarning
+# on every app load); ISO-3 codes are the stable replacement. Covers
+# every country appearing in CT.gov trial records for CAR-T oncology.
+# ---------------------------------------------------------------------------
+COUNTRY_TO_ISO3: dict[str, str] = {
+    # Americas
+    "United States": "USA", "Canada": "CAN", "Mexico": "MEX",
+    "Brazil": "BRA", "Argentina": "ARG", "Chile": "CHL",
+    "Colombia": "COL", "Peru": "PER", "Uruguay": "URY",
+    "Costa Rica": "CRI", "Panama": "PAN", "Guatemala": "GTM",
+    "Cuba": "CUB", "Puerto Rico": "PRI",
+    # Europe
+    "United Kingdom": "GBR", "Germany": "DEU", "France": "FRA",
+    "Italy": "ITA", "Spain": "ESP", "Netherlands": "NLD",
+    "Belgium": "BEL", "Switzerland": "CHE", "Austria": "AUT",
+    "Sweden": "SWE", "Denmark": "DNK", "Norway": "NOR",
+    "Finland": "FIN", "Poland": "POL", "Czechia": "CZE",
+    "Czech Republic": "CZE", "Hungary": "HUN", "Greece": "GRC",
+    "Portugal": "PRT", "Ireland": "IRL",
+    "Romania": "ROU", "Slovakia": "SVK", "Slovenia": "SVN",
+    "Bulgaria": "BGR", "Croatia": "HRV", "Serbia": "SRB",
+    "Ukraine": "UKR", "Belarus": "BLR", "Estonia": "EST",
+    "Latvia": "LVA", "Lithuania": "LTU", "Luxembourg": "LUX",
+    "Iceland": "ISL", "Malta": "MLT", "Cyprus": "CYP",
+    # Russia (both spellings)
+    "Russia": "RUS", "Russian Federation": "RUS",
+    # UK aliases
+    "United Kingdom of Great Britain and Northern Ireland": "GBR",
+    # Asia-Pacific
+    "China": "CHN", "Japan": "JPN", "South Korea": "KOR",
+    "Korea, Republic of": "KOR", "Korea, South": "KOR",
+    "Taiwan": "TWN", "Hong Kong": "HKG",
+    "Singapore": "SGP", "Malaysia": "MYS", "Thailand": "THA",
+    "Indonesia": "IDN", "Philippines": "PHL", "Vietnam": "VNM",
+    "Viet Nam": "VNM", "India": "IND", "Pakistan": "PAK",
+    "Bangladesh": "BGD", "Sri Lanka": "LKA", "Nepal": "NPL",
+    "Australia": "AUS", "New Zealand": "NZL",
+    # Middle East / Africa
+    "Israel": "ISR", "Turkey": "TUR", "Turkey (Türkiye)": "TUR",
+    "Türkiye": "TUR", "Saudi Arabia": "SAU",
+    "United Arab Emirates": "ARE", "Iran": "IRN",
+    "Iran, Islamic Republic of": "IRN",
+    "Egypt": "EGY", "South Africa": "ZAF", "Nigeria": "NGA",
+    "Kenya": "KEN", "Morocco": "MAR", "Tunisia": "TUN",
+    "Jordan": "JOR", "Lebanon": "LBN",
+}
+
+
+def _to_iso3(country: str | None) -> str | None:
+    """Return the ISO-3 code for a country name, or None if not mapped.
+    Ignoring unknowns drops them from the choropleth but keeps the bar chart."""
+    if not country:
+        return None
+    c = str(country).strip()
+    return COUNTRY_TO_ISO3.get(c)
+
+
+# ---------------------------------------------------------------------------
 # Table-config helpers — every st.dataframe in the app should route through
 # one of these to keep column labels, widths, and formatting consistent
 # (Rheum × Onc style guide). Helpers are shared utilities and do not touch
@@ -1417,9 +1476,14 @@ with tab_geo:
             country_df["Country"].value_counts().rename_axis("Country").reset_index(name="Count")
         )
 
+        # Use ISO-3 codes (stable) instead of "country names" (deprecated).
+        country_counts_iso = country_counts.copy()
+        country_counts_iso["ISO3"] = country_counts_iso["Country"].map(_to_iso3)
+        country_counts_iso = country_counts_iso.dropna(subset=["ISO3"])
+
         fig_world = px.choropleth(
-            country_counts, locations="Country", locationmode="country names",
-            color="Count",
+            country_counts_iso, locations="ISO3", locationmode="ISO-3",
+            color="Count", hover_name="Country",
             color_continuous_scale=[
                 [0.00, "#dbeafe"], [0.30, "#93c5fd"],
                 [0.55, "#3b82f6"], [0.75, "#1d4ed8"], [1.00, "#1e3a8a"],
@@ -2472,9 +2536,14 @@ with tab_pub:
             .reset_index(name="Trials")
         )
 
+        # Use ISO-3 codes — "country names" locationmode is deprecated.
+        geo_counts_iso = geo_counts.copy()
+        geo_counts_iso["ISO3"] = geo_counts_iso["Country"].map(_to_iso3)
+        geo_counts_iso = geo_counts_iso.dropna(subset=["ISO3"])
+
         fig3_map = px.choropleth(
-            geo_counts, locations="Country", locationmode="country names",
-            color="Trials",
+            geo_counts_iso, locations="ISO3", locationmode="ISO-3",
+            color="Trials", hover_name="Country",
             color_continuous_scale=[[0, "#dce9f5"], [0.3, "#5aafd6"], [0.65, "#1c6faf"], [1, "#08306b"]],
             projection="natural earth", template="plotly_white",
         )
@@ -2601,48 +2670,60 @@ with tab_pub:
         # dose-escalation trials, few 500+ Phase III). Linear axis crams the
         # bulk of trials at the left. Log-spaced bins + log axis spread the
         # distribution so every decade of enrollment size is legible.
+        # Pre-compute log-spaced bins and render as bar chart. px.histogram
+        # with xaxis.type="log" + manual xbins in log coordinates caused the
+        # x-axis to explode to 10²⁵ (Plotly misinterpreted log-coord bin
+        # edges as data values). Pre-binning is the predictable path.
         _enrl_vals = df_enroll_known["EnrollmentCount"].astype(float).clip(lower=1)
-        _log_bins = np.logspace(
-            np.log10(max(1, _enrl_vals.min())),
-            np.log10(_enrl_vals.max()),
-            num=30,
-        )
-        fig4a = px.histogram(
-            df_enroll_known.assign(EnrollmentCount=_enrl_vals),
-            x="EnrollmentCount", color="Branch",
-            color_discrete_map=BRANCH_COLORS, height=400,
-            template="plotly_white", barmode="overlay",
-            labels={"EnrollmentCount": "Planned enrollment (patients, log scale)"},
-        )
-        fig4a.update_traces(
-            marker_line_color="white", marker_line_width=0.4, opacity=0.6,
-            xbins=dict(
-                start=float(np.log10(_log_bins[0])),
-                end=float(np.log10(_log_bins[-1])),
-                size=(np.log10(_log_bins[-1]) - np.log10(_log_bins[0])) / 30,
-            ),
-        )
-        _median_line = dict(
-            type="line", x0=med_pts, x1=med_pts, y0=0, y1=1,
-            xref="x", yref="paper",
-            line=dict(color=NEJM_RED, width=1.5, dash="dash"),
-        )
-        fig4a.update_layout(
-            **PUB_LAYOUT,
-            xaxis_title="Planned enrollment (patients, log scale)",
-            yaxis_title="Number of trials",
-            shapes=[_median_line],
-            annotations=[dict(
-                x=med_pts, y=0.97, xref="x", yref="paper",
-                text=f" Median = {med_pts}", showarrow=False,
-                font=dict(size=10, color=NEJM_RED), xanchor="left",
-            )],
-            legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
-                        font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
-                        borderwidth=0, title=None),
-        )
-        fig4a.update_xaxes(type="log", dtick="D2")
-        st.plotly_chart(fig4a, width='stretch', config=PUB_EXPORT)
+        _vmax = float(_enrl_vals.max())
+        _log_edges = np.logspace(np.log10(1), np.log10(max(10, _vmax)), num=25)
+        # Geometric centre of each bin — correct midpoint on a log axis.
+        _bin_centres = np.sqrt(_log_edges[:-1] * _log_edges[1:])
+
+        _hist_rows = []
+        for _branch in sorted(df_enroll_known["Branch"].dropna().unique()):
+            _sub = df_enroll_known[df_enroll_known["Branch"] == _branch]["EnrollmentCount"].astype(float)
+            if _sub.empty:
+                continue
+            _counts, _ = np.histogram(_sub, bins=_log_edges)
+            for _centre, _c in zip(_bin_centres, _counts):
+                if _c > 0:
+                    _hist_rows.append({"Branch": _branch, "Bin": float(_centre), "Count": int(_c)})
+        _hist_df = pd.DataFrame(_hist_rows)
+
+        if not _hist_df.empty:
+            fig4a = px.bar(
+                _hist_df, x="Bin", y="Count", color="Branch",
+                color_discrete_map=BRANCH_COLORS, barmode="overlay",
+                template="plotly_white", height=400,
+            )
+            fig4a.update_traces(
+                opacity=0.6, marker_line_color="white", marker_line_width=0.4,
+                hovertemplate="Enrollment ~%{x:.0f} · %{y} trials<extra></extra>",
+            )
+            _median_line = dict(
+                type="line", x0=med_pts, x1=med_pts, y0=0, y1=1,
+                xref="x", yref="paper",
+                line=dict(color=NEJM_RED, width=1.5, dash="dash"),
+            )
+            fig4a.update_layout(
+                **PUB_LAYOUT,
+                xaxis_title="Planned enrollment (patients, log scale)",
+                yaxis_title="Number of trials",
+                shapes=[_median_line],
+                annotations=[dict(
+                    x=np.log10(med_pts), y=0.97, xref="x", yref="paper",
+                    text=f"  Median = {med_pts}", showarrow=False,
+                    font=dict(size=10, color=NEJM_RED), xanchor="left",
+                )],
+                legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
+                            font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
+                            borderwidth=0, title=None),
+            )
+            fig4a.update_xaxes(type="log", range=[0, np.log10(_vmax) + 0.05])
+            st.plotly_chart(fig4a, width='stretch', config=PUB_EXPORT)
+        else:
+            st.info("Insufficient enrollment data for the distribution chart.")
 
         # 4b — Median enrollment by phase × branch
         st.markdown(

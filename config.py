@@ -469,6 +469,89 @@ NAMED_PRODUCT_TARGETS: dict[str, list[str]] = {
     "CDH17": ["cdh17/gucy2c"],
 }
 
+# ---------------------------------------------------------------------------
+# Canonical display name per product (alias → canonical).
+# Per-product pipeline view aggregates by this canonical so that e.g.
+# "axicabtagene ciloleucel", "yescarta", and "axi-cel" collapse to one row.
+# Keys are ALL the aliases in NAMED_PRODUCT_TARGETS (lowercase, as stored).
+# Where a product has no widely-used brand name yet, the canonical is the
+# most-recognisable codename.
+# ---------------------------------------------------------------------------
+
+CANONICAL_PRODUCT_NAME: dict[str, str] = {
+    # FDA-approved CAR-Ts
+    "axicabtagene ciloleucel": "axi-cel (Yescarta)",
+    "yescarta":                "axi-cel (Yescarta)",
+    "axi-cel":                 "axi-cel (Yescarta)",
+
+    "tisagenlecleucel":        "tisa-cel (Kymriah)",
+    "kymriah":                 "tisa-cel (Kymriah)",
+
+    "lisocabtagene maraleucel": "liso-cel (Breyanzi)",
+    "liso-cel":                 "liso-cel (Breyanzi)",
+    "breyanzi":                 "liso-cel (Breyanzi)",
+
+    "ciltacabtagene autoleucel": "cilta-cel (Carvykti)",
+    "cilta-cel":                 "cilta-cel (Carvykti)",
+    "carvykti":                  "cilta-cel (Carvykti)",
+
+    "brexucabtagene autoleucel": "brexu-cel (Tecartus)",
+    "brexu-cel":                 "brexu-cel (Tecartus)",
+    "tecartus":                  "brexu-cel (Tecartus)",
+
+    "idecabtagene vicleucel":    "ide-cel (Abecma)",
+    "ide-cel":                   "ide-cel (Abecma)",
+    "abecma":                    "ide-cel (Abecma)",
+
+    "obecabtagene autoleucel":   "obe-cel (Aucatzyl)",
+    "obe-cel":                   "obe-cel (Aucatzyl)",
+    "aucatzyl":                  "obe-cel (Aucatzyl)",
+
+    # NMPA (China)
+    "relmacabtagene autoleucel": "relma-cel (Carteyva)",
+    "relma-cel":                 "relma-cel (Carteyva)",
+    "carteyva":                  "relma-cel (Carteyva)",
+
+    "equecabtagene autoleucel":  "eque-cel (Fucaso)",
+    "eque-cel":                  "eque-cel (Fucaso)",
+    "fucaso":                    "eque-cel (Fucaso)",
+
+    "zevorcabtagene autoleucel": "zevor-cel",
+    "zevor-cel":                 "zevor-cel",
+
+    "inaticabtagene autoleucel": "inati-cel",
+    "inati-cel":                 "inati-cel",
+
+    # Clinical-stage CAR-Ts (by codename)
+    "ct041":                       "CT041 / satri-cel",
+    "satri-cel":                   "CT041 / satri-cel",
+    "satricabtagene autoleucel":   "CT041 / satri-cel",
+
+    "gc012f":                      "GC012F",
+    "allo-501":                    "ALLO-501",
+    "allo-501a":                   "ALLO-501A",
+    "allo-715":                    "ALLO-715",
+    "anito-cel":                   "anito-cel",
+    "ct053":                       "CT053",
+    "mt027":                       "MT027",
+    "meta10-19":                   "Meta10-19",
+    "jy231":                       "JY231",
+    "ct1190b":                     "CT1190B",
+    "ptoc1":                       "PTOC1",
+    "gcar1":                       "GCAR1",
+    "azd0120":                     "AZD0120",
+    "hbi0101":                     "HBI0101",
+    "ct0596":                      "CT0596",
+    "taa05":                       "TAA05",
+    "boxr1030":                    "BOXR1030",
+    "cyad-01":                     "CYAD-01",
+    "mb-cart2019.1":               "MB-CART19.1",
+    "mb-cart2019":                 "MB-CART19.1",
+    "mb-cart19.1":                 "MB-CART19.1",
+    "cdh17/gucy2c":                "CDH17/GUCY2C",
+}
+
+
 NAMED_PRODUCT_TYPES: dict[str, list[str]] = {
     "In vivo": [],
     "Allogeneic/Off-the-shelf": [

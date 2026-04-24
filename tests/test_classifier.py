@@ -313,9 +313,17 @@ def test_sponsor_type_name_fallback_academic():
 # Product name extraction
 # ---------------------------------------------------------------------------
 
-def test_extract_product_name_axi_cel():
+def test_extract_product_name_axi_cel_canonicalizes():
+    """Aliases collapse to the canonical display name so the per-product view
+    doesn't split the same drug across multiple rows."""
     row = _mk(Interventions="axicabtagene ciloleucel")
-    assert _extract_product_name(row) == "axicabtagene ciloleucel"
+    assert _extract_product_name(row) == "axi-cel (Yescarta)"
+    # brand name alias maps to the same canonical
+    row2 = _mk(BriefTitle="Yescarta in R/R DLBCL")
+    assert _extract_product_name(row2) == "axi-cel (Yescarta)"
+    # short-form alias maps to the same canonical
+    row3 = _mk(Interventions="axi-cel")
+    assert _extract_product_name(row3) == "axi-cel (Yescarta)"
 
 
 def test_extract_product_name_codename():

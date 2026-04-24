@@ -481,19 +481,22 @@ def _assign_product_type(row: dict) -> tuple[str, str]:
 def _extract_product_name(row: dict) -> str | None:
     """Return the canonical named product if the trial text contains one.
 
-    Scans NAMED_PRODUCT_TARGETS in order — first hit wins. The returned
-    string is the canonical product name (the lookup key). Useful for
-    per-product aggregation across multiple trials.
+    Scans NAMED_PRODUCT_TARGETS in order — longest alias match wins, then
+    the raw alias is translated to its canonical display name via
+    CANONICAL_PRODUCT_NAME so aliases like "axicabtagene ciloleucel" /
+    "yescarta" / "axi-cel" collapse to a single row in the per-product view.
     """
+    from config import CANONICAL_PRODUCT_NAME  # local import to avoid cycle concerns
     text = _row_text(row)
     best = None
     for _target, products in NAMED_PRODUCT_TARGETS.items():
         for p in products:
             if _normalize_text(p) in text:
-                # Prefer longer / more specific names when multiple match
                 if best is None or len(p) > len(best):
                     best = p
-    return best
+    if best is None:
+        return None
+    return CANONICAL_PRODUCT_NAME.get(best.lower(), best)
 
 
 _AGE_YEAR_RE = re.compile(r"(\d+)\s*year", re.IGNORECASE)

@@ -1547,65 +1547,78 @@ with tab_geo:
             _geo_base["Branch"] = _geo_base["Branch"].fillna("Unknown")
             _geo_sites = _geo_base.drop_duplicates(["NCTId", "Facility", "City"]).copy()
 
-        # Compact controls row above the map. Keeps the map itself at full
-        # width so the world is read as one image, not a half-frame.
+        # Compact controls row above the map. Pill-chip style matches the
+        # Fig 1 overlay toggles for visual consistency across the app.
         if _has_coords:
-            _c_ctrl1, _c_ctrl2, _c_ctrl3 = st.columns([0.22, 0.28, 0.50])
+            _c_ctrl1, _c_ctrl2 = st.columns([0.55, 0.45])
             with _c_ctrl1:
-                _show_sites = st.checkbox(
-                    "Show open-site dots",
-                    value=True,
-                    key="world_show_sites",
-                    help="Overlay each open / recruiting site as a colored dot on the country map.",
-                )
-            with _c_ctrl2:
-                _site_color = st.radio(
-                    "Dot colour",
-                    options=["Branch", "Single"],
-                    index=0,
-                    key="world_sites_color_by",
-                    horizontal=True,
+                _layer_labels = ["Country shading", "Open-site dots"]
+                _active_layers = st.pills(
+                    "Map layers",
+                    options=_layer_labels,
+                    default=_layer_labels,
+                    selection_mode="multi",
+                    key="world_map_layers",
                     label_visibility="collapsed",
-                    disabled=not _show_sites,
-                )
-            with _c_ctrl3:
+                ) or []
+                _show_shading = "Country shading" in _active_layers
+                _show_sites = "Open-site dots" in _active_layers
+            with _c_ctrl2:
                 if _show_sites:
+                    _dot_mode = st.pills(
+                        "Dot colour",
+                        options=["Branch", "Single"],
+                        default="Branch",
+                        key="world_sites_color_by",
+                        label_visibility="collapsed",
+                    ) or "Branch"
+                    _site_color = _dot_mode
                     st.caption(
-                        f"Country shading = trial count · "
-                        f"**{len(_geo_sites):,}** sites across "
-                        f"**{_geo_sites['NCTId'].nunique():,}** trials."
+                        f"<span style='color:#64748b;'>"
+                        f"{len(_geo_sites):,} sites · "
+                        f"{_geo_sites['NCTId'].nunique():,} trials"
+                        f"</span>",
+                        unsafe_allow_html=True,
                     )
                 else:
-                    st.caption("Country shading = trial count.")
+                    _site_color = "Branch"
+                    st.caption(
+                        "<span style='color:#64748b;'>Country shading = trial count</span>",
+                        unsafe_allow_html=True,
+                    )
         else:
+            _show_shading = True
             _show_sites = False
             _site_color = "Branch"
             st.caption(
-                "Country shading = trial count. "
-                "Site-level coordinates not available — click **Refresh now** "
-                "in the sidebar to enable site dots."
+                "<span style='color:#64748b;'>Country shading = trial count · "
+                "site-level coordinates unavailable — click **Refresh now** "
+                "in the sidebar to enable site dots.</span>",
+                unsafe_allow_html=True,
             )
 
         # Base choropleth.
         fig_world = go.Figure()
-        fig_world.add_trace(go.Choropleth(
-            locations=country_counts_iso["ISO3"],
-            locationmode="ISO-3",
-            z=country_counts_iso["Count"],
-            text=country_counts_iso["Country"],
-            hovertemplate="<b>%{text}</b><br>%{z} trials<extra></extra>",
-            colorscale=[
-                [0.00, "#dbeafe"], [0.30, "#93c5fd"],
-                [0.55, "#3b82f6"], [0.75, "#1d4ed8"], [1.00, "#1e3a8a"],
-            ],
-            colorbar=dict(
-                title=dict(text="Trials", side="top"),
-                thickness=12, len=0.6, x=1.0, xanchor="left",
-            ),
-            marker_line_color="rgba(0,0,0,0.18)", marker_line_width=0.4,
-            name="",  # blank name so legend doesn't display "trace 0"
-            showscale=True,
-        ))
+        if _show_shading:
+            fig_world.add_trace(go.Choropleth(
+                locations=country_counts_iso["ISO3"],
+                locationmode="ISO-3",
+                z=country_counts_iso["Count"],
+                text=country_counts_iso["Country"],
+                hovertemplate="<b>%{text}</b><br>%{z} trials<extra></extra>",
+                colorscale=[
+                    [0.00, "#eff6ff"], [0.25, "#bfdbfe"],
+                    [0.50, "#60a5fa"], [0.75, "#2563eb"], [1.00, "#1e3a8a"],
+                ],
+                colorbar=dict(
+                    thickness=8, len=0.45, x=1.0, xanchor="left",
+                    tickfont=dict(size=10, color="#64748b"),
+                    outlinewidth=0, ticks="outside", ticklen=3,
+                ),
+                marker_line_color="rgba(0,0,0,0.10)", marker_line_width=0.3,
+                name="",
+                showscale=True,
+            ))
 
         # Site dots overlay.
         if _show_sites and not _geo_sites.empty:
@@ -1617,7 +1630,7 @@ with tab_geo:
                         mode="markers",
                         name=_branch,
                         marker=dict(
-                            size=4.5, opacity=0.75, line=dict(width=0.4, color="white"),
+                            size=5.5, opacity=0.78, line=dict(width=0.5, color="white"),
                             color=BRANCH_COLORS.get(_branch, THEME["primary"]),
                         ),
                         customdata=_sub[["NCTId", "Facility", "City", "Country", "SiteStatus"]].fillna(""),
@@ -1634,7 +1647,7 @@ with tab_geo:
                     mode="markers",
                     name="Open sites",
                     marker=dict(
-                        size=4.5, opacity=0.7, line=dict(width=0.4, color="white"),
+                        size=5.5, opacity=0.75, line=dict(width=0.5, color="white"),
                         color="#dc2626",
                     ),
                     customdata=_geo_sites[["NCTId", "Facility", "City", "Country", "SiteStatus"]].fillna(""),
@@ -1646,41 +1659,86 @@ with tab_geo:
                 ))
 
         fig_world.update_layout(
-            margin=dict(l=0, r=0, t=10, b=0),
+            margin=dict(l=0, r=0, t=4, b=0),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color=THEME["text"]),
+            font=dict(color=THEME["text"], family="Inter, sans-serif"),
             geo=dict(
-                bgcolor="rgba(0,0,0,0)", lakecolor="#ddeeff", landcolor="#eef2f7",
+                # scope="world" + explicit lataxis/lonaxis range prevents
+                # plotly from auto-fitting to the subset of ISO3s with data
+                # (which cropped the map to Europe when Americas/Asia dots
+                # weren't shown).
+                scope="world",
+                bgcolor="rgba(0,0,0,0)",
+                lakecolor="#e0f2fe", landcolor="#f1f5f9",
                 showframe=False, showcoastlines=False,
-                showcountries=True, countrycolor="rgba(0,0,0,0.12)",
-                projection_type="natural earth",
+                showcountries=True, countrycolor="rgba(0,0,0,0.08)",
+                projection=dict(type="natural earth"),
+                lataxis=dict(range=[-55, 78]),
+                lonaxis=dict(range=[-165, 180]),
             ),
             legend=dict(
-                orientation="h", yanchor="top", y=-0.02,
+                orientation="h", yanchor="top", y=0.02,
                 xanchor="center", x=0.5,
-                font=dict(size=11, color=THEME["text"]),
-                bgcolor="rgba(0,0,0,0)", borderwidth=0, title=None,
+                font=dict(size=10, color="#475569"),
+                bgcolor="rgba(255,255,255,0.82)", borderwidth=0, title=None,
+                itemsizing="constant",
             ),
-            height=500,
+            height=460,
         )
 
-        # Map + top-countries bar side-by-side (the bar lets the eye read the
-        # distribution quickly where the map's colour scale alone is dense).
-        _c_map, _c_bar = st.columns([0.65, 0.35])
+        # Map + top-countries horizontal bar side-by-side. Horizontal reads
+        # country names left-to-right with no rotation, much cleaner.
+        _c_map, _c_bar = st.columns([0.68, 0.32])
         with _c_map:
             st.plotly_chart(fig_world, width='stretch')
         with _c_bar:
-            st.markdown("**Top countries by trial count**")
-            st.plotly_chart(
-                make_bar(country_counts.head(12), "Country", "Count", height=500, color=THEME["primary"]),
-                width='stretch',
+            _top_countries = country_counts.head(12).iloc[::-1]  # reverse so biggest on top
+            fig_top = go.Figure()
+            fig_top.add_trace(go.Bar(
+                x=_top_countries["Count"],
+                y=_top_countries["Country"],
+                orientation="h",
+                marker=dict(color=THEME["primary"], line=dict(width=0)),
+                text=_top_countries["Count"],
+                textposition="outside",
+                textfont=dict(size=10, color="#475569"),
+                hovertemplate="<b>%{y}</b><br>%{x} trials<extra></extra>",
+            ))
+            fig_top.update_layout(
+                title=dict(
+                    text="Top countries by trial count",
+                    font=dict(size=13, color=THEME["text"]),
+                    x=0.02, xanchor="left", y=0.98, yanchor="top",
+                ),
+                height=460,
+                margin=dict(l=4, r=28, t=36, b=4),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
+                xaxis=dict(
+                    showgrid=False, showticklabels=False, zeroline=False,
+                    range=[0, _top_countries["Count"].max() * 1.18],
+                ),
+                yaxis=dict(
+                    showgrid=False, tickfont=dict(size=11, color="#475569"),
+                    ticks="",
+                ),
+                bargap=0.35, showlegend=False,
             )
+            st.plotly_chart(fig_top, width='stretch')
 
-        # Country-counts table spans full width below — the wider table wins
-        # over a half-width version at the same height, since country names +
-        # counts are the primary lookup asset for this panel.
-        st.markdown("**Country counts (all)**")
-        st.dataframe(country_counts, width='stretch', height=280, hide_index=True)
+        # Country-counts table spans full width below.
+        st.markdown(
+            '<div style="font-size:0.85rem; font-weight:600; color:#334155; '
+            'margin: 0.25rem 0 0.15rem 0;">All countries</div>',
+            unsafe_allow_html=True,
+        )
+        st.dataframe(
+            country_counts, width='stretch', height=260, hide_index=True,
+            column_config={
+                "Country": st.column_config.TextColumn("Country", width="medium"),
+                "Count":   st.column_config.NumberColumn("Trials", format="%d"),
+            },
+        )
 
     st.subheader("Sites by city")
 

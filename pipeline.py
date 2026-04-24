@@ -683,6 +683,58 @@ _GOV_PHRASES = (
 )
 
 
+# Investigator-initiated trials often list the PI as lead sponsor with
+# CT.gov class "OTHER" (not "INDIV"). Without explicit PI detection these
+# names ("Carl June, M.D., Ph.D.", "Stephan Grupp", "Bruce Cree") fall
+# through to the default Academic branch — producing the right label
+# but with zero transparency. The heuristic below names the reasoning.
+_PERSON_DEGREE_MARKERS = (
+    "m.d.", " md,", " md ", ", md", " md.", "md,",
+    "ph.d", "phd", " d.o.", ", do",
+    "pharmd", " dsc", " msc", "professor ",
+)
+
+
+def _looks_like_personal_name(name: str) -> bool:
+    """True when the sponsor string is almost certainly a person's name
+    (investigator-initiated trial), not an organization.
+
+    Two positive signals:
+      1. A medical/academic degree marker ("M.D.", "Ph.D.", "Professor").
+      2. 2–4 short alphabetical tokens with no corporate / academic /
+         government institutional keyword.
+    """
+    if not name:
+        return False
+    n = name.lower().strip()
+    padded = f" {n} "
+
+    # Degree markers — high-precision "this is a person"
+    if any(m in n or m in padded for m in _PERSON_DEGREE_MARKERS):
+        return True
+
+    # Any institutional keyword disqualifies — it's an organization
+    if any(h in n for h in _ACADEMIC_HINTS):
+        return False
+    if any(h in padded for h in _INDUSTRY_HINTS):
+        return False
+    if any(p in n for p in _GOV_PHRASES):
+        return False
+    if any(
+        re.search(rf"(?<![a-z0-9]){re.escape(a)}(?![a-z0-9])", n)
+        for a in _GOV_ACRONYMS
+    ):
+        return False
+
+    # Name-structure signal: 2–4 alphabetical tokens, each ≤15 chars
+    tokens = [t.strip(",.'-") for t in name.split() if t.strip(",.'-")]
+    if 2 <= len(tokens) <= 4 and all(t.replace("-", "").isalpha() for t in tokens):
+        if all(len(t) <= 15 for t in tokens):
+            return True
+
+    return False
+
+
 def _classify_sponsor(lead_sponsor: str | None,
                       lead_sponsor_class: str | None = None) -> str:
     """Return 'Industry' | 'Academic' | 'Government' | 'Other'.
@@ -764,7 +816,13 @@ def _classify_sponsor(lead_sponsor: str | None,
     if any(h in s for h in secondary_acad):
         return "Academic"
 
-    # 7. Smart default — ambiguous cases land in Academic. In practice CT.gov
+    # 7. Investigator-initiated trials — the lead sponsor is often the PI's
+    #    name (with or without degree markers). Explicit detection so the
+    #    reasoning is transparent, not a silent fall-through.
+    if _looks_like_personal_name(lead_sponsor):
+        return "Academic"
+
+    # 8. Smart default — ambiguous cases land in Academic. In practice CT.gov
     #    class=OTHER trials without corporate suffixes are overwhelmingly
     #    investigator-initiated / academic.
     return "Academic"

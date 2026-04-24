@@ -19,6 +19,7 @@ from pipeline import (  # noqa: E402
     _exclude_by_indication,
     _age_group,
     _sponsor_type,
+    _classify_sponsor,
     _extract_product_name,
     _normalize_text,
     _term_in_text,
@@ -392,6 +393,29 @@ def test_institute_of_academic():
         "LeadSponsor": "Institute of Hematology and Blood Transfusion, Czech Republic",
     }
     assert _sponsor_type(row) == "Academic"
+
+
+# --- PI-detection regression tests (investigator-initiated trials) ---
+
+def test_indiv_pi_is_academic():
+    """CT.gov class INDIV is a single-investigator sponsor — treat as Academic."""
+    assert _classify_sponsor("David Porter", "INDIV") == "Academic"
+
+
+def test_other_class_with_degree_markers_is_academic():
+    """'Carl June, M.D.' under OTHER class should be detected as a PI."""
+    assert _classify_sponsor("Carl June, M.D.", "OTHER") == "Academic"
+
+
+def test_other_class_plain_person_name_is_academic():
+    """Plain 2-token personal names under OTHER should route to Academic."""
+    assert _classify_sponsor("Stephan Grupp", "OTHER") == "Academic"
+
+
+def test_company_with_industry_keywords_stays_industry():
+    """Brand names and pharma suffixes must not be misread as personal names."""
+    assert _classify_sponsor("Kite Pharma", None) == "Industry"
+    assert _classify_sponsor("Novartis", None) == "Industry"
 
 
 # ---------------------------------------------------------------------------

@@ -1436,7 +1436,10 @@ tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = st.
 with tab_overview:
     # Disease hierarchy sunburst (Branch → Category → Entity)
     st.subheader("Disease hierarchy at a glance")
-    st.caption("Click a wedge to zoom in. Publication-quality version in Figure 5.")
+    st.caption(
+        "Branch → Disease category → Disease entity, with wedge size proportional "
+        "to trial count. Click any wedge to zoom in; publication version in Figure 5."
+    )
     if not df_filt.empty:
         _ov_sun = (
             df_filt[["Branch", "DiseaseCategory", "DiseaseEntity"]]

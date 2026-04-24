@@ -748,9 +748,9 @@ st.markdown(
         <div class="hero-title">CAR-T &amp; Cell Therapies<br>in Oncology — Heme and Solid Tumors</div>
         <div class="hero-sub">
             Systematic landscape analysis of CAR-T, CAR-NK, CAAR-T, and CAR-γδ T trials
-            across hematologic and solid tumors. Three-tier disease hierarchy
-            (Branch → Category → Entity), target classification, approved-product
-            overlays, Germany-specific site tracking, and publication-ready figures.
+            across hematologic and solid tumors — with disease, target-antigen, and
+            cell-therapy modality classification; global site-level geography; and
+            publication-ready figures.
         </div>
     </div>
     """,
@@ -1650,6 +1650,67 @@ with tab_data:
     table_df["Phase"] = table_df["PhaseLabel"]
     table_df["OverallStatus"] = table_df["OverallStatus"].map(STATUS_DISPLAY).fillna(table_df["OverallStatus"])
 
+    # Search + country-zoom header ------------------------------------------------
+    _ALL_COUNTRIES_LABEL = "All countries"
+    _zoom_countries = _countries_by_activity()
+    _country_options = [_ALL_COUNTRIES_LABEL] + _zoom_countries
+    _prev_zoom = st.session_state.get("data_country_zoom", _ALL_COUNTRIES_LABEL)
+    _zoom_idx = (
+        _country_options.index(_prev_zoom) if _prev_zoom in _country_options else 0
+    )
+
+    _c_search, _c_country = st.columns([0.65, 0.35])
+    with _c_search:
+        search_q = st.text_input(
+            "Search",
+            value=st.session_state.get("data_search", ""),
+            key="data_search",
+            placeholder="Title, NCT, sponsor, intervention…",
+            label_visibility="collapsed",
+        )
+    with _c_country:
+        _zoom_country = st.selectbox(
+            "Zoom into country",
+            options=_country_options,
+            index=_zoom_idx,
+            key="data_country_zoom",
+            label_visibility="collapsed",
+        )
+    _zoom_active = _zoom_country != _ALL_COUNTRIES_LABEL
+
+    # Apply text search across the columns users actually scan
+    if search_q:
+        q = search_q.lower().strip()
+        _search_cols = [c for c in ["NCTId", "BriefTitle", "LeadSponsor", "Interventions"]
+                        if c in table_df.columns]
+        mask = pd.Series(False, index=table_df.index)
+        for _c in _search_cols:
+            mask = mask | table_df[_c].astype(str).str.lower().str.contains(q, na=False)
+        table_df = table_df[mask].copy()
+
+    # Apply country zoom — swap Countries for Cities + SiteStatuses
+    if _zoom_active:
+        if "Countries" in show_cols:
+            _ci = show_cols.index("Countries")
+            show_cols = show_cols[:_ci] + ["Cities", "SiteStatuses"] + show_cols[_ci + 1:]
+        else:
+            show_cols = show_cols + ["Cities", "SiteStatuses"]
+        _country_sites, _country_sv = _country_study_view(_zoom_country)
+        if _country_sv.empty:
+            table_df = table_df.iloc[0:0]
+        else:
+            _nct_in_country = set(_country_sv["NCTId"])
+            table_df = table_df[table_df["NCTId"].isin(_nct_in_country)].copy()
+            _merge_bits = (
+                _country_sv[["NCTId", "Cities", "SiteStatuses"]]
+                .drop_duplicates("NCTId")
+            )
+            table_df = table_df.merge(_merge_bits, on="NCTId", how="left")
+        st.caption(
+            f"Zoomed to **{_zoom_country}** · {len(table_df)} trial"
+            f"{'s' if len(table_df) != 1 else ''} with at least one site there"
+        )
+
     st.caption(
         f"{len(table_df):,} trials · click any row to open the full trial record below."
     )
@@ -1662,6 +1723,13 @@ with tab_data:
             "ClassificationConfidence": st.column_config.TextColumn(
                 "Conf.", width="small",
                 help="high = explicit markers / LLM-validated; medium = defaults or weak markers; low = Unknown branch/entity or combined Unclear.",
+            ),
+            "Cities": st.column_config.TextColumn(
+                f"{_zoom_country} cities" if _zoom_active else "Cities",
+                width="large",
+            ),
+            "SiteStatuses": st.column_config.TextColumn(
+                "Site status", width="medium",
             ),
         }),
     )
@@ -1722,67 +1790,37 @@ with tab_data:
             "and classification breakdown."
         )
 
-    # Country-selectable "studies active in …" view. Reuses the sites_country
-    # session key so the Geography tab and this one stay in sync.
-    _data_countries = _countries_by_activity()
-    if not _data_countries:
-        st.subheader("Studies active by country")
-        st.info("No open or recruiting study sites in the current filter selection.")
-    else:
-        _data_default = st.session_state.get("sites_country") or _data_countries[0]
-        if _data_default not in _data_countries:
-            _data_default = _data_countries[0]
-        _data_selected = st.selectbox(
-            "Country",
-            options=_data_countries,
-            index=_data_countries.index(_data_default),
-            key="data_sites_country",
+    # Three-button download row — current view + all filtered + site-level.
+    _view_bits = []
+    if _zoom_active:
+        _view_bits.append(_zoom_country.lower().replace(" ", "_"))
+    if search_q:
+        _view_bits.append(
+            "search_" + search_q.lower().strip().replace(" ", "_")[:32]
         )
-        st.subheader(f"Studies active in {_data_selected}")
+    _view_suffix = "_" + "_".join(_view_bits) if _view_bits else ""
+    _view_label = (
+        f"Download current view ({len(table_df)} trial"
+        f"{'s' if len(table_df) != 1 else ''}) as CSV"
+    )
 
-        _, country_study_view_d = _country_study_view(_data_selected)
-        if country_study_view_d.empty:
-            st.info(f"No open or recruiting sites found in {_data_selected}.")
-        else:
-            ex = country_study_view_d.copy()
-            if "OverallStatus" in ex.columns:
-                ex["OverallStatus"] = ex["OverallStatus"].map(STATUS_DISPLAY).fillna(ex["OverallStatus"])
-            _cols = [c for c in [
-                "NCTId", "NCTLink", "BriefTitle",
-                "Branch", "DiseaseCategory", "DiseaseEntity",
-                "TargetCategory", "ProductType", "Phase",
-                "OverallStatus", "LeadSponsor",
-                "Cities", "SiteStatuses",
-            ] if c in ex.columns]
-            st.dataframe(
-                ex[_cols],
-                width='stretch', height=380, hide_index=True,
-                column_config={
-                    "NCTId": st.column_config.TextColumn("NCT ID"),
-                    "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
-                    "BriefTitle": st.column_config.TextColumn("Title", width="large"),
-                    "Branch": st.column_config.TextColumn("Branch"),
-                    "DiseaseCategory": st.column_config.TextColumn("Category"),
-                    "DiseaseEntity": st.column_config.TextColumn("Entity"),
-                    "TargetCategory": st.column_config.TextColumn("Target"),
-                    "ProductType": st.column_config.TextColumn("Product"),
-                    "Phase": st.column_config.TextColumn("Phase"),
-                    "OverallStatus": st.column_config.TextColumn("Status"),
-                    "LeadSponsor": st.column_config.TextColumn("Lead sponsor", width="medium"),
-                    "Cities": st.column_config.TextColumn(f"{_data_selected} cities", width="large"),
-                    "SiteStatuses": st.column_config.TextColumn("Site status", width="medium"),
-                },
-            )
-
-    d1, d2 = st.columns(2)
-    with d1:
+    _d1, _d2, _d3 = st.columns(3)
+    with _d1:
         st.download_button(
-            label="Download filtered trial data as CSV",
-            data=_csv_with_provenance(df_filt, "Filtered trial list"),
+            label=_view_label,
+            data=_csv_with_provenance(table_df[show_cols], "Current view"),
+            file_name=f"car_t_onc_view{_view_suffix}.csv",
+            mime="text/csv",
+            disabled=table_df.empty,
+        )
+    with _d2:
+        st.download_button(
+            label="Download all filtered trials as CSV",
+            data=_csv_with_provenance(df_filt, "All filtered trials"),
             file_name="car_t_oncology_trials_filtered.csv",
             mime="text/csv",
         )
-    with d2:
+    with _d3:
         if not df_sites.empty:
             st.download_button(
                 label="Download site-level data as CSV",

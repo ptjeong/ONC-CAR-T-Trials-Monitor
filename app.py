@@ -929,6 +929,15 @@ def _post_process_trials(raw_df: pd.DataFrame) -> pd.DataFrame:
         return raw_df
     out = add_phase_columns(raw_df)
     out = _add_modality_vectorized(out)
+    # Bake NCTLink here instead of via per-rerun df_filt.apply(lambda) —
+    # it's purely a function of NCTId so it never needs to be recomputed
+    # on filter changes.
+    _nct = out["NCTId"].astype("string")
+    out["NCTLink"] = np.where(
+        _nct.notna(),
+        "https://clinicaltrials.gov/study/" + _nct.fillna(""),
+        None,
+    )
     return out
 
 
@@ -1225,9 +1234,8 @@ if conf_sel:
 _df_filt = df[mask].copy()
 df_filt = add_phase_columns(_df_filt)
 df_filt["OverallStatus"] = df_filt["OverallStatus"].fillna("Unknown")
-df_filt["NCTLink"] = df_filt["NCTId"].apply(
-    lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
-)
+# NCTLink is now baked into `df` by _post_process_trials, so df_filt
+# inherits the column via the row-subset — no per-rerun .apply() needed.
 
 
 # ---------------------------------------------------------------------------
@@ -1238,52 +1246,66 @@ germany_sites_all = pd.DataFrame()
 germany_open_sites = pd.DataFrame()
 germany_study_view = pd.DataFrame()
 
-if not df_sites.empty:
-    germany_sites_all = df_sites[df_sites["Country"].fillna("").str.lower() == "germany"].copy()
-    germany_open_sites = germany_sites_all[
-        germany_sites_all["SiteStatus"].fillna("").str.upper().isin(OPEN_SITE_STATUSES)
-    ].copy()
-    germany_open_sites = germany_open_sites[germany_open_sites["NCTId"].isin(df_filt["NCTId"])].copy()
 
-    if not germany_open_sites.empty:
-        germany_trials = df_filt[df_filt["NCTId"].isin(germany_open_sites["NCTId"])].copy()
-
-        germany_study_view = (
-            germany_open_sites.groupby("NCTId", as_index=False)
-            .agg(
-                GermanCities=("City", uniq_join),
-                GermanSiteStatuses=("SiteStatus", uniq_join),
-            )
+def _build_germany_subset(sites: pd.DataFrame, nct_ids: pd.Series) -> tuple:
+    """Build Germany-specific site + trial subsets. Cached in session_state
+    keyed by the NCT filter signature so it doesn't rebuild on unrelated
+    widget clicks (pill toggles, chart-mode changes, etc.)."""
+    if sites.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    key = tuple(sorted(nct_ids.tolist()))
+    cached_key = st.session_state.get("_germany_key")
+    if cached_key == key:
+        return (
+            st.session_state.get("_germany_sites_all", pd.DataFrame()),
+            st.session_state.get("_germany_open_sites", pd.DataFrame()),
+            st.session_state.get("_germany_study_view", pd.DataFrame()),
         )
-
-        germany_study_view = germany_study_view.merge(
-            germany_trials[
-                [
-                    "NCTId", "BriefTitle",
-                    "Branch", "DiseaseCategory", "DiseaseEntity",
-                    "TargetCategory", "ProductType",
-                    "Phase", "PhaseNormalized", "PhaseOrdered", "PhaseLabel",
-                    "OverallStatus", "LeadSponsor",
-                ]
-            ].drop_duplicates(subset=["NCTId"]),
-            on="NCTId", how="left",
+    g_all = sites[sites["Country"].fillna("").str.lower() == "germany"].copy()
+    g_open = g_all[
+        g_all["SiteStatus"].fillna("").str.upper().isin(OPEN_SITE_STATUSES)
+    ]
+    g_open = g_open[g_open["NCTId"].isin(nct_ids)].copy()
+    g_view = pd.DataFrame()
+    if not g_open.empty:
+        g_trials = df_filt[df_filt["NCTId"].isin(g_open["NCTId"])].copy()
+        g_view = (
+            g_open.groupby("NCTId", as_index=False)
+            .agg(GermanCities=("City", uniq_join),
+                 GermanSiteStatuses=("SiteStatus", uniq_join))
         )
-
-        germany_study_view["NCTLink"] = germany_study_view["NCTId"].apply(
-            lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
-        )
-        germany_study_view["Phase"] = germany_study_view["PhaseLabel"].fillna(germany_study_view["Phase"])
-
-        germany_study_view = germany_study_view[
-            [
+        g_view = g_view.merge(
+            g_trials[[
                 "NCTId", "NCTLink", "BriefTitle",
                 "Branch", "DiseaseCategory", "DiseaseEntity",
                 "TargetCategory", "ProductType",
-                "Phase", "PhaseNormalized", "PhaseOrdered",
+                "Phase", "PhaseNormalized", "PhaseOrdered", "PhaseLabel",
                 "OverallStatus", "LeadSponsor",
-                "GermanCities", "GermanSiteStatuses",
-            ]
-        ].sort_values(["PhaseOrdered", "Branch", "DiseaseCategory", "NCTId"], na_position="last")
+            ]].drop_duplicates(subset=["NCTId"]),
+            on="NCTId", how="left",
+        )
+        g_view["Phase"] = g_view["PhaseLabel"].fillna(g_view["Phase"])
+        g_view = g_view[[
+            "NCTId", "NCTLink", "BriefTitle",
+            "Branch", "DiseaseCategory", "DiseaseEntity",
+            "TargetCategory", "ProductType",
+            "Phase", "PhaseNormalized", "PhaseOrdered",
+            "OverallStatus", "LeadSponsor",
+            "GermanCities", "GermanSiteStatuses",
+        ]].sort_values(
+            ["PhaseOrdered", "Branch", "DiseaseCategory", "NCTId"],
+            na_position="last",
+        )
+    st.session_state["_germany_key"] = key
+    st.session_state["_germany_sites_all"] = g_all
+    st.session_state["_germany_open_sites"] = g_open
+    st.session_state["_germany_study_view"] = g_view
+    return g_all, g_open, g_view
+
+
+germany_sites_all, germany_open_sites, germany_study_view = _build_germany_subset(
+    df_sites, df_filt["NCTId"]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1294,15 +1316,27 @@ if not df_sites.empty:
 # "Studies active in …" (Data tab) pick one country via a selectbox from
 # this shared pool.
 
-all_open_sites = pd.DataFrame()
-if not df_sites.empty:
-    _os = df_sites[
-        df_sites["SiteStatus"].fillna("").str.upper().isin(OPEN_SITE_STATUSES)
-    ].copy()
-    _os = _os[_os["NCTId"].isin(df_filt["NCTId"])].copy()
+def _build_all_open_sites(sites: pd.DataFrame, nct_ids: pd.Series) -> pd.DataFrame:
+    """Open-site slice of df_sites restricted to trials in the current filter.
+    Cached in session_state keyed by NCT filter set so it doesn't rebuild on
+    unrelated widget interactions (pill toggles, chart-mode changes, etc.)."""
+    if sites.empty:
+        return pd.DataFrame()
+    key = tuple(sorted(nct_ids.tolist()))
+    if st.session_state.get("_all_open_sites_key") == key:
+        return st.session_state.get("_all_open_sites_df", pd.DataFrame())
+    _os = sites[
+        sites["SiteStatus"].fillna("").str.upper().isin(OPEN_SITE_STATUSES)
+    ]
+    _os = _os[_os["NCTId"].isin(nct_ids)].copy()
     _os["Country"] = _os["Country"].fillna("Unknown").astype(str).str.strip()
     _os = _os[_os["Country"] != ""]
-    all_open_sites = _os
+    st.session_state["_all_open_sites_key"] = key
+    st.session_state["_all_open_sites_df"] = _os
+    return _os
+
+
+all_open_sites = _build_all_open_sites(df_sites, df_filt["NCTId"])
 
 
 def _get_geo_sites_cached(open_sites: pd.DataFrame, filt: pd.DataFrame) -> pd.DataFrame:
@@ -3727,12 +3761,9 @@ with tab_pub:
     df_innov["StartYear"] = df_innov["StartYear"].astype(int)
 
     if not df_innov.empty:
-        # Former 7a (product type by start year) was removed — 7c (modality
-        # by start year) is a strict superset: Modality is derived from
-        # ProductType plus platform-specific text matching, so 7c carries
-        # every signal 7a did plus CAR-NK / CAR-γδ T / CAR-Treg / CAAR-T /
-        # In vivo CAR as distinct categories.
-        df_innov["Modality"] = df_innov.apply(_modality, axis=1)
+        # Modality is already baked into df by _post_process_trials (via the
+        # vectorised path), so df_innov inherits the column — no per-rerun
+        # row-wise apply needed.
 
         # 7a — Modality by branch (renumbered from former 7b)
         st.markdown(

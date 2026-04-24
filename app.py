@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import numpy as np
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -2450,11 +2451,10 @@ with tab_pub:
         # dose-escalation trials, few 500+ Phase III). Linear axis crams the
         # bulk of trials at the left. Log-spaced bins + log axis spread the
         # distribution so every decade of enrollment size is legible.
-        import numpy as _np
         _enrl_vals = df_enroll_known["EnrollmentCount"].astype(float).clip(lower=1)
-        _log_bins = _np.logspace(
-            _np.log10(max(1, _enrl_vals.min())),
-            _np.log10(_enrl_vals.max()),
+        _log_bins = np.logspace(
+            np.log10(max(1, _enrl_vals.min())),
+            np.log10(_enrl_vals.max()),
             num=30,
         )
         fig4a = px.histogram(
@@ -2467,9 +2467,9 @@ with tab_pub:
         fig4a.update_traces(
             marker_line_color="white", marker_line_width=0.4, opacity=0.6,
             xbins=dict(
-                start=float(_np.log10(_log_bins[0])),
-                end=float(_np.log10(_log_bins[-1])),
-                size=(_np.log10(_log_bins[-1]) - _np.log10(_log_bins[0])) / 30,
+                start=float(np.log10(_log_bins[0])),
+                end=float(np.log10(_log_bins[-1])),
+                size=(np.log10(_log_bins[-1]) - np.log10(_log_bins[0])) / 30,
             ),
         )
         _median_line = dict(

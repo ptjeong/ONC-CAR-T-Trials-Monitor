@@ -1,0 +1,8 @@
+{
+  "snapshot_date": "2026-04-24",
+  "created_utc": "2026-04-24T15:10:24.094315",
+  "statuses_filter": [],
+  "n_trials": 2152,
+  "n_sites": 10717,
+  "api_base_url": "https://clinicaltrials.gov/api/v2/studies"
+}

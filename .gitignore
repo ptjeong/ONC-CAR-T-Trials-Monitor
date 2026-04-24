@@ -12,6 +12,9 @@ env/
 # Reference copy of rheum app (not part of this repo)
 car-t-rheumatology-monitor/
 
-# Snapshots (if added later)
-snapshots/
+# Snapshots — ignore all EXCEPT the bootstrap snapshot that ships with
+# the repo so a fresh deployment has a fallback when the CT.gov API is
+# unreachable on first load.
+snapshots/*
+!snapshots/2026-04-24/
 *.parquet

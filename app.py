@@ -2829,132 +2829,27 @@ with tab_pub:
             )
             st.plotly_chart(fig4c, width='stretch', config=PUB_EXPORT)
 
-        # 4d — Forest plot with branch stratum
-        st.markdown(
-            '<div class="pub-fig-sub" style="margin-top: 1rem; '
-            'border-top: 1px solid #e5e7eb; padding-top: 0.8rem;">'
-            '<strong style="color: #0b1220;">4d — Enrollment by subgroup</strong> '
-            '<span style="color: #94a3b8;">— median (dot) and IQR (whisker)</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+        # Fig 4d (forest plot by subgroup) was removed — 4a/4b/4c already
+        # cover the enrollment landscape cleanly, and once a user filter
+        # collapsed one axis the forest-plot rows duplicated each other.
 
+        # Tag every trial with a GeoGroup label so the CSV export below
+        # still carries the China / Non-China stratification.
         def _geo_group(countries_str) -> str:
             if not countries_str or pd.isna(countries_str):
                 return "Unknown"
             return "China" if "China" in str(countries_str).split("|") else "Non-China"
-
         df_enroll_known["GeoGroup"] = df_enroll_known["Countries"].apply(_geo_group)
-
-        def _stat(rows: pd.Series) -> tuple[int, int, int, int]:
-            return (
-                int(len(rows)), int(rows.median()),
-                int(rows.quantile(0.25)), int(rows.quantile(0.75)),
-            )
-
-        # Build the forest-plot strata. Three orthogonal comparison axes —
-        # Branch, Geography, Sponsor type — plus an Overall reference row.
-        # When the active filter has collapsed one axis (e.g. only Heme-onc
-        # trials after filtering), redundant rows are de-duplicated below
-        # so the plot never shows two rows with identical (median, IQR, n).
-        forest_rows = []
-        _all = df_enroll_known["EnrollmentCount"]
-        N, M, Q1, Q3 = _stat(_all)
-        forest_rows.append({"Category": "Overall", "Group": "All trials",
-                            "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
-        # Branch
-        for br in ["Heme-onc", "Solid-onc", "Mixed"]:
-            rows = df_enroll_known[df_enroll_known["Branch"] == br]["EnrollmentCount"]
-            if len(rows) >= 3:
-                N, M, Q1, Q3 = _stat(rows)
-                forest_rows.append({"Category": "Branch", "Group": br,
-                                    "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
-        # Geography
-        for gg in ["China", "Non-China"]:
-            rows = df_enroll_known[df_enroll_known["GeoGroup"] == gg]["EnrollmentCount"]
-            if len(rows) >= 3:
-                N, M, Q1, Q3 = _stat(rows)
-                forest_rows.append({"Category": "Geography", "Group": gg,
-                                    "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
-        # Sponsor type — replaces the old Branch × Geography cross-stratum,
-        # which added no information when the filter had collapsed Branch.
-        # Sponsor type is orthogonal to both Branch and Geography, so it
-        # genuinely introduces new comparisons.
-        if "SponsorType" in df_enroll_known.columns:
-            for st_ in ["Industry", "Academic", "Government"]:
-                rows = df_enroll_known[df_enroll_known["SponsorType"] == st_]["EnrollmentCount"]
-                if len(rows) >= 3:
-                    N, M, Q1, Q3 = _stat(rows)
-                    forest_rows.append({"Category": "Sponsor type", "Group": st_,
-                                        "Median": M, "Q1": Q1, "Q3": Q3, "N": N})
-
-        forest_df = pd.DataFrame(forest_rows)
-
-        # ---- Dedupe ----
-        # Drop any row whose (Median, Q1, Q3, N) exactly matches a row that
-        # came before it. Handles the "Overall ≡ Branch: Heme-onc" collapse
-        # when the user's filter has already narrowed to one branch.
-        forest_df = forest_df.drop_duplicates(
-            subset=["Median", "Q1", "Q3", "N"], keep="first"
-        ).reset_index(drop=True)
-
-        forest_df["Label"] = forest_df.apply(lambda r: f"{r['Category']}: {r['Group']}", axis=1)
-        # Plotly y-axis renders bottom-up — reverse so Overall sits at top.
-        forest_df = forest_df.iloc[::-1].reset_index(drop=True)
-
-        _CAT_COLORS = {
-            "Overall":      "#0b1220",
-            "Branch":       NEJM_BLUE,
-            "Geography":    NEJM_GREEN,
-            "Sponsor type": NEJM_AMBER,
-        }
-
-        fig4d = px.scatter(
-            forest_df, x="Median", y="Label",
-            color="Category", color_discrete_map=_CAT_COLORS,
-            error_x=forest_df["Q3"] - forest_df["Median"],
-            error_x_minus=forest_df["Median"] - forest_df["Q1"],
-            height=max(360, 28 * len(forest_df) + 110),
-            template="plotly_white",
-        )
-        fig4d.update_traces(
-            marker=dict(size=11, line=dict(color="white", width=1.2)),
-            error_x=dict(color=_AX_COLOR, thickness=1.2, width=6),
-        )
-        for _, r in forest_df.iterrows():
-            fig4d.add_annotation(
-                x=r["Q3"], y=r["Label"], xref="x", yref="y",
-                text=f"  Median {r['Median']}  ·  n={r['N']}",
-                showarrow=False,
-                font=dict(size=10, color=THEME["muted"]),
-                xanchor="left",
-            )
-        fig4d.update_layout(
-            **PUB_BASE,
-            margin=dict(l=240, r=120, t=24, b=64),
-            xaxis=dict(
-                title="Median planned enrollment (patients)",
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-                zeroline=False, rangemode="tozero",
-            ),
-            yaxis=dict(title=None, showline=False, showgrid=False,
-                       ticks="", tickfont=dict(size=_TICK_SZ, color=_AX_COLOR)),
-            showlegend=False,
-        )
-        st.plotly_chart(fig4d, width='stretch', config=PUB_EXPORT)
 
         fig4_csv = df_enroll_known[[
             "NCTId", "BriefTitle", "Branch", "DiseaseCategory", "DiseaseEntity",
             "TargetCategory", "ProductType", "Phase", "EnrollmentCount", "GeoGroup",
+            "SponsorType",
         ]].sort_values("EnrollmentCount", ascending=False)
         _pub_caption(len(df_filt),
                      extra=f"Enrollment panels restricted to {len(df_enroll_known):,} trials with a numeric enrollment target.")
         st.download_button("Fig 4 data (CSV)",
-                           _csv_with_provenance(fig4_csv, "Fig 4 — Enrollment by branch / phase / geography"),
+                           _csv_with_provenance(fig4_csv, "Fig 4 — Enrollment by branch / phase / category"),
                            "fig4_enrollment.csv", "text/csv")
     else:
         st.info("Insufficient enrollment data available.")

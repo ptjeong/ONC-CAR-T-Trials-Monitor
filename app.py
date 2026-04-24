@@ -2440,10 +2440,12 @@ def _cagr(first_count: int, last_count: int, n_years: int) -> float | None:
 
 with tab_deep:
     st.markdown(
-        '<p class="small-note">Two focused views that complement the aggregate dashboards: '
+        '<p class="small-note">Three focused views that complement the aggregate dashboards: '
         "(1) drill into a single disease entity (category or Tier-3 leaf) to see all trials, "
         "sponsors, phases and targets in one place; (2) aggregate trials by named CAR-T product "
-        "so you can track each product's portfolio across indications and phases.</p>",
+        "to track each product's portfolio across indications and phases; (3) break the "
+        "landscape down by sponsor type (Industry / Academic / Government / Other) to compare "
+        "who is running what.</p>",
         unsafe_allow_html=True,
     )
 

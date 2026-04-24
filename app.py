@@ -1046,6 +1046,73 @@ if not df_sites.empty:
 
 
 # ---------------------------------------------------------------------------
+# Sites-by-city helpers (country-selectable)
+# ---------------------------------------------------------------------------
+# Open / recruiting sites across ALL countries, restricted to trials visible
+# under the current filter. Both "Sites by city" (Geography tab) and
+# "Studies active in …" (Data tab) pick one country via a selectbox from
+# this shared pool.
+
+all_open_sites = pd.DataFrame()
+if not df_sites.empty:
+    _os = df_sites[
+        df_sites["SiteStatus"].fillna("").str.upper().isin(OPEN_SITE_STATUSES)
+    ].copy()
+    _os = _os[_os["NCTId"].isin(df_filt["NCTId"])].copy()
+    _os["Country"] = _os["Country"].fillna("Unknown").astype(str).str.strip()
+    _os = _os[_os["Country"] != ""]
+    all_open_sites = _os
+
+
+def _country_study_view(country: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (open site rows for this country, per-trial study view)."""
+    if all_open_sites.empty or not country:
+        return pd.DataFrame(), pd.DataFrame()
+    c_sites = all_open_sites[
+        all_open_sites["Country"].str.lower() == country.lower()
+    ].copy()
+    if c_sites.empty:
+        return c_sites, pd.DataFrame()
+    c_trials = df_filt[df_filt["NCTId"].isin(c_sites["NCTId"])].copy()
+    sv = (
+        c_sites.groupby("NCTId", as_index=False)
+        .agg(Cities=("City", uniq_join), SiteStatuses=("SiteStatus", uniq_join))
+    )
+    merge_cols = [c for c in [
+        "NCTId", "BriefTitle",
+        "Branch", "DiseaseCategory", "DiseaseEntity",
+        "TargetCategory", "ProductType", "ProductName",
+        "AgeGroup", "SponsorType",
+        "Phase", "PhaseNormalized", "PhaseOrdered", "PhaseLabel",
+        "OverallStatus", "LeadSponsor",
+    ] if c in c_trials.columns]
+    sv = sv.merge(
+        c_trials[merge_cols].drop_duplicates(subset=["NCTId"]),
+        on="NCTId", how="left",
+    )
+    sv["NCTLink"] = sv["NCTId"].apply(
+        lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
+    )
+    if "PhaseLabel" in sv.columns:
+        sv["Phase"] = sv["PhaseLabel"].fillna(sv.get("Phase"))
+    sort_cols = [c for c in ["PhaseOrdered", "Branch", "DiseaseCategory", "NCTId"] if c in sv.columns]
+    if sort_cols:
+        sv = sv.sort_values(sort_cols, na_position="last")
+    return c_sites, sv
+
+
+def _countries_by_activity() -> list[str]:
+    """Countries with at least one open / recruiting site, ranked by unique trials."""
+    if all_open_sites.empty:
+        return []
+    order = (
+        all_open_sites.groupby("Country")["NCTId"].nunique()
+        .sort_values(ascending=False)
+    )
+    return order.index.tolist()
+
+
+# ---------------------------------------------------------------------------
 # Metric row
 # ---------------------------------------------------------------------------
 
@@ -1311,96 +1378,116 @@ with tab_geo:
     else:
         st.info("No country information available for the current filter selection.")
 
-    st.subheader("Germany by city")
+    st.subheader("Sites by city")
 
-    if germany_open_sites.empty:
-        st.info("No open or recruiting German study sites found in the current result set.")
+    _countries_avail = _countries_by_activity()
+    if not _countries_avail:
+        st.info("No open or recruiting study sites in the current filter selection.")
     else:
-        germany_city_counts = (
-            germany_open_sites["City"].fillna("Unknown").value_counts()
-            .rename_axis("City").reset_index(name="OpenSiteCount")
-            .sort_values(["OpenSiteCount", "City"], ascending=[False, True], na_position="last")
-            .reset_index(drop=True)
+        # Default to most active country, but preserve user's last selection
+        # via session state so the Geography + Data tabs stay in sync.
+        _prev = st.session_state.get("sites_country", _countries_avail[0])
+        _default_idx = _countries_avail.index(_prev) if _prev in _countries_avail else 0
+        selected_country = st.selectbox(
+            "Country",
+            options=_countries_avail,
+            index=_default_idx,
+            key="sites_country",
+            help="Pick any country with at least one open or recruiting site in the current filter.",
         )
 
-        g1, g2, g3 = st.columns(3)
-        with g1:
-            metric_card("German site rows", len(germany_open_sites), "Recruiting / active German site rows")
-        with g2:
-            metric_card("German cities", germany_open_sites["City"].dropna().nunique(), "Cities with open sites")
-        with g3:
-            metric_card(
-                "German unique trials",
-                germany_study_view["NCTId"].nunique() if not germany_study_view.empty else 0,
-                "Unique NCT IDs with at least one open German site",
+        country_open_sites, country_study_view = _country_study_view(selected_country)
+
+        if country_open_sites.empty:
+            st.info(f"No open or recruiting sites found in {selected_country}.")
+        else:
+            country_city_counts = (
+                country_open_sites["City"].fillna("Unknown").value_counts()
+                .rename_axis("City").reset_index(name="OpenSiteCount")
+                .sort_values(["OpenSiteCount", "City"], ascending=[False, True], na_position="last")
+                .reset_index(drop=True)
             )
 
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.markdown("**Open sites by city**")
-            st.plotly_chart(
-                make_bar(germany_city_counts, "City", "OpenSiteCount",
-                         height=min(300, max(180, len(germany_city_counts) * 20 + 48)), color=THEME["primary"]),
-                width='stretch',
-            )
-        with c2:
-            st.markdown("**Germany city table**")
-            city_event = st.dataframe(
-                germany_city_counts, width='stretch',
-                height=min(300, max(180, len(germany_city_counts) * 20 + 48)),
-                hide_index=True,
-                on_select="rerun", selection_mode="single-row",
-                key="germany_city_table",
-            )
+            g1, g2, g3 = st.columns(3)
+            with g1:
+                metric_card(f"{selected_country} site rows", len(country_open_sites),
+                            f"Recruiting / active {selected_country} site rows")
+            with g2:
+                metric_card("Cities", country_open_sites["City"].dropna().nunique(),
+                            "Cities with open sites")
+            with g3:
+                metric_card(
+                    "Unique trials",
+                    country_study_view["NCTId"].nunique() if not country_study_view.empty else 0,
+                    f"NCT IDs with at least one open {selected_country} site",
+                )
 
-        if city_event and city_event.selection.rows:
-            selected_idx = city_event.selection.rows[0]
-            selected_city = germany_city_counts.iloc[selected_idx]["City"]
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                st.markdown("**Open sites by city**")
+                st.plotly_chart(
+                    make_bar(country_city_counts, "City", "OpenSiteCount",
+                             height=min(300, max(180, len(country_city_counts) * 20 + 48)),
+                             color=THEME["primary"]),
+                    width='stretch',
+                )
+            with c2:
+                st.markdown(f"**{selected_country} city table**")
+                city_event = st.dataframe(
+                    country_city_counts, width='stretch',
+                    height=min(300, max(180, len(country_city_counts) * 20 + 48)),
+                    hide_index=True,
+                    on_select="rerun", selection_mode="single-row",
+                    key=f"city_table_{selected_country}",
+                )
 
-            st.markdown(f"### Trials with open German sites in {selected_city}")
+            if city_event and city_event.selection.rows:
+                selected_idx = city_event.selection.rows[0]
+                selected_city = country_city_counts.iloc[selected_idx]["City"]
 
-            city_nct_ids = (
-                germany_open_sites.loc[
-                    germany_open_sites["City"].fillna("Unknown") == selected_city, "NCTId",
-                ].dropna().unique()
-            )
+                st.markdown(f"### Trials with open {selected_country} sites in {selected_city}")
 
-            city_trial_view = germany_study_view[germany_study_view["NCTId"].isin(city_nct_ids)].copy()
-            city_trial_view = city_trial_view.sort_values(
-                ["PhaseOrdered", "Branch", "DiseaseCategory", "NCTId"],
-                ascending=[True, True, True, True], na_position="last",
-            )
+                city_nct_ids = (
+                    country_open_sites.loc[
+                        country_open_sites["City"].fillna("Unknown") == selected_city, "NCTId",
+                    ].dropna().unique()
+                )
 
-            if city_trial_view.empty:
-                st.info(f"No study rows found for {selected_city}.")
-            else:
-                st.dataframe(
-                    city_trial_view[[
+                city_trial_view = country_study_view[
+                    country_study_view["NCTId"].isin(city_nct_ids)
+                ].copy()
+
+                if city_trial_view.empty:
+                    st.info(f"No study rows found for {selected_city}.")
+                else:
+                    _cols = [c for c in [
                         "NCTId", "NCTLink", "BriefTitle",
                         "Branch", "DiseaseCategory", "DiseaseEntity",
                         "TargetCategory", "ProductType", "Phase",
                         "OverallStatus", "LeadSponsor",
-                        "GermanCities", "GermanSiteStatuses",
-                    ]],
-                    width='stretch', height=320, hide_index=True,
-                    column_config={
-                        "NCTId": st.column_config.TextColumn("NCT ID"),
-                        "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
-                        "BriefTitle": st.column_config.TextColumn("Title", width="large"),
-                        "Branch": st.column_config.TextColumn("Branch"),
-                        "DiseaseCategory": st.column_config.TextColumn("Category"),
-                        "DiseaseEntity": st.column_config.TextColumn("Entity"),
-                        "TargetCategory": st.column_config.TextColumn("Target"),
-                        "ProductType": st.column_config.TextColumn("Product"),
-                        "Phase": st.column_config.TextColumn("Phase"),
-                        "OverallStatus": st.column_config.TextColumn("Status"),
-                        "LeadSponsor": st.column_config.TextColumn("Lead sponsor", width="medium"),
-                        "GermanCities": st.column_config.TextColumn("German cities", width="large"),
-                        "GermanSiteStatuses": st.column_config.TextColumn("German site status", width="medium"),
-                    },
-                )
-        else:
-            st.caption("Select a city row in the table to open the related trial list below.")
+                        "Cities", "SiteStatuses",
+                    ] if c in city_trial_view.columns]
+                    st.dataframe(
+                        city_trial_view[_cols],
+                        width='stretch', height=320, hide_index=True,
+                        column_config={
+                            "NCTId": st.column_config.TextColumn("NCT ID"),
+                            "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
+                            "BriefTitle": st.column_config.TextColumn("Title", width="large"),
+                            "Branch": st.column_config.TextColumn("Branch"),
+                            "DiseaseCategory": st.column_config.TextColumn("Category"),
+                            "DiseaseEntity": st.column_config.TextColumn("Entity"),
+                            "TargetCategory": st.column_config.TextColumn("Target"),
+                            "ProductType": st.column_config.TextColumn("Product"),
+                            "Phase": st.column_config.TextColumn("Phase"),
+                            "OverallStatus": st.column_config.TextColumn("Status"),
+                            "LeadSponsor": st.column_config.TextColumn("Lead sponsor", width="medium"),
+                            "Cities": st.column_config.TextColumn(f"{selected_country} cities", width="large"),
+                            "SiteStatuses": st.column_config.TextColumn("Site status", width="medium"),
+                        },
+                    )
+            else:
+                st.caption("Select a city row in the table to open the related trial list below.")
 
 
 # ---------------------------------------------------------------------------
@@ -1448,41 +1535,57 @@ with tab_data:
         },
     )
 
-    st.subheader("Studies active in Germany")
-
-    if germany_study_view.empty:
-        st.info("No open or recruiting German study sites found in the current result set.")
+    # Country-selectable "studies active in …" view. Reuses the sites_country
+    # session key so the Geography tab and this one stay in sync.
+    _data_countries = _countries_by_activity()
+    if not _data_countries:
+        st.subheader("Studies active by country")
+        st.info("No open or recruiting study sites in the current filter selection.")
     else:
-        germany_export_view = germany_study_view.copy()
-        germany_export_view["OverallStatus"] = germany_export_view["OverallStatus"].map(STATUS_DISPLAY).fillna(germany_export_view["OverallStatus"])
-        germany_export_view = germany_export_view.sort_values(
-            ["PhaseOrdered", "Branch", "DiseaseCategory", "NCTId"], na_position="last",
+        _data_default = st.session_state.get("sites_country") or _data_countries[0]
+        if _data_default not in _data_countries:
+            _data_default = _data_countries[0]
+        _data_selected = st.selectbox(
+            "Country",
+            options=_data_countries,
+            index=_data_countries.index(_data_default),
+            key="data_sites_country",
         )
-        st.dataframe(
-            germany_export_view[[
+        st.subheader(f"Studies active in {_data_selected}")
+
+        _, country_study_view_d = _country_study_view(_data_selected)
+        if country_study_view_d.empty:
+            st.info(f"No open or recruiting sites found in {_data_selected}.")
+        else:
+            ex = country_study_view_d.copy()
+            if "OverallStatus" in ex.columns:
+                ex["OverallStatus"] = ex["OverallStatus"].map(STATUS_DISPLAY).fillna(ex["OverallStatus"])
+            _cols = [c for c in [
                 "NCTId", "NCTLink", "BriefTitle",
                 "Branch", "DiseaseCategory", "DiseaseEntity",
                 "TargetCategory", "ProductType", "Phase",
                 "OverallStatus", "LeadSponsor",
-                "GermanCities", "GermanSiteStatuses",
-            ]],
-            width='stretch', height=380, hide_index=True,
-            column_config={
-                "NCTId": st.column_config.TextColumn("NCT ID"),
-                "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
-                "BriefTitle": st.column_config.TextColumn("Title", width="large"),
-                "Branch": st.column_config.TextColumn("Branch"),
-                "DiseaseCategory": st.column_config.TextColumn("Category"),
-                "DiseaseEntity": st.column_config.TextColumn("Entity"),
-                "TargetCategory": st.column_config.TextColumn("Target"),
-                "ProductType": st.column_config.TextColumn("Product"),
-                "Phase": st.column_config.TextColumn("Phase"),
-                "OverallStatus": st.column_config.TextColumn("Status"),
-                "LeadSponsor": st.column_config.TextColumn("Lead sponsor", width="medium"),
-                "GermanCities": st.column_config.TextColumn("German cities", width="large"),
-                "GermanSiteStatuses": st.column_config.TextColumn("German site status", width="medium"),
-            },
-        )
+                "Cities", "SiteStatuses",
+            ] if c in ex.columns]
+            st.dataframe(
+                ex[_cols],
+                width='stretch', height=380, hide_index=True,
+                column_config={
+                    "NCTId": st.column_config.TextColumn("NCT ID"),
+                    "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
+                    "BriefTitle": st.column_config.TextColumn("Title", width="large"),
+                    "Branch": st.column_config.TextColumn("Branch"),
+                    "DiseaseCategory": st.column_config.TextColumn("Category"),
+                    "DiseaseEntity": st.column_config.TextColumn("Entity"),
+                    "TargetCategory": st.column_config.TextColumn("Target"),
+                    "ProductType": st.column_config.TextColumn("Product"),
+                    "Phase": st.column_config.TextColumn("Phase"),
+                    "OverallStatus": st.column_config.TextColumn("Status"),
+                    "LeadSponsor": st.column_config.TextColumn("Lead sponsor", width="medium"),
+                    "Cities": st.column_config.TextColumn(f"{_data_selected} cities", width="large"),
+                    "SiteStatuses": st.column_config.TextColumn("Site status", width="medium"),
+                },
+            )
 
     d1, d2 = st.columns(2)
     with d1:

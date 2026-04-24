@@ -104,8 +104,14 @@ PHASE_LABELS = {
 _PLATFORM_LABELS = {"CAR-NK", "CAR-Treg", "CAAR-T", "CAR-γδ T"}
 
 # ---------------------------------------------------------------------------
-# Approved CAR-T products — used for temporal overlay annotations
+# Approved CAR-T products — used for Fig 1's regulatory-milestone strip.
 # ---------------------------------------------------------------------------
+# Curated manually: no clean public API covers CAR-T biologics across FDA,
+# EMA, and NMPA. Scheduled refresh cadence is quarterly — see the
+# "Quarterly approvals review" issue template for sources + update checklist.
+#
+# Last reviewed: 2026-04-24
+APPROVED_PRODUCTS_LAST_REVIEWED = "2026-04-24"
 APPROVED_PRODUCTS = [
     # FDA approvals (primary — drawn as prominent vertical lines)
     {"year": 2017, "name": "tisa-cel (Kymriah)",   "target": "CD19", "regulator": "FDA"},
@@ -2753,9 +2759,10 @@ with tab_pub:
     _yr_max = int(years_raw.max()) if len(years_raw) else None
     _fig1_sub = (
         f"Annual trial starts by branch, {_yr_min}–{_yr_max}, for the current "
-        "filter. Early years will look sparse if the Overall-status filter "
-        "excludes COMPLETED / TERMINATED trials (add them in the sidebar to "
-        "see historical activity). Vertical lines mark FDA approvals."
+        "filter. Bottom strip: FDA / EMA / NMPA approvals by product and year "
+        f"(last reviewed {APPROVED_PRODUCTS_LAST_REVIEWED}). Early years will "
+        "look sparse if the Overall-status filter excludes COMPLETED / "
+        "TERMINATED trials — add them in the sidebar to see historical activity."
         if _yr_min is not None else "Annual trial starts by branch."
     )
     _pub_header("1", "Temporal trends by branch, with approved-product overlay", _fig1_sub)

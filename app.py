@@ -1081,26 +1081,6 @@ tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = st.
 # ---------------------------------------------------------------------------
 
 with tab_overview:
-    if prisma_counts:
-        st.subheader("Study selection (PRISMA flow)")
-        prisma_rows = [
-            {"Step": "Records identified via ClinicalTrials.gov API", "n": prisma_counts.get("n_fetched", "—"), "Note": ""},
-            {"Step": "Duplicate records removed", "n": prisma_counts.get("n_duplicates_removed", "—"), "Note": "Same NCT ID"},
-            {"Step": "Records screened", "n": prisma_counts.get("n_after_dedup", "—"), "Note": ""},
-            {"Step": "Excluded: pre-specified NCT IDs", "n": prisma_counts.get("n_hard_excluded", "—"), "Note": "Manually curated exclusion list"},
-            {"Step": "Excluded: autoimmune-only indications", "n": prisma_counts.get("n_indication_excluded", "—"), "Note": "Keyword-based exclusion"},
-            {"Step": "Studies included in analysis", "n": prisma_counts.get("n_included", "—"), "Note": "Final dataset"},
-        ]
-        prisma_df = pd.DataFrame(prisma_rows)
-        st.dataframe(
-            prisma_df, width='stretch', hide_index=True,
-            column_config={
-                "Step": st.column_config.TextColumn("Step", width="large"),
-                "n": st.column_config.NumberColumn("n", width="small"),
-                "Note": st.column_config.TextColumn("Note", width="medium"),
-            },
-        )
-
     # Disease hierarchy sunburst (Branch → Category → Entity)
     st.subheader("Disease hierarchy at a glance")
     st.caption("Click a wedge to zoom in. Publication-quality version in Figure 5.")
@@ -1236,6 +1216,29 @@ with tab_overview:
             st.plotly_chart(fig_year, width='stretch')
         else:
             st.info("No trials with a valid start year for the current filter selection.")
+
+    # Methodological backing — collapsed by default so the insight-first flow
+    # above isn't blocked. Full PRISMA narrative also lives in the Methods tab.
+    if prisma_counts:
+        with st.expander("Study selection (PRISMA flow)", expanded=False):
+            prisma_rows = [
+                {"Step": "Records identified via ClinicalTrials.gov API", "n": prisma_counts.get("n_fetched", "—"), "Note": ""},
+                {"Step": "Duplicate records removed", "n": prisma_counts.get("n_duplicates_removed", "—"), "Note": "Same NCT ID"},
+                {"Step": "Records screened", "n": prisma_counts.get("n_after_dedup", "—"), "Note": ""},
+                {"Step": "Excluded: pre-specified NCT IDs", "n": prisma_counts.get("n_hard_excluded", "—"), "Note": "Manually curated exclusion list"},
+                {"Step": "Excluded: autoimmune-only indications", "n": prisma_counts.get("n_indication_excluded", "—"), "Note": "Keyword-based exclusion"},
+                {"Step": "Studies included in analysis", "n": prisma_counts.get("n_included", "—"), "Note": "Final dataset"},
+            ]
+            prisma_df = pd.DataFrame(prisma_rows)
+            st.dataframe(
+                prisma_df, width='stretch', hide_index=True,
+                column_config={
+                    "Step": st.column_config.TextColumn("Step", width="large"),
+                    "n": st.column_config.NumberColumn("n", width="small"),
+                    "Note": st.column_config.TextColumn("Note", width="medium"),
+                },
+            )
+            st.caption("Full PRISMA narrative and classification methodology in the Methods & Appendix tab.")
 
 
 # ---------------------------------------------------------------------------

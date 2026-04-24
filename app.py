@@ -2670,16 +2670,26 @@ with tab_pub:
         # dose-escalation trials, few 500+ Phase III). Linear axis crams the
         # bulk of trials at the left. Log-spaced bins + log axis spread the
         # distribution so every decade of enrollment size is legible.
-        # Clinical enrollment-size buckets above the chart — translates the
-        # raw distribution into language a reader actually uses ("Phase I
-        # dose-escalation", "pivotal-size") rather than a bare median.
+        # 100%-stacked horizontal bar — each branch becomes one 0–100% bar
+        # composed of five clinically-named size buckets in a sequential
+        # navy ramp (light = small, dark = pivotal). Single chart, single
+        # insight: reader sees trial-size composition AND compares branches
+        # side-by-side without decoding a median / IQR / ECDF.
         _size_buckets = [
-            ("Dose-escalation (≤ 20)",   0, 20),
-            ("Small cohort (21–50)",    21, 50),
-            ("Expansion (51–100)",      51, 100),
-            ("Mid-size (101–300)",     101, 300),
+            ("Dose-escalation (≤ 20)",   0,   20),
+            ("Small cohort (21–50)",    21,   50),
+            ("Expansion (51–100)",      51,  100),
+            ("Mid-size (101–300)",     101,  300),
             ("Pivotal (> 300)",        301, 10_000),
         ]
+        # Single-hue sequential ramp — ordinal perception (small → large).
+        _BUCKET_COLORS = {
+            "Dose-escalation (≤ 20)":  "#dbeafe",  # blue-100
+            "Small cohort (21–50)":    "#93c5fd",  # blue-300
+            "Expansion (51–100)":      "#3b82f6",  # blue-500
+            "Mid-size (101–300)":      "#1d4ed8",  # blue-700
+            "Pivotal (> 300)":         "#0b3d91",  # primary navy
+        }
 
         def _bucketise(series: pd.Series) -> dict[str, int]:
             out = {}
@@ -2687,7 +2697,8 @@ with tab_pub:
                 out[label] = int(((series >= lo) & (series <= hi)).sum())
             return out
 
-        _bucket_rows = []
+        _bar_rows = []
+        _branch_meta = []   # for caption: median, n
         for _branch in ["Heme-onc", "Solid-onc"]:
             _vals = df_enroll_known[df_enroll_known["Branch"] == _branch]["EnrollmentCount"]
             if _vals.empty:
@@ -2695,115 +2706,83 @@ with tab_pub:
             _counts = _bucketise(_vals)
             _total = sum(_counts.values()) or 1
             for label, _, _ in _size_buckets:
-                _bucket_rows.append({
-                    "Branch": _branch,
+                _bar_rows.append({
+                    "Branch":          _branch,
                     "Enrollment size": label,
-                    "Trials": _counts[label],
-                    "% of branch": round(100 * _counts[label] / _total, 1),
+                    "Pct":             100 * _counts[label] / _total,
+                    "Trials":          _counts[label],
                 })
-        _bucket_df = pd.DataFrame(_bucket_rows)
+            _branch_meta.append(
+                f"**{_branch}**: n={_total:,} · median {int(_vals.median())} patients"
+            )
+        _bar_df = pd.DataFrame(_bar_rows)
 
-        if not _bucket_df.empty:
-            _bucket_pivot = (
-                _bucket_df.pivot(index="Enrollment size", columns="Branch", values="% of branch")
-                .reindex([b[0] for b in _size_buckets])
-                .fillna(0)
-                .round(1)
-            )
-            # Hidden trial counts, used for the caption
-            _bucket_ncount = (
-                _bucket_df.pivot(index="Enrollment size", columns="Branch", values="Trials")
-                .reindex([b[0] for b in _size_buckets]).fillna(0).astype(int)
-            )
-            st.markdown("**Enrollment size bucket — % of trials by branch**")
-            st.dataframe(
-                _bucket_pivot.reset_index(), width='stretch', hide_index=True,
-                column_config={
-                    "Enrollment size": st.column_config.TextColumn("Enrollment size"),
-                    **{b: st.column_config.NumberColumn(b, format="%.1f%%")
-                       for b in _bucket_pivot.columns},
+        if _bar_df.empty:
+            st.info("No enrollment data for Heme-onc or Solid-onc under the current filter.")
+        else:
+            # Short summary strip above the chart so median / n are at hand
+            st.markdown(" &nbsp;&nbsp;·&nbsp;&nbsp; ".join(_branch_meta))
+
+            fig4a = px.bar(
+                _bar_df,
+                x="Pct", y="Branch",
+                color="Enrollment size",
+                color_discrete_map=_BUCKET_COLORS,
+                orientation="h",
+                template="plotly_white",
+                category_orders={
+                    "Branch":          ["Solid-onc", "Heme-onc"],   # Heme on top visually
+                    "Enrollment size": [b[0] for b in _size_buckets],
                 },
+                text="Pct",
+                custom_data=["Trials", "Enrollment size"],
+                height=240,
             )
-
-        # ECDF (empirical cumulative distribution) per branch — far more
-        # informative than a box-plot-with-dots for a right-skewed
-        # distribution like CAR-T enrollment. Reads directly: "at y=0.5,
-        # x=24 → 50% of Heme-onc trials enroll ≤24 patients".
-        # Only Heme-onc and Solid-onc are plotted (Mixed n=8, Unknown
-        # sparse — small-sample ECDFs are noisy and visually misleading).
-        fig4a = go.Figure()
-        for _branch in ["Heme-onc", "Solid-onc"]:
-            _vals = (
-                df_enroll_known[df_enroll_known["Branch"] == _branch]["EnrollmentCount"]
-                .astype(float).clip(lower=1).sort_values().tolist()
+            fig4a.update_traces(
+                texttemplate="%{text:.0f}%",
+                textposition="inside",
+                textfont=dict(size=11, color="white"),
+                insidetextanchor="middle",
+                marker_line_width=0,
+                hovertemplate=(
+                    "%{y} · %{customdata[1]}<br>"
+                    "%{customdata[0]} trials (%{x:.1f}%)<extra></extra>"
+                ),
             )
-            if len(_vals) < 5:
-                continue
-            _n = len(_vals)
-            _ys = [(i + 1) / _n for i in range(_n)]
-            _color = BRANCH_COLORS.get(_branch, THEME["primary"])
-            fig4a.add_trace(go.Scatter(
-                x=_vals, y=_ys, mode="lines",
-                line=dict(width=2.4, color=_color),
-                name=f"{_branch} (n={_n})",
-                hovertemplate=f"{_branch}: ≤%{{x:.0f}} patients — %{{y:.1%}} of trials<extra></extra>",
-            ))
-
-        # Percentile reference lines at 50% and 90% so readers can eyeball
-        # "typical trial" and "long tail" without computing anything.
-        fig4a.add_hline(y=0.5, line=dict(dash="dot", color="#64748b", width=1), opacity=0.7)
-        fig4a.add_hline(y=0.9, line=dict(dash="dot", color="#64748b", width=1), opacity=0.7)
-
-        fig4a.update_layout(
-            **PUB_BASE,
-            height=420,
-            margin=dict(l=72, r=36, t=36, b=84),
-            xaxis=dict(
-                type="log",
-                title="Planned enrollment (patients, log scale)",
-                tickvals=[1, 10, 100, 1000],
-                ticktext=["1", "10", "100", "1,000"],
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-                minor=dict(showgrid=False, ticks=""),  # suppress log sub-ticks
-            ),
-            yaxis=dict(
-                title="Cumulative share of trials",
-                tickformat=",.0%",
-                range=[0, 1.02],
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-                zeroline=False,
-            ),
-            annotations=[
-                dict(x=0.02, xref="paper", y=0.5, yref="y",
-                     text="50% (median)", showarrow=False,
-                     font=dict(size=10, color="#64748b"),
-                     xanchor="left", yanchor="bottom"),
-                dict(x=0.02, xref="paper", y=0.9, yref="y",
-                     text="90%", showarrow=False,
-                     font=dict(size=10, color="#64748b"),
-                     xanchor="left", yanchor="bottom"),
-            ],
-            legend=dict(
-                orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
-                font=dict(size=11, color=_AX_COLOR),
-                bgcolor="rgba(0,0,0,0)", borderwidth=0, title=None,
-            ),
-        )
-        st.plotly_chart(fig4a, width='stretch', config=PUB_EXPORT)
-        st.caption(
-            "Empirical cumulative distribution function (ECDF). Read as: at any "
-            "x-value, the y-value gives the share of trials enrolling up to that "
-            "many patients. Heme-onc and Solid-onc only (Mixed and Unknown branches "
-            "have too few trials for a stable ECDF)."
-        )
+            fig4a.update_layout(
+                **PUB_BASE,
+                barmode="stack",
+                margin=dict(l=100, r=24, t=16, b=92),
+                xaxis=dict(
+                    title="% of trials",
+                    range=[0, 100],
+                    ticksuffix="%",
+                    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                    showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
+                    ticks="outside", ticklen=6, tickwidth=1.2,
+                    tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                    title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
+                    zeroline=False,
+                ),
+                yaxis=dict(
+                    title=None,
+                    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                    ticks="outside", ticklen=4, tickwidth=1.2,
+                    tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                ),
+                legend=dict(
+                    orientation="h", yanchor="top", y=-0.28, xanchor="center", x=0.5,
+                    font=dict(size=10, color=_AX_COLOR),
+                    bgcolor="rgba(0,0,0,0)", borderwidth=0, title=None,
+                    traceorder="normal",
+                ),
+            )
+            st.plotly_chart(fig4a, width='stretch', config=PUB_EXPORT)
+            st.caption(
+                "Each bar totals 100%. Size buckets reflect standard CAR-T trial "
+                "archetypes (dose-escalation → pivotal). Mixed and Unknown branches "
+                "excluded; their enrollment data is preserved in the CSV export."
+            )
 
         # 4b — Median enrollment by phase × branch
         st.markdown(

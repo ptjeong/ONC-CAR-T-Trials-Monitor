@@ -3513,18 +3513,58 @@ Auto CAR-T, Allo CAR-T, CAR-T (unclear), CAR-γδ T, CAR-NK, CAR-Treg, CAAR-T,
 In vivo CAR. Modality is derived from TargetCategory + ProductType + text-level
 γδ-T detection.
 
+Sponsor Classification
+----------------------
+Lead sponsors are classified into four categories — Industry, Academic, Government,
+Other — using a hierarchical heuristic that combines CT.gov's LeadSponsorClass
+with keyword matching on the sponsor name. Resolution order:
+  1. Strong government signals (word-boundary acronyms NIH / NCI / FDA / EMA /
+     DOD / VA / CDC, plus full-phrase anchors "National Institutes of Health",
+     "Department of Veterans Affairs", etc.) — these override academic markers
+     because agencies like NCI are genuine federal funders despite containing
+     "institute" in the name.
+  2. Academic markers in the name (hospital, university, medical center, cancer
+     center, klinik, affiliated hospital, PLA hospital, memorial Sloan, Dana-Farber,
+     MD Anderson, …) — override CT.gov's OTHER_GOV class, which over-applies to
+     Chinese provincial hospitals and Russian "Federal Research Institute"
+     entries that function academically.
+  3. CT.gov LeadSponsorClass for unambiguous codes (INDUSTRY → Industry; NIH /
+     FED → Government; INDIV → Academic). OTHER_GOV is deliberately dropped
+     (an audit reduced Government from 147 misclassified trials to 36 genuine NCI
+     entries).
+  4. Known pharma brand names without a corporate suffix (Novartis, Kite, Gilead,
+     Janssen, Legend, Autolus, …).
+  5. Industry corporate suffixes and industry-language keywords (Inc, GmbH, AG,
+     S.p.A, Pharma, Biotech, Therapeutics, …).
+  6. Secondary academic hints ("Institute of …", "Research Institute", Inserm,
+     provincial, fondazione).
+  7. PI detection (`_looks_like_personal_name`) — investigator-initiated trials
+     where the sponsor field is the PI name ("Carl June, M.D.", "Stephan Grupp")
+     get explicit routing to Academic based on degree markers + 2–4 short
+     alphabetical tokens with no institutional keyword.
+  8. Default to Academic for non-empty, unclassified names (overwhelmingly
+     investigator-initiated in practice); "Other" reserved for truly empty strings.
+
 Enrollment Analysis
 -------------------
 Planned enrollment counts were extracted from the EnrollmentCount field
-(type = Anticipated or Actual) and coerced to numeric; missing or non-numeric values
-were excluded from enrollment analyses (Figure 4). To remove data-entry artifacts
-(registry placeholders like 99,999,999; real-world-data cost studies with 160,000+
-rows), the enrollment figure caps planned enrollment at 1,000 patients — a threshold
-safely above the largest prospective CAR-T trial (cilta-cel CARTITUDE, n≈790).
-Excluded outliers are reported in a caption. Branch stratification distinguishes
-heme-onc (historically larger cohorts, Phase II+ trials) from solid-onc (smaller
-Phase I dose-escalation cohorts). Geographic classification labels trials as "China"
-if China is among the Countries, else "Non-China".
+(type = Anticipated or Actual) and coerced to numeric; missing or non-numeric
+values were excluded from enrollment analyses (Figure 4). To remove data-entry
+artifacts (registry placeholders like 99,999,999; real-world-data cost studies
+with 160,000+ rows), enrollment is capped at 1,000 patients — a threshold safely
+above the largest prospective CAR-T trial (cilta-cel CARTITUDE, n≈790). Excluded
+outliers are reported in a caption.
+
+Figure 4 presents a three-panel enrollment landscape:
+  4a — Branch-stratified trial-size composition across five clinical buckets:
+       Dose-escalation (≤ 20), Small cohort (21–50), Expansion (51–100),
+       Mid-size (101–300), Pivotal (> 300). Rendered as a 100%-stacked
+       horizontal bar (one bar per branch, single-hue sequential navy ramp so
+       bucket order is pre-attentively readable), which shows trial-size
+       composition and inter-branch comparison in a single chart without
+       requiring readers to decode a histogram, ECDF, or IQR.
+  4b — Median planned enrollment by Phase × Branch.
+  4c — Per-trial enrollment dot plot, phase-ordered.
 
 Data Processing
 ---------------

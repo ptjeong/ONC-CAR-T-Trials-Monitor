@@ -1739,9 +1739,12 @@ with tab_deep:
                 "AgeGroup", "SponsorType", "Phase", "OverallStatus",
                 "StartYear", "Countries", "LeadSponsor",
             ]
+            # Sort first (needs PhaseOrdered), then subset columns for display.
+            focus_sorted = focus_show.sort_values(
+                ["PhaseOrdered", "StartYear", "NCTId"], na_position="last",
+            )
             st.dataframe(
-                focus_show[[c for c in show_cols_focus if c in focus_show.columns]]
-                    .sort_values(["PhaseOrdered", "StartYear", "NCTId"], na_position="last"),
+                focus_sorted[[c for c in show_cols_focus if c in focus_sorted.columns]],
                 width='stretch', height=420, hide_index=True,
                 column_config={
                     "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),

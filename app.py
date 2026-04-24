@@ -1178,7 +1178,7 @@ with tab_overview:
 
     with ov_r2c1:
         st.subheader("Trials by phase")
-        st.caption("Stacked by Branch — heme trials tend to sit later in development than solid.")
+        st.caption("Phase distribution of trials in the current filter, stacked by branch.")
         phase_counts = (
             df_filt.groupby(["PhaseOrdered", "Branch"], observed=False).size().reset_index(name="Count")
         )
@@ -1211,7 +1211,7 @@ with tab_overview:
 
     with ov_r2c2:
         st.subheader("Trials by start year")
-        st.caption("Stacked area by Branch. Heme vs Solid trajectories diverge sharply.")
+        st.caption("Annual trial starts in the current filter, stacked area by branch.")
         year_df = df_filt.copy()
         year_df["StartYear"] = pd.to_numeric(year_df["StartYear"], errors="coerce")
         year_df = year_df.dropna(subset=["StartYear"])
@@ -1858,10 +1858,10 @@ with tab_pub:
     _yr_min = int(years_raw.min()) if len(years_raw) else None
     _yr_max = int(years_raw.max()) if len(years_raw) else None
     _fig1_sub = (
-        f"Annual trial starts by branch, {_yr_min}–{_yr_max}. Pre-2017 years "
-        "will look sparse with the default status filter — most early CAR-T "
-        "trials are now COMPLETED and filtered out. Add COMPLETED in the "
-        "sidebar to see historical activity. Vertical lines mark FDA approvals."
+        f"Annual trial starts by branch, {_yr_min}–{_yr_max}, for the current "
+        "filter. Early years will look sparse if the Overall-status filter "
+        "excludes COMPLETED / TERMINATED trials (add them in the sidebar to "
+        "see historical activity). Vertical lines mark FDA approvals."
         if _yr_min is not None else "Annual trial starts by branch."
     )
     _pub_header("1", "Temporal trends by branch, with approved-product overlay", _fig1_sub)
@@ -2009,7 +2009,7 @@ with tab_pub:
     # Fig 2 — Phase distribution, stacked by Branch
     # ------------------------------------------------------------------
     _pub_header("2", "Distribution of clinical trial phases, by branch",
-                "Heme-onc trials are further along in development than solid-onc.")
+                "Number of trials at each phase in the current filter, stacked by branch.")
 
     phase_counts = (
         df_filt.groupby(["PhaseOrdered", "Branch"], observed=False).size().reset_index(name="Trials")
@@ -2064,7 +2064,7 @@ with tab_pub:
     # Fig 3 — Geography, with Heme vs Solid split
     # ------------------------------------------------------------------
     _pub_header("3", "Global distribution of trial sites",
-                "China leads in solid-tumor CAR-T; the US leads in heme. Toggle the branch stratification below.")
+                "Country-level trial counts for the current filter. Companion 3b breaks the top 10 by branch.")
 
     def _country_branch_long(df_in: pd.DataFrame) -> pd.DataFrame:
         rows = []
@@ -2165,7 +2165,7 @@ with tab_pub:
     # Fig 4 — Enrollment landscape with Heme/Solid stratification
     # ------------------------------------------------------------------
     _pub_header("4", "Trial enrollment landscape",
-                "Solid-onc trials tend to enroll smaller cohorts than heme-onc, with distinct phase and geography patterns.")
+                "Distribution and median planned enrollment for the current filter, with subgroup panels by phase, disease category, branch and geography.")
 
     # Enrollment outlier handling: ClinicalTrials.gov lets registries and
     # real-world-data studies report absurd counts (e.g., 99,999,999 sentinel
@@ -2425,7 +2425,7 @@ with tab_pub:
     # Fig 5 — Branch → Category → Entity sunburst (signature oncology figure)
     # ------------------------------------------------------------------
     _pub_header("5", "Disease hierarchy (Branch → Category → Entity)",
-                "Sunburst mapping the full oncology landscape. Click a wedge to zoom.")
+                "Sunburst of Branch → Category → Entity for trials in the current filter. Click a wedge to zoom.")
 
     if not df_filt.empty:
         sun_df = (
@@ -2485,7 +2485,7 @@ with tab_pub:
     # Fig 6 — Heme vs Solid antigen panels (side-by-side)
     # ------------------------------------------------------------------
     _pub_header("6", "Antigen target landscape, heme vs solid",
-                "Heme is concentrated at CD19/BCMA; solid spans a long tail of GPC3, CLDN18.2, MSLN, GD2, HER2, EGFRvIII…")
+                "Top antigens among trials in the current filter, split into heme and solid panels. Long tail of low-count antigens aggregated as 'Other (N antigens)'.")
 
     _UNCLEAR_BUCKET = "Undisclosed / unclear"
 
@@ -2583,7 +2583,7 @@ with tab_pub:
     # Fig 7 — Innovation signals (product type + modality over time)
     # ------------------------------------------------------------------
     _pub_header("7", "Innovation signals — product type and cell-therapy modality",
-                "Autologous dominates historically; allogeneic and in vivo CAR are emerging. Modality mix differs between branches.")
+                "Trial composition over time, by manufacturing approach (autologous / allogeneic / in vivo) and by cell-therapy platform.")
 
     df_innov = df_filt[df_filt["StartYear"].notna()].copy()
     df_innov["StartYear"] = df_innov["StartYear"].astype(int)
@@ -2745,7 +2745,7 @@ with tab_pub:
     # Fig 8 — Disease × Target heatmap (oncology-specific signature)
     # ------------------------------------------------------------------
     _pub_header("8", "Disease × antigen target heatmap",
-                "Shows which antigens are being tested in which diseases. CD19 × B-NHL, BCMA × MM, GPC3 × HCC, GD2 × Neuroblastoma, CLDN18.2 × gastric/pancreatic are the signature clusters.")
+                "Trial counts per (category, antigen) pair in the current filter. Top 15 categories × top 18 antigens shown; undisclosed-antigen trials excluded from the matrix.")
 
     # Build disease-target matrix (top N of each for readability)
     hm_df = df_filt.copy()

@@ -2760,9 +2760,7 @@ with tab_pub:
     _fig1_sub = (
         f"Annual trial starts by branch, {_yr_min}–{_yr_max}, for the current "
         "filter. Bottom strip: FDA / EMA / NMPA approvals by product and year "
-        f"(last reviewed {APPROVED_PRODUCTS_LAST_REVIEWED}). Early years will "
-        "look sparse if the Overall-status filter excludes COMPLETED / "
-        "TERMINATED trials — add them in the sidebar to see historical activity."
+        f"(last reviewed {APPROVED_PRODUCTS_LAST_REVIEWED})."
         if _yr_min is not None else "Annual trial starts by branch."
     )
     _pub_header("1", "Temporal trends by branch, with approved-product overlay", _fig1_sub)

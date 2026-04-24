@@ -556,57 +556,167 @@ def _age_group(row: dict) -> str:
     return "Adult"
 
 
-_SPONSOR_CLASS_MAP = {
-    "INDUSTRY": "Industry",
-    "NIH": "Government",
-    "FED": "Government",
-    "OTHER_GOV": "Government",
-    "NETWORK": "Academic",
-    "OTHER": "Academic",
-    "AMBIG": "Unknown",
-    "INDIV": "Academic",
-    "UNKNOWN": "Unknown",
+# CT.gov leadSponsor.class values — trusted when present.
+# OTHER and UNKNOWN fall through to the name heuristic below.
+_CTGOV_SPONSOR_CLASS_MAP = {
+    "INDUSTRY":   "Industry",
+    "NIH":        "Government",
+    "FED":        "Government",
+    "OTHER_GOV":  "Government",
+    "NETWORK":    "Academic",
+    "INDIV":      "Academic",     # individual investigator — treat as academic
+    # "OTHER", "UNKNOWN", "AMBIG", "" → fall through to name heuristic
 }
 
-_ACAD_TOKENS = [
-    "hospital", "university", "universit", "medical center", "medical centre",
-    "medical college", "medical school", "children", "school of medicine",
-    "general hospital", "affiliated hospital",
-    "national institute", "research center", "research centre",
+# Expanded academic hints (covers international terms the English-only list missed)
+_ACADEMIC_HINTS = (
+    # English
+    "hospital", "university", "college",
+    "medical center", "medical centre", "medical college", "medical school",
+    "school of medicine", "school of nursing",
+    "children's hospital", "childrens hospital",
+    "general hospital", "affiliated hospital", "teaching hospital",
     "cancer center", "cancer centre", "comprehensive cancer",
-    "institute for", "institute of",
-    "pla ", "armed forces", "faculty of", "nhs", "inserm",
-    "klinik", "klinikum",
-]
-_INDUS_TOKENS = [
-    "therapeutics", "pharma", "pharmaceutical",
-    "biotechnology", "biotech", "bioscience", "biotherapy",
+    "research center", "research centre", "research institute",
+    "institute for", "institute of", "institut", "instituto",
+    "faculty of", "faculty", "faculdade", "facultad",
+    "academic", "academy", "academia",
+    "clinic",  # matches "Mayo Clinic", "Cleveland Clinic"
+    "foundation for", "fondazione",
+    # European
+    "universität", "universitaet", "universitat", "università",
+    "université", "universite", "universidad", "universidade", "universitair",
+    "klinik", "klinikum", "krankenhaus",
+    "hôpital", "hopital", "centre hospitalier", "center hospitalier",
+    "ospedale", "policlinico",
+    "ziekenhuis", "sjukhus",
+    "assistance publique", "ap-hp",
+    "charite", "charité",
+    # UK / National
+    "nhs ", "nhs trust", "national health service",
+    "inserm",
+    # Asian
+    "pla general hospital", "pla hospital",
+    "chinese academy", "chinese pla",
+    "affiliated with", "affiliated of",
+    "first hospital", "people's hospital", "peoples hospital",
+    # Named US institutions with no obvious keyword
+    "fred hutchinson", "memorial sloan", "dana-farber", "md anderson",
+    "mayo clinic", "cleveland clinic", "johns hopkins",
+    "st. jude", "st jude",
+    "stanford", "harvard", "yale",  # common bare names
+)
+
+# Industry hints — corporate suffixes + industry-language keywords.
+_INDUSTRY_HINTS = (
+    # Corporate suffixes — padded with space to avoid matching inside other words
+    " inc", " inc.", " incorporated",
+    " ltd", " ltd.", " limited",
+    " llc", " l.l.c",
+    " corp", " corp.", " corporation",
+    " plc", " pte", " pty",
+    # Continental Europe
+    " gmbh", " mbh", " ag ", " ag,", " kg ", " oy",
+    " s.a.", " s.p.a", " spa ", " sas ", " sarl ", " srl ",
+    # Asia / Americas
+    " kk", " k.k.", " co., ltd", " co ltd", " co.",
+    " bv ", " nv ",
+    # Industry-language keywords
+    "pharmaceutical", "pharmaceuticals", "pharma",
+    "biotech", "biotechnology", "bioscience", "biosciences",
     "biopharmaceutical", "biopharma", "biologics",
-    " inc", " ltd", " co.,", " llc", " corp", " gmbh", " ag ",
-]
+    "therapeutics", "diagnostics", "genomics",
+    "biotherapy", "biologic",
+    "medicines", "biomedicine",
+    "cell therapy", "cell therapies",
+    "immuno", "immunology",  # frequently in company names
+)
+
+# Known pharma/biotech companies that don't always carry a corporate suffix
+# in their CT.gov listing (e.g., "Novartis", "Kite", "Legend").
+_KNOWN_INDUSTRY_NAMES = (
+    "novartis", "roche", "genentech", "pfizer", "merck",
+    "bristol", "bristol-myers", "bristol myers", "bms",
+    "johnson & johnson", "j&j", "janssen",
+    "gilead", "kite", "kite pharma",
+    "astra", "astrazeneca", "sanofi", "bayer",
+    "amgen", "regeneron", "abbvie", "lilly", "eli lilly",
+    "takeda", "daiichi", "boehringer",
+    "gsk", "glaxosmithkline",
+    "celgene", "servier", "fosun",
+    "allogene", "legend", "legend biotech", "cellectis", "precision bio",
+    "carsgen", "jw therapeutics", "autolus", "cabaletta",
+    "adicet", "arcus", "sotio", "poseida",
+    "cargo", "carisma", "century therapeutics",
+    "intellia", "crispr", "editas", "tessera",
+    "tmunity", "nkarta", "caribou", "chinook",
+    "juno", "immatics", "innate", "miltenyi",
+    "mustang bio", "moderna", "biontech",
+)
+
+# Government / funding-body hints
+_GOV_HINTS = (
+    "nih", "national institutes of health",
+    "national cancer institute", "nci",
+    "department of veterans affairs", "veterans affairs", " va ",
+    "dod", "department of defense",
+    "department of health", "ministry of health", "ministry of",
+    "public health",
+    "fda", "ema",
+    "federal ", "government",
+    "nhs england",
+)
+
+
+def _classify_sponsor(lead_sponsor: str | None,
+                      lead_sponsor_class: str | None = None) -> str:
+    """Return 'Industry' | 'Academic' | 'Government' | 'Other'.
+
+    Primary signal: CT.gov `leadSponsor.class` (INDUSTRY / NIH / OTHER_GOV / …).
+    Fallback: keyword heuristic against the sponsor name.
+    Final default is Academic (never "Other" for a non-empty name) — most
+    investigator-initiated CT.gov trials lack a corporate suffix and CT.gov
+    labels them OTHER, but they are almost always academic PI-led studies.
+    "Other" is reserved for truly-empty sponsor strings.
+    """
+    cls = (lead_sponsor_class or "").upper().strip()
+    mapped = _CTGOV_SPONSOR_CLASS_MAP.get(cls)
+    if mapped is not None:
+        return mapped
+    # class is OTHER / UNKNOWN / AMBIG / empty → use name heuristic
+
+    if not lead_sponsor:
+        return "Other"
+
+    s = lead_sponsor.lower().strip()
+    if not s:
+        return "Other"
+
+    # Space-pad so corporate suffix patterns like " inc" / " ltd" only match
+    # as standalone tokens, not inside other words.
+    padded = f" {s} "
+
+    # Priority order: Gov > Industry > Academic. Government keywords are
+    # the most specific; industry suffixes are high-confidence; academic
+    # hints are broadest. Default lands in Academic.
+    if any(h in padded or h in s for h in _GOV_HINTS):
+        return "Government"
+    if any(h in s for h in _KNOWN_INDUSTRY_NAMES):
+        return "Industry"
+    if any(h in padded for h in _INDUSTRY_HINTS):
+        return "Industry"
+    if any(h in s for h in _ACADEMIC_HINTS):
+        return "Academic"
+
+    # Smart default — rather than "Other", land ambiguous cases in Academic.
+    # Rationale: CT.gov class=OTHER is the ambiguous bucket, and in practice
+    # these are overwhelmingly investigator-initiated / academic trials.
+    return "Academic"
 
 
 def _sponsor_type(row: dict) -> str:
-    """Academic / Industry / Government / Unknown.
-
-    First trusts the CT.gov LeadSponsorClass field if set; falls back to
-    keyword matching on the sponsor name.
-    """
-    cls = (row.get("LeadSponsorClass") or "").upper().strip()
-    if cls in _SPONSOR_CLASS_MAP:
-        return _SPONSOR_CLASS_MAP[cls]
-
-    name = str(row.get("LeadSponsor") or "").lower()
-    if not name:
-        return "Unknown"
-    if any(t in name for t in _ACAD_TOKENS):
-        return "Academic"
-    if any(t in name for t in _INDUS_TOKENS):
-        return "Industry"
-    # Short PI-like strings without corporate suffixes treated as Academic
-    if len(name.split()) <= 4 and "." not in name:
-        return "Academic"
-    return "Industry"
+    """Thin row-wrapper for _classify_sponsor (kept for pipeline call-site)."""
+    return _classify_sponsor(row.get("LeadSponsor"), row.get("LeadSponsorClass"))
 
 
 # ---------------------------------------------------------------------------

@@ -309,6 +309,41 @@ def test_sponsor_type_name_fallback_academic():
     assert _sponsor_type(row) == "Academic"
 
 
+def test_sponsor_type_known_pharma_without_suffix():
+    """Brand names without corporate suffix should hit the known-pharma list."""
+    row = {"LeadSponsorClass": "", "LeadSponsor": "Novartis"}
+    assert _sponsor_type(row) == "Industry"
+
+
+def test_sponsor_type_government_us():
+    row = {"LeadSponsorClass": "", "LeadSponsor": "National Cancer Institute (NCI)"}
+    assert _sponsor_type(row) == "Government"
+
+
+def test_sponsor_type_european_academic():
+    """International academic terms (Universität, Hôpital, Ospedale)."""
+    for name in [
+        "Charité Universitätsmedizin Berlin",
+        "Hôpital Saint-Louis Paris",
+        "Ospedale San Raffaele",
+        "Universitätsklinikum Köln",
+    ]:
+        row = {"LeadSponsorClass": "", "LeadSponsor": name}
+        assert _sponsor_type(row) == "Academic", f"{name} → {_sponsor_type(row)}"
+
+
+def test_sponsor_type_ambiguous_defaults_to_academic():
+    """Ambiguous names (no suffix, no keyword) default to Academic, never 'Other'."""
+    row = {"LeadSponsorClass": "OTHER", "LeadSponsor": "Smith, John"}
+    assert _sponsor_type(row) == "Academic"
+
+
+def test_sponsor_type_other_only_for_empty():
+    """'Other' is reserved for truly empty sponsor strings."""
+    assert _sponsor_type({"LeadSponsorClass": "", "LeadSponsor": ""}) == "Other"
+    assert _sponsor_type({"LeadSponsorClass": "", "LeadSponsor": None}) == "Other"
+
+
 # ---------------------------------------------------------------------------
 # Product name extraction
 # ---------------------------------------------------------------------------

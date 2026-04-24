@@ -1608,7 +1608,9 @@ with tab_deep:
         unsafe_allow_html=True,
     )
 
-    deep_sub_disease, deep_sub_product = st.tabs(["By disease", "By product"])
+    deep_sub_disease, deep_sub_product, deep_sub_sponsor = st.tabs(
+        ["By disease", "By product", "By sponsor type"]
+    )
 
     # ===== By-disease focus =====
     with deep_sub_disease:
@@ -1859,6 +1861,108 @@ with tab_deep:
                 "Download per-product CSV",
                 data=_csv_with_provenance(pivot, "Per-product pipeline view", include_filters=True),
                 file_name="per_product_pipeline.csv",
+                mime="text/csv",
+            )
+
+    # ===== By-sponsor-type aggregation =====
+    with deep_sub_sponsor:
+        st.subheader("Landscape by sponsor type")
+        st.caption(
+            "Aggregates the filtered dataset by sponsor type "
+            "(Industry / Academic / Government / Other). Drill into any "
+            "bucket to see its top sponsors, antigen targets, and product mix."
+        )
+
+        # Defensive: re-derive SponsorType if a stale cached snapshot lacks it.
+        if "SponsorType" not in df_filt.columns and "LeadSponsor" in df_filt.columns:
+            try:
+                from pipeline import _classify_sponsor as _cs
+                df_filt["SponsorType"] = df_filt.apply(
+                    lambda r: _cs(r.get("LeadSponsor"), r.get("LeadSponsorClass")),
+                    axis=1,
+                )
+            except Exception:
+                pass
+
+        if "SponsorType" not in df_filt.columns:
+            st.info("Sponsor type not available in the current snapshot.")
+        elif df_filt.empty:
+            st.info("No trials in the current filter.")
+        else:
+            sp_agg = (
+                df_filt.groupby("SponsorType")
+                .agg(
+                    Trials=("NCTId", "nunique"),
+                    Open=("OverallStatus", lambda s: int(s.isin(["RECRUITING", "NOT_YET_RECRUITING"]).sum())),
+                    Sponsors=("LeadSponsor", "nunique"),
+                    TotalEnrolled=("EnrollmentCount",
+                                   lambda s: int(pd.to_numeric(s, errors="coerce").fillna(0)
+                                                 .where(lambda x: x <= 1000, 0).sum())),
+                    MedianEnrollment=("EnrollmentCount",
+                                      lambda s: pd.to_numeric(s, errors="coerce")
+                                                .where(lambda x: x <= 1000).median()),
+                )
+                .reset_index()
+                .sort_values("Trials", ascending=False)
+            )
+            sp_agg["MedianEnrollment"] = sp_agg["MedianEnrollment"].fillna(0).astype(int)
+
+            st.dataframe(
+                sp_agg, width='stretch', hide_index=True,
+                column_config={
+                    "SponsorType":      st.column_config.TextColumn("Sponsor type"),
+                    "Trials":           st.column_config.NumberColumn("Trials", format="%d"),
+                    "Open":             st.column_config.NumberColumn("Open / recruiting", format="%d"),
+                    "Sponsors":         st.column_config.NumberColumn("Distinct sponsors", format="%d"),
+                    "TotalEnrolled":    st.column_config.NumberColumn("Total planned enrollment", format="%,d"),
+                    "MedianEnrollment": st.column_config.NumberColumn("Median enrollment", format="%d"),
+                },
+            )
+
+            sp_choices = sp_agg["SponsorType"].tolist()
+            pick = st.selectbox(
+                "Drill into sponsor type", options=["—"] + sp_choices, key="dd_sponsor_pick",
+            )
+            if pick and pick != "—":
+                sub = df_filt[df_filt["SponsorType"] == pick]
+
+                st.markdown(f"**Top sponsors in *{pick}* ({len(sub)} trials, {sub['LeadSponsor'].nunique()} distinct sponsors)**")
+                top_sponsors = (
+                    sub["LeadSponsor"].dropna().value_counts().head(10)
+                    .rename_axis("Lead sponsor").reset_index(name="Trials")
+                )
+                st.dataframe(top_sponsors, width='stretch', hide_index=True)
+
+                # Antigen target and product-type breakdowns for this sponsor class
+                cA, cB = st.columns(2)
+                with cA:
+                    st.markdown("**Antigen targets**")
+                    _tgt_sub = (
+                        sub.loc[~sub["TargetCategory"].isin(_PLATFORM_LABELS), "TargetCategory"]
+                        .fillna("Unknown").value_counts().head(15)
+                        .rename_axis("Target").reset_index(name="Trials")
+                    )
+                    st.dataframe(_tgt_sub, width='stretch', hide_index=True)
+                with cB:
+                    st.markdown("**Product types**")
+                    _prod_sub = (
+                        sub["ProductType"].fillna("Unclear").value_counts()
+                        .rename_axis("Product type").reset_index(name="Trials")
+                    )
+                    st.dataframe(_prod_sub, width='stretch', hide_index=True)
+
+                # Branch split (useful signal: is industry concentrating on heme or solid?)
+                _branch_sub = (
+                    sub["Branch"].fillna("Unknown").value_counts()
+                    .rename_axis("Branch").reset_index(name="Trials")
+                )
+                st.markdown("**Branch split**")
+                st.dataframe(_branch_sub, width='stretch', hide_index=True)
+
+            st.download_button(
+                "Download sponsor-type aggregation (CSV)",
+                data=_csv_with_provenance(sp_agg, "Landscape by sponsor type", include_filters=True),
+                file_name="deep_dive_by_sponsor_type.csv",
                 mime="text/csv",
             )
 

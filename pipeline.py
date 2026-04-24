@@ -556,13 +556,16 @@ def _age_group(row: dict) -> str:
     return "Adult"
 
 
-# CT.gov leadSponsor.class values — trusted when present.
-# OTHER and UNKNOWN fall through to the name heuristic below.
+# CT.gov leadSponsor.class values. NOTE: OTHER_GOV is deliberately NOT
+# mapped here — CT.gov over-applies it to non-US public hospitals (e.g.
+# Chinese provincial hospitals, Czech public research institutes, Russian
+# federal institutes) that are functionally academic. Those cases are
+# routed through the name-based academic heuristic instead.
 _CTGOV_SPONSOR_CLASS_MAP = {
     "INDUSTRY":   "Industry",
     "NIH":        "Government",
     "FED":        "Government",
-    "OTHER_GOV":  "Government",
+    # "OTHER_GOV" → fall through (see note above)
     "NETWORK":    "Academic",
     "INDIV":      "Academic",     # individual investigator — treat as academic
     # "OTHER", "UNKNOWN", "AMBIG", "" → fall through to name heuristic
@@ -654,16 +657,28 @@ _KNOWN_INDUSTRY_NAMES = (
     "mustang bio", "moderna", "biontech",
 )
 
-# Government / funding-body hints
-_GOV_HINTS = (
-    "nih", "national institutes of health",
-    "national cancer institute", "nci",
-    "department of veterans affairs", "veterans affairs", " va ",
-    "dod", "department of defense",
-    "department of health", "ministry of health", "ministry of",
-    "public health",
-    "fda", "ema",
-    "federal ", "government",
+# Strong government signals — only genuine research-funding / regulatory
+# agencies. Split into two lists:
+#
+#   _GOV_ACRONYMS  — short 2-4 char acronyms (nih, nci, fda, ema, dod, va,
+#                    cdc). MUST be matched with word boundaries; otherwise
+#                    "ema" matches inside "hematology", "dod" inside
+#                    "blood", etc. (real bugs we hit).
+#
+#   _GOV_PHRASES   — multi-word phrases that are safe as substring checks.
+#
+# Deliberately excludes the generic "federal " prefix (too many non-US
+# academic "Federal Research Institute"s got caught by it) and "ministry
+# of" (ambiguous across jurisdictions).
+_GOV_ACRONYMS = ("nih", "nci", "fda", "ema", "dod", "cdc", "va")
+
+_GOV_PHRASES = (
+    "national institutes of health",
+    "national cancer institute",
+    "department of veterans affairs", "veterans affairs",
+    "department of defense",
+    "centers for disease control",
+    "u.s. food and drug",
     "nhs england",
 )
 
@@ -672,45 +687,86 @@ def _classify_sponsor(lead_sponsor: str | None,
                       lead_sponsor_class: str | None = None) -> str:
     """Return 'Industry' | 'Academic' | 'Government' | 'Other'.
 
-    Primary signal: CT.gov `leadSponsor.class` (INDUSTRY / NIH / OTHER_GOV / …).
-    Fallback: keyword heuristic against the sponsor name.
-    Final default is Academic (never "Other" for a non-empty name) — most
-    investigator-initiated CT.gov trials lack a corporate suffix and CT.gov
-    labels them OTHER, but they are almost always academic PI-led studies.
-    "Other" is reserved for truly-empty sponsor strings.
+    Resolution order (refined after an audit showed many non-US academic
+    hospitals were being over-labelled 'Government'):
+
+      1. Strong government signals in the name (NIH / NCI / VA / DoD /
+         FDA / CDC / NHS England). These ALWAYS win — even over academic
+         markers — because 'National Cancer Institute' is genuinely a
+         government funding agency even though the name contains
+         'institute'.
+
+      2. Strong academic markers in the name (hospital / university /
+         medical center / cancer center / klinik / medical college / etc.
+         — see _ACADEMIC_HINTS). These OVERRIDE CT.gov's OTHER_GOV class,
+         which over-applies to Chinese provincial hospitals, Czech public
+         research institutes, Russian 'Federal Research Institute' entries
+         etc. that are functionally academic.
+
+      3. CT.gov class for remaining cases: INDUSTRY / NIH / FED only.
+         OTHER_GOV is intentionally dropped — too many false positives.
+
+      4. Known pharma brand names without corporate suffix.
+      5. Industry corporate suffixes / keywords.
+      6. Secondary academic hints (institute of / research institute /
+         foundation / inserm / provincial).
+      7. Default to Academic for non-empty, unclassified names.
+      8. 'Other' only for truly-empty strings.
     """
+    if not lead_sponsor:
+        return "Other"
+    s = lead_sponsor.lower().strip()
+    if not s:
+        return "Other"
+    padded = f" {s} "
+
+    # 1. Strong government signals — highest precedence, override academic.
+    #    Acronyms matched with word boundaries (so "ema" doesn't hit inside
+    #    "hematology", "dod" doesn't hit inside "blood", etc.).
+    if any(
+        re.search(rf"(?<![a-z0-9]){re.escape(a)}(?![a-z0-9])", s)
+        for a in _GOV_ACRONYMS
+    ):
+        return "Government"
+    if any(p in s for p in _GOV_PHRASES):
+        return "Government"
+
+    # 2. Strong academic markers — override CT.gov's OTHER_GOV.
+    if any(h in s for h in _ACADEMIC_HINTS):
+        return "Academic"
+
+    # 3. Trust CT.gov class for clear cases (Industry + NIH/FED). OTHER_GOV
+    #    is intentionally absent from _CTGOV_SPONSOR_CLASS_MAP — it falls
+    #    through to the keyword heuristic below.
     cls = (lead_sponsor_class or "").upper().strip()
     mapped = _CTGOV_SPONSOR_CLASS_MAP.get(cls)
     if mapped is not None:
         return mapped
-    # class is OTHER / UNKNOWN / AMBIG / empty → use name heuristic
 
-    if not lead_sponsor:
-        return "Other"
-
-    s = lead_sponsor.lower().strip()
-    if not s:
-        return "Other"
-
-    # Space-pad so corporate suffix patterns like " inc" / " ltd" only match
-    # as standalone tokens, not inside other words.
-    padded = f" {s} "
-
-    # Priority order: Gov > Industry > Academic. Government keywords are
-    # the most specific; industry suffixes are high-confidence; academic
-    # hints are broadest. Default lands in Academic.
-    if any(h in padded or h in s for h in _GOV_HINTS):
-        return "Government"
+    # 4. Known pharma brand names without corporate suffix (Novartis, Kite,
+    #    Janssen, etc.).
     if any(h in s for h in _KNOWN_INDUSTRY_NAMES):
         return "Industry"
+
+    # 5. Industry corporate suffixes and industry-language keywords.
     if any(h in padded for h in _INDUSTRY_HINTS):
         return "Industry"
-    if any(h in s for h in _ACADEMIC_HINTS):
+
+    # 6. Secondary academic hints — 'institute of X', 'research institute',
+    #    'foundation', 'inserm', etc. — handle non-hospital academic entities.
+    secondary_acad = (
+        "institute for", "institute of", "research institute",
+        "research center", "research centre", "scientific center",
+        "scientific-practical center", "scientific practical center",
+        "foundation for", "fondazione", "inserm",
+        "provincial", "national research",
+    )
+    if any(h in s for h in secondary_acad):
         return "Academic"
 
-    # Smart default — rather than "Other", land ambiguous cases in Academic.
-    # Rationale: CT.gov class=OTHER is the ambiguous bucket, and in practice
-    # these are overwhelmingly investigator-initiated / academic trials.
+    # 7. Smart default — ambiguous cases land in Academic. In practice CT.gov
+    #    class=OTHER trials without corporate suffixes are overwhelmingly
+    #    investigator-initiated / academic.
     return "Academic"
 
 

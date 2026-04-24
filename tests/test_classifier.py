@@ -344,6 +344,56 @@ def test_sponsor_type_other_only_for_empty():
     assert _sponsor_type({"LeadSponsorClass": "", "LeadSponsor": None}) == "Other"
 
 
+# --- Regression tests from the user-audit of over-labelled Government ---
+
+def test_nci_stays_government():
+    """NCI is genuinely a federal research agency."""
+    row = {"LeadSponsorClass": "NIH", "LeadSponsor": "National Cancer Institute (NCI)"}
+    assert _sponsor_type(row) == "Government"
+
+
+def test_chinese_provincial_hospital_is_academic():
+    """CT.gov OTHER_GOV was misclassifying Chinese hospitals."""
+    for name in [
+        "Henan Cancer Hospital",
+        "Anhui Provincial Hospital",
+        "Zhejiang Provincial People's Hospital",
+        "Institute of Hematology & Blood Diseases Hospital, China",
+    ]:
+        row = {"LeadSponsorClass": "OTHER_GOV", "LeadSponsor": name}
+        assert _sponsor_type(row) == "Academic", f"{name} → {_sponsor_type(row)}"
+
+
+def test_international_medical_centers_academic():
+    """Public teaching hospitals abroad are academic, not government."""
+    for name in [
+        "Sheba Medical Center",
+        "KK Women's and Children's Hospital",
+    ]:
+        row = {"LeadSponsorClass": "OTHER_GOV", "LeadSponsor": name}
+        assert _sponsor_type(row) == "Academic", f"{name} → {_sponsor_type(row)}"
+
+
+def test_research_institute_academic_even_with_federal_prefix():
+    """'Federal Research Institute of Pediatric Hematology…' should be Academic,
+    not Government — the entity functions as an academic research center
+    even though the word 'Federal' appears in the name."""
+    row = {
+        "LeadSponsorClass": "OTHER_GOV",
+        "LeadSponsor": "Federal Research Institute of Pediatric Hematology, Oncology and Immunology",
+    }
+    assert _sponsor_type(row) == "Academic"
+
+
+def test_institute_of_academic():
+    """'Institute of …' patterns should route to Academic."""
+    row = {
+        "LeadSponsorClass": "OTHER_GOV",
+        "LeadSponsor": "Institute of Hematology and Blood Transfusion, Czech Republic",
+    }
+    assert _sponsor_type(row) == "Academic"
+
+
 # ---------------------------------------------------------------------------
 # Product name extraction
 # ---------------------------------------------------------------------------

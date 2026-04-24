@@ -3022,62 +3022,18 @@ with tab_pub:
     df_innov["StartYear"] = df_innov["StartYear"].astype(int)
 
     if not df_innov.empty:
-        # 7a — Product type by start year
-        product_year = (
-            df_innov.groupby(["StartYear", "ProductType"]).size().reset_index(name="Trials")
-        )
-        st.markdown(
-            '<div class="pub-fig-sub" style="margin-top: 0.4rem;">'
-            '<strong style="color: #0b1220;">7a — Product type by start year</strong>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        fig7a = px.bar(
-            product_year, x="StartYear", y="Trials", color="ProductType",
-            barmode="stack", height=420, template="plotly_white",
-            color_discrete_map={
-                "Autologous": NEJM_BLUE,
-                "Allogeneic/Off-the-shelf": NEJM_RED,
-                "In vivo": NEJM_GREEN,
-                "Unclear": "#888888",
-            },
-            category_orders={"ProductType": ["Autologous", "Allogeneic/Off-the-shelf", "In vivo", "Unclear"]},
-            labels={"StartYear": "Start year", "Trials": "Number of trials", "ProductType": "Product type"},
-        )
-        fig7a.update_traces(marker_line_width=0, opacity=1)
-        fig7a.update_layout(
-            **PUB_BASE,
-            margin=dict(l=64, r=36, t=24, b=110),
-            xaxis=dict(
-                tickmode="linear", dtick=1, tickformat="d", showgrid=False,
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title="Start year", title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
-            ),
-            yaxis=dict(
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                ticks="outside", ticklen=6, tickwidth=1.2,
-                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title="Number of trials",
-                title_font=dict(size=_LAB_SZ, color=_AX_COLOR), zeroline=False,
-            ),
-            legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
-                        font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",
-                        borderwidth=0, title=None),
-        )
-        _f7a_first = _first_meaningful_year(product_year, count_col="Trials") or int(product_year["StartYear"].min())
-        _f7a_last = int(product_year["StartYear"].max())
-        fig7a.update_xaxes(range=[_f7a_first - 0.5, _f7a_last + 0.5])
-        st.plotly_chart(fig7a, width='stretch', config=PUB_EXPORT)
-
-        # 7b — Modality by branch
+        # Former 7a (product type by start year) was removed — 7c (modality
+        # by start year) is a strict superset: Modality is derived from
+        # ProductType plus platform-specific text matching, so 7c carries
+        # every signal 7a did plus CAR-NK / CAR-γδ T / CAR-Treg / CAAR-T /
+        # In vivo CAR as distinct categories.
         df_innov["Modality"] = df_innov.apply(_modality, axis=1)
+
+        # 7a — Modality by branch (renumbered from former 7b)
         st.markdown(
             '<div class="pub-fig-sub" style="margin-top: 1rem; '
             'border-top: 1px solid #e5e7eb; padding-top: 0.8rem;">'
-            '<strong style="color: #0b1220;">7b — Cell-therapy modality distribution, by branch</strong>'
+            '<strong style="color: #0b1220;">7a — Cell-therapy modality distribution, by branch</strong>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -3106,11 +3062,11 @@ with tab_pub:
         )
         st.plotly_chart(fig7b, width='stretch', config=PUB_EXPORT)
 
-        # 7c — Modality mix by start year
+        # 7b — Modality mix by start year (renumbered from former 7c)
         st.markdown(
             '<div class="pub-fig-sub" style="margin-top: 1rem; '
             'border-top: 1px solid #e5e7eb; padding-top: 0.8rem;">'
-            '<strong style="color: #0b1220;">7c — Modality mix by start year</strong>'
+            '<strong style="color: #0b1220;">7b — Modality mix by start year</strong>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -3167,8 +3123,13 @@ with tab_pub:
         c4.metric("CAR-γδ T", f"{gdt_n} ({100*gdt_n/total_prod:.0f}%)" if total_prod else "—")
         c5.metric("In vivo CAR", f"{invivo_n} ({100*invivo_n/total_prod:.0f}%)" if total_prod else "—")
 
+        # CSV export keeps both cuts (product type and modality) available
+        # for downstream analysis, even though the figure only renders modality.
+        _product_year = (
+            df_innov.groupby(["StartYear", "ProductType"]).size().reset_index(name="n_product")
+        )
         fig7_csv = pd.merge(
-            product_year.rename(columns={"ProductType": "Category", "Trials": "n_product"}),
+            _product_year.rename(columns={"ProductType": "Category"}),
             df_innov.groupby(["StartYear", "Modality"]).size().reset_index(name="n_modality"),
             left_on="StartYear", right_on="StartYear", how="outer",
         )

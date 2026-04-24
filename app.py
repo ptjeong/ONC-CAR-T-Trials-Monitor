@@ -3775,19 +3775,61 @@ with tab_pub:
             '</div>',
             unsafe_allow_html=True,
         )
+
+        # Small pill toggle — "Absolute" shows trial counts, "% share" shows
+        # a 100%-stacked bar where each year's bar sums to 100% (composition
+        # over time, orthogonal to volume).
+        _c7b_1, _c7b_2 = st.columns([0.30, 0.70])
+        with _c7b_1:
+            _mod_mode = st.pills(
+                "Y-axis mode",
+                options=["Absolute", "% share"],
+                default="Absolute",
+                key="fig7b_mode",
+                label_visibility="collapsed",
+            ) or "Absolute"
+        _is_pct = (_mod_mode == "% share")
+
         mod_year = (
             df_innov.groupby(["StartYear", "Modality"]).size().reset_index(name="Trials")
         )
         present_mods = [m for m in MODALITY_ORDER if m in mod_year["Modality"].unique()]
+        mod_year = mod_year[mod_year["Modality"].isin(present_mods)].copy()
+
+        if _is_pct:
+            # Normalise per year so each year sums to 100%.
+            mod_year["Value"] = (
+                mod_year["Trials"]
+                / mod_year.groupby("StartYear")["Trials"].transform("sum")
+                * 100
+            )
+            _y_col = "Value"
+            _y_title = "% share of trials"
+            _hover_value = "%{y:.1f}%"
+            _y_axis_kwargs = dict(ticksuffix="%", range=[0, 100])
+        else:
+            _y_col = "Trials"
+            _y_title = "Number of trials"
+            _hover_value = "%{y}"
+            _y_axis_kwargs = dict()
+
         fig7c = px.bar(
-            mod_year[mod_year["Modality"].isin(present_mods)],
-            x="StartYear", y="Trials", color="Modality",
+            mod_year,
+            x="StartYear", y=_y_col, color="Modality",
             barmode="stack", height=400, template="plotly_white",
             color_discrete_map=_MODALITY_COLORS,
             category_orders={"Modality": MODALITY_ORDER},
-            labels={"StartYear": "Start year", "Trials": "Number of trials"},
+            labels={"StartYear": "Start year", _y_col: _y_title},
+            custom_data=["Modality", "Trials"],
         )
-        fig7c.update_traces(marker_line_width=0, opacity=1)
+        fig7c.update_traces(
+            marker_line_width=0, opacity=1,
+            hovertemplate=(
+                "%{x}<br><b>%{customdata[0]}</b><br>"
+                + _hover_value
+                + " · %{customdata[1]} trials<extra></extra>"
+            ),
+        )
         fig7c.update_layout(
             **PUB_BASE,
             margin=dict(l=64, r=36, t=24, b=110),
@@ -3803,8 +3845,9 @@ with tab_pub:
                 showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
                 ticks="outside", ticklen=6, tickwidth=1.2,
                 tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
-                title="Number of trials",
+                title=_y_title,
                 title_font=dict(size=_LAB_SZ, color=_AX_COLOR), zeroline=False,
+                **_y_axis_kwargs,
             ),
             legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
                         font=dict(size=11, color=_AX_COLOR), bgcolor="rgba(0,0,0,0)",

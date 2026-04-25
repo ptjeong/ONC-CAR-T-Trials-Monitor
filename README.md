@@ -22,37 +22,56 @@ or decision-support tool.
 
 ## Features
 
-- **Live pull** from ClinicalTrials.gov API v2 or reproducible **frozen snapshots**
-- **Three-tier ontology** — Branch (Heme-onc / Solid-onc / Mixed) → Category (20
-  Tier-2 buckets) → Entity (~70 Tier-3 leaves), with basket-trial handling
-- **Cascading sidebar filter** — selecting Branch narrows Category, which narrows Entity
-- **Target classifier** covering heme antigens (CD19, BCMA, CD20, CD22, CD7, CD30,
-  CD33, CD38, CD70, CD123, GPRC5D, FcRH5, SLAMF7, CD79b, Kappa LC) and solid
-  antigens (GPC3, Claudin 18.2, Mesothelin, GD2, HER2, EGFR, EGFRvIII, B7-H3,
-  PSMA, PSCA, CEA, EpCAM, MUC1, CLDN6, NKG2D-L, ROR1, L1CAM, CD133, AFP, IL13Rα2,
-  HER3, DLL3), plus dual-target combos
+- **Live-first data loading** — ClinicalTrials.gov v2 fetched on first daily
+  visit and cached 24h; reproducibility-pinning expander lets reviewers freeze
+  to any dated snapshot for paper citations
+- **Three-tier ontology** — Branch (Heme-onc / Solid-onc / Mixed / Unknown) →
+  Category (20 Tier-2 buckets) → Entity (~70 Tier-3 leaves), with basket-trial
+  handling and post-classification normalisation
+- **Cascading sidebar filter** — Branch → Category → Entity, plus filters for
+  Phase, Antigen target, Status, Product type, Modality, Country, Age group,
+  Sponsor type, and Classification confidence
+- **Target classifier** covering 22 heme antigens (CD19, BCMA, CD20, CD22, CD5,
+  CD7, CD30, CD33, CD38, CD70, CD123, GPRC5D, FcRH5, SLAMF7, CD79b, Kappa LC,
+  FLT3, CLL1, CD147, CD4, CD1a, IL-5) and 28 solid antigens (GPC3, Claudin 18.2,
+  Mesothelin, GD2, HER2, EGFR, EGFRvIII, B7-H3, PSMA, PSCA, CEA, EpCAM, MUC1,
+  CLDN6, NKG2D-L, ROR1, L1CAM, CD133, AFP, IL13Rα2, HER3, DLL3, CDH17, GUCY2C,
+  GPNMB, FAP, MET, FGFR4), plus 7 dual-target combos
 - **Named-product short-circuit** — approved & late-stage products (tisa-cel,
-  axi-cel, brexu-cel, liso-cel, ide-cel, cilta-cel, obe-cel, eque-cel, zevor-cel,
-  GC012F, ALLO-501/715, …)
-- **Approved-product temporal overlay** on the start-year figure
-- **LLM-assisted classification** via `validate.py` (Claude-powered) — persistent
-  per-trial overrides in `llm_overrides.json` picked up by the pipeline
-- **PRISMA-style flow** documenting study selection
-- **Auto-generated methods section** with live counts and ontology table
-- **Publication figures** (8 figures, oncology-tuned):
-  1. Temporal trends by branch, with approved-product overlay
+  axi-cel, brexu-cel, liso-cel, ide-cel, cilta-cel, obe-cel, relma-cel, eque-cel,
+  zevor-cel, GC012F, CT041 / satri-cel, MT027, HBI0101, ALLO-501/715, …)
+- **Cell-therapy modality classification** — 8 mechanistically distinct buckets
+  (Auto / Allo CAR-T, CAR-NK, CAAR-T, CAR-Treg, CAR-γδ T, In vivo CAR, unclear)
+- **Sponsor classification** with explicit PI detection — Industry / Academic /
+  Government / Other via 8-step hierarchical heuristic
+- **PRISMA-style flow** + auto-generated Methods section that live-derives
+  antigen lists, counts, LLM-curation stats, and ontology table from the live
+  config/code (no hand-maintained drift)
+- **Publication figures** (8 figures, oncology-tuned, NEJM-flat aesthetic):
+  1. Temporal trends by branch with two-panel approval-milestone strip
+     (FDA / EMA / NMPA dots filterable via pill chips)
   2. Phase distribution by branch
-  3. Geographic distribution, stratified by branch
-  4. Enrollment landscape (histogram + phase × branch + forest plot)
+  3. Geographic distribution + global site-level scatter overlay
+  4. Enrollment landscape — 100%-stacked clinical-size buckets +
+     phase × branch + per-trial dot plot
   5. Branch → Category → Entity sunburst
   6. Heme vs solid antigen target panels
-  7. Innovation signals (product type + modality over time)
-  8. Disease × target heatmap (oncology-specific signature figure)
-- **Germany-specific view** (site-level map, city breakdown, enrolling centers)
-- **CSV exports** with `#`-prefixed provenance headers (snapshot date, filter state,
-  row count, API source)
-- **Curation loop** + stratified validation sample + Cohen's κ inter-rater tools
-- Full **Impressum, Datenschutz, and citation block** for academic use
+  7. Innovation signals — product type + modality over time (with absolute /
+     % share toggle)
+  8. Disease × antigen target heatmap (white-for-zero, label-on-shaded-cells)
+- **Geography tab** — single merged world map (country choropleth + open-site
+  dot overlay), per-country drilldown with city scatter, country-zoom in Data tab
+- **CSV exports** with `#`-prefixed provenance headers (snapshot date, filter
+  state, row count, API source, **classifier git SHA**) — readable via
+  `pd.read_csv(path, comment="#")`
+- **Three-layer validation infrastructure**:
+  1. Locked regression benchmark (`tests/benchmark_set.csv` + per-axis F1 floor)
+  2. Independent-LLM cross-validation (`scripts/validate_independent_llm.py` —
+     multi-vendor: Gemini / Groq / OpenAI / Anthropic — Cohen's κ + consensus
+     disagreement bucket)
+  3. Snapshot-to-snapshot diff (`scripts/snapshot_diff.py` — categorises
+     reclassifications as expected / hard-listed / unexplained)
+- Full **Impressum, Datenschutz, and citation block** for German academic use
 
 ---
 
@@ -75,8 +94,13 @@ The app opens at `http://localhost:8501`.
 1. Fork this repository to your GitHub account.
 2. On [share.streamlit.io](https://share.streamlit.io), create a new app from the
    repo with `app.py` as the entry point.
-3. (Optional) Add `ANTHROPIC_API_KEY` under **Secrets** to run the LLM validator
-   from the deployed instance.
+3. (Optional, for the validation harness only) add one or more LLM API keys
+   under **Secrets** so `scripts/validate_independent_llm.py` can run from the
+   deployed instance:
+   - `GEMINI_API_KEY` — free tier at https://aistudio.google.com/apikey
+   - `GROQ_API_KEY`   — free tier at https://console.groq.com
+   - `ANTHROPIC_API_KEY` — for the deprecated `validate.py` (kept for
+     reproducibility of the existing `llm_overrides.json`)
 
 ---
 
@@ -193,32 +217,44 @@ python scripts/snapshot_diff.py snapshots/2026-04-24 snapshots/<new-date>
 
 ## Snapshots
 
-The app can save reproducible snapshots of a live pull:
+The app defaults to live data with a 24h cache. For paper-citable
+reproducibility, the sidebar exposes a **Reproducibility — pin a frozen
+dataset** expander that:
 
-1. Use the sidebar **Save snapshot** button in live mode.
-2. The snapshot (`trials.csv`, `sites.csv`, `prisma.json`, `metadata.json`) is
-   written to `snapshots/<YYYY-MM-DD>/`.
-3. Switch the sidebar source toggle to **Frozen snapshot** to reload any previous
-   snapshot — useful for locking figure data for publication.
+1. Saves the current live data as a dated snapshot
+   (`trials.csv`, `sites.csv`, `prisma.json`, `metadata.json` written to
+   `snapshots/<YYYY-MM-DD>/`).
+2. Pins any previously-saved snapshot for the rest of the session
+   (sidebar status flips to "Pinned to … · n trials"). Click **Unpin** to
+   return to live data.
 
-Publication CSVs include a `#`-prefixed header block with snapshot date, filter
-state, row count, and API source — readable via
-`pd.read_csv(path, comment="#")`.
+Publication CSVs include a `#`-prefixed header block with snapshot date,
+filter state, row count, source URL, and **classifier git SHA** — readable
+via `pd.read_csv(path, comment="#")`. The classifier-SHA tag means a
+reviewer downloading the same snapshot through a future code revision can
+detect classification drift even if the trial set is identical.
 
 ---
 
 ## Repository layout
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `app.py` | Streamlit UI, filters, tabs, figures, exports |
+| `app.py` | Streamlit UI, filters, tabs, figures, exports (~4,800 LOC) |
 | `pipeline.py` | API fetch, tri-level classifier, PRISMA, snapshot I/O |
-| `config.py` | Disease ontology, target antigens, products, exclusions |
-| `validate.py` | Standalone Claude-powered validation tool |
-| `llm_overrides.json` | Generated per-trial classification overrides |
-| `snapshots/<date>/` | Reproducible frozen datasets |
+| `config.py` | Disease ontology, target antigens, named products, exclusions |
+| `llm_overrides.json` | Per-trial classification overrides from LLM curation |
+| `tests/` | Unit tests (`test_classifier.py`), regression benchmark (`benchmark_set.csv` + `test_benchmark.py`), Methods-text drift guards (`test_methods_text.py`) |
+| `scripts/` | `validate_independent_llm.py` (multi-vendor LLM cross-validation), `snapshot_diff.py`, `backfill_site_geo.py` |
+| `snapshots/<YYYY-MM-DD>/` | Reproducible frozen datasets (`trials.csv`, `sites.csv`, `prisma.json`, `metadata.json`) |
+| `reports/` | Validation-loop output (gitignored) |
+| `.github/workflows/` | CI: pytest matrix on Python 3.11 + 3.12 |
+| `.github/ISSUE_TEMPLATE/` | Quarterly approvals review, bug report, classification correction |
+| `validate.py` | **Deprecated** — single-vendor Claude curation that produced `llm_overrides.json`. Kept for historical reproducibility |
 | `requirements.txt` | Pinned Python dependencies |
 | `LICENSE` | MIT |
+| `CITATION.cff` | Citation metadata (Zenodo DOI, version, author) |
+| `SECURITY.md` | Vulnerability reporting policy |
 
 ---
 

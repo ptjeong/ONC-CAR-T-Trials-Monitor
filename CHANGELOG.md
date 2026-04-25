@@ -7,6 +7,153 @@ of minor UI / figure tweaks.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-25 — Independent-LLM validation infrastructure
+
+Headline: a working three-layer validation harness (locked benchmark +
+independent-LLM cross-validation + snapshot diff) plus the classifier and
+documentation improvements that fell out of running it. Eleven real
+classifier improvements landed across four iteration cycles, all
+regression-tested. Benchmark held at 12/12 throughout.
+
+### Added — validation infrastructure
+
+- **Locked regression benchmark** (`tests/test_benchmark.py` +
+  `tests/benchmark_set.csv`). 12 hand-curated pivotal trials covering
+  pivotal CAR-T approvals, allogeneic CD19 (ALLO-501A), dual-target CARs
+  (AUTO3 CD19/CD22), CAR-NK (PCAR-119 + allogeneic CD19 CAR-NK), in-vivo
+  CAR-T (CD20), and a solid-tumour B7-H3 GBM allogeneic. Per-axis F1
+  reported on every test run; regression below per-axis floor fails CI.
+- **Independent-LLM cross-validation** (`scripts/validate_independent_llm.py`,
+  581 LOC). Multi-vendor: Gemini 2.5 Flash Lite (free tier), Llama 3.3
+  70B / 8B Instant via Groq (free tier), gpt-4o, Claude Haiku. Stratified
+  sampling by Branch × DiseaseCategory; per-axis Cohen's κ; consensus-
+  disagreement bucket (highest signal — both reviewers agree on a
+  non-pipeline label). Per-provider rate pacing (Gemini 12 RPM / Groq
+  25 RPM); fail-fast on TPD daily-quota exhaustion. Live re-classification
+  through the current pipeline so post-hoc fixes show up immediately in
+  the metrics. Closed-vocabulary prompt (DiseaseCategory list passed to
+  the LLM) collapsed an early 24% agreement to 70% by removing
+  vocabulary mismatch from the disagreement bucket.
+- **Snapshot-to-snapshot diff** (`scripts/snapshot_diff.py`, 224 LOC).
+  Compares two dated snapshots and categorises every reclassification
+  as `expected (LLM override)` / `hard-listed` / `unexplained`. The
+  `unexplained` bucket surfaces pipeline / config edits with wider
+  blast radius than intended.
+- **Site-level lat/lon** in snapshots via `scripts/backfill_site_geo.py`
+  (one-shot CT.gov re-fetch keyed on NCT IDs from existing snapshot).
+  Pipeline `_extract_sites` now pulls `geoPoint.lat/lon`.
+
+### Added — classifier (from validation iterations)
+
+- **Six new antigens** (independent-LLM-validated, user-confirmed on
+  CT.gov): IL-5 (eosinophilic leukemia), CD1a (T-ALL), CD4 (CMML), FAP
+  (mesothelioma), MET (melanoma / breast — with explicit verb-context
+  disambiguation), FGFR4 (rhabdomyosarcoma).
+- **Per-chunk category-fallback in `_classify_disease`** — multi-disease
+  baskets where conditions mix specific entities ("CLL") with generic
+  family names ("B-cell Lymphoma", "Acute Lymphoblastic Leukemia") now
+  collapse to Basket/Multidisease (was: single-category misclassification).
+  Surfaced by NCT05739227.
+- **Allogenic spelling variant** (single-'e', common in Chinese trial
+  titles) added to `ALLOGENEIC_MARKERS` and the strong-allo-terms list.
+  Surfaced by NCT05739227 falling to the Autologous smart-default.
+- **`liver metastases` / `metastatic liver` keyword** routes to GI
+  category (NCT02862704 / MG7 CAR-T was falling to Unknown).
+- **`Branch=Unknown + Category=Basket/Multidisease` normalisation** —
+  `_normalize_disease_result` post-hook (`pipeline.py:193`) promotes
+  Unknown to Mixed when the category is already Basket/Multidisease.
+  Applied to all `_classify_disease` return paths.
+- **Explicit PI detection** in sponsor classifier — `_looks_like_personal_name`
+  routes investigator-initiated trials (PI-as-sponsor with degree markers
+  like "M.D.", "Ph.D.") to Academic.
+
+### Added — UI
+
+- **Live-first data loading** with 24h cache (`@st.cache_data(ttl=86400)`).
+  Sidebar refactored: live-default, with reproducibility-pinning expander.
+  "Refresh now" / "Save current as snapshot" / "Pin a frozen dataset"
+  exposed via expander.
+- **Geography tab merged map** — single world map combining country
+  choropleth + open-site dot overlay (was: separate maps). Per-country
+  drilldown with city scatter + click-to-filter linkage. World-view
+  scope fixed (was cropping to Europe when Asian/Americas dots off).
+- **Site-level world + per-country maps** — `Scattergeo` overlay; per-
+  country zoom auto-fits via `fitbounds="locations"`; dots colored by
+  Branch with shape variation for greyscale safety.
+- **Data tab consolidation** — single zoomable trial table with text
+  search (NCT / title / sponsor / interventions), country zoom (replaces
+  Countries column with Cities + SiteStatuses), three-button download row
+  (current view / all filtered / site-level).
+- **Fig 1 redesign** — two-panel figure (trial-start trend + regulatory
+  milestone strip), shared x-axis. Per-regulator pill chips (FDA / EMA /
+  NMPA) toggle dot visibility. Distinct colours + shapes per regulator
+  so distinction survives greyscale.
+- **Fig 7b absolute / % share toggle** — pill row above the chart.
+- **Fig 8 white-for-zero treatment** — sparse-matrix idiom; only shaded
+  cells get a label.
+- **Three st.fragment wraps** (Fig 1, Fig 7b) to isolate widget reruns
+  from the rest of the publication-figures tab.
+- **Quarterly approvals-review cadence** — `APPROVED_PRODUCTS_LAST_REVIEWED`
+  surfaced in Fig 1 caption; GitHub issue template at
+  `.github/ISSUE_TEMPLATE/approvals_review.md`.
+- **Overview tab shared branch colour key** at top — replaces per-figure
+  legends so swatches don't repeat four times.
+- **Filter-respect hardening** in captions: hero subtitle leads with
+  "use the sidebar filters"; per-figure captions guard against narrow
+  filters (e.g. "panels render when each has data").
+
+### Changed — performance
+
+- **Vectorised `_modality`** (was row-wise `df.apply` on ~2.5k trials).
+- **Cached `_geo_sites`** in session_state (merge + drop_duplicates on
+  ~10k site rows skipped when NCT filter unchanged).
+- **Cached Germany subset** + `all_open_sites` similarly.
+- **NCTLink baked into `df` once** at load (was per-rerun lambda).
+- **Per-provider pacing** in independent-LLM script (not single shared
+  RPM that throttled fast providers to slow ones).
+
+### Changed — documentation
+
+- **Methods text** now live-derives antigen counts and lists from config
+  (was hand-maintained `(16) heme / (25) solid` while config held 22 / 28).
+  Six regression tests in `tests/test_methods_text.py` lock against
+  future drift.
+- **Methods text describes all four validation layers** (was: only the
+  original 2-round Claude curation).
+- **Sponsor Classification methods section** added (8-step hierarchical
+  heuristic).
+- **Enrollment Analysis methods section** rewritten to describe the
+  100%-stacked clinical-size-bucket Fig 4a (was: prior histogram
+  description).
+- **README rewrite** matching current state — branch list, antigen lists,
+  Fig 4 description, Snapshots section, validation infrastructure
+  section, repository-layout table.
+- **CSV provenance headers now include classifier git SHA** — reviewer
+  downloading the same snapshot through different code revisions can
+  detect classification drift.
+
+### Fixed
+
+- Fig 1 layout / regulator overlay collisions (multiple iterations).
+- Fig 4a legend overlap with x-tick labels.
+- Geography tab "data_source" NameError after sidebar refactor (commit
+  `fc4b8d8`).
+- Various caption-data drift fixes.
+
+### Removed
+
+- Fig 4d forest plot (redundant with the size-bucket bar).
+- Fig 7a product type by year (subsumed by Fig 7b modality).
+- Sidebar Source toggle (replaced by reproducibility-pinning expander).
+
+### Deprecated
+
+- `validate.py` — single-vendor (Claude) curation tool. Generated the
+  current `llm_overrides.json`; kept for historical reproducibility but
+  superseded by `scripts/validate_independent_llm.py` (multi-vendor).
+
+## [Earlier — pre-0.4.0 unreleased work]
+
 ### Added
 - **Deep Dive tab** — two focused sub-views:
   - *By disease*: drill into a Branch / Category / Entity combination. Shows

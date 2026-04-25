@@ -1,0 +1,54 @@
+name: Classification flag consensus detection
+
+# Fires every time a classification-flag issue receives activity (open, edit,
+# new comment, edited comment, label change). The script parses every
+# BEGIN_FLAG_DATA…END_FLAG_DATA block in the issue body + all comments,
+# counts how many distinct GitHub authors agree on the same
+# (axis, proposed_correction) pair, and applies the `consensus-reached`
+# label once the threshold (3 by default) is met.
+#
+# Authors who edit a previous comment are still counted once per axis.
+# Issue authors count as one of the agreeing reviewers.
+#
+# Once `consensus-reached` is applied, @ptjeong is the moderator who
+# approves the override via scripts/promote_consensus_flags.py (manual
+# gate — we do NOT auto-merge classification overrides).
+
+on:
+  issues:
+    types: [opened, edited, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  detect-consensus:
+    # Only run on issues that already carry the classification-flag label.
+    # Saves CI minutes on every other issue type.
+    if: |
+      contains(github.event.issue.labels.*.name, 'classification-flag')
+      || contains(github.event.label.name, 'classification-flag')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml requests
+
+      - name: Detect consensus on flagged axes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO_SLUG: ${{ github.repository }}
+          CONSENSUS_THRESHOLD: "3"
+        run: python scripts/detect_flag_consensus.py

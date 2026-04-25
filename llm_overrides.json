@@ -5368,12 +5368,12 @@
     "branch": "Heme-onc",
     "disease_category": "Heme-onc_other",
     "disease_entity": "Heme-onc_other",
-    "target_category": "Other_or_unknown",
+    "target_category": "IL-5",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "IL-5 (CD125) CAR-T for eosinophilic leukemia."
+    "notes": "IL-5 (CD125) CAR-T for eosinophilic leukemia. \u00b7 target corrected 'Other_or_unknown' \u2192 'IL-5' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT07300683",
@@ -6544,12 +6544,12 @@
     "branch": "Heme-onc",
     "disease_category": "MDS_MPN",
     "disease_entity": "CMML",
-    "target_category": "Other_or_unknown",
+    "target_category": "CD4",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "CD4CAR CAR-T in relapsed/refractory CMML; CD4 not in allow-list."
+    "notes": "CD4CAR CAR-T in relapsed/refractory CMML; CD4 not in allow-list. \u00b7 target corrected 'Other_or_unknown' \u2192 'CD4' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT06097455",
@@ -8344,12 +8344,12 @@
     "branch": "Solid-onc",
     "disease_category": "Sarcoma",
     "disease_entity": "Rhabdomyosarcoma",
-    "target_category": "Other_or_unknown",
+    "target_category": "FGFR4",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "FGFR4 CAR-T for pediatric RMS; FGFR4 not in target list."
+    "notes": "FGFR4 CAR-T for pediatric RMS; FGFR4 not in target list. \u00b7 target corrected 'Other_or_unknown' \u2192 'FGFR4' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT06906380",
@@ -12616,12 +12616,12 @@
     "branch": "Heme-onc",
     "disease_category": "T-cell",
     "disease_entity": "T-ALL",
-    "target_category": "Other_or_unknown",
+    "target_category": "CD1a",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "Anti-CD1a CAR-T for R/R T-ALL/T-LL."
+    "notes": "Anti-CD1a CAR-T for R/R T-ALL/T-LL. \u00b7 target corrected 'Other_or_unknown' \u2192 'CD1a' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT07152223",
@@ -12712,12 +12712,12 @@
     "branch": "Solid-onc",
     "disease_category": "Thoracic",
     "disease_entity": "Mesothelioma",
-    "target_category": "Other_or_unknown",
+    "target_category": "FAP",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "FAP-specific CAR-T for malignant pleural mesothelioma."
+    "notes": "FAP-specific CAR-T for malignant pleural mesothelioma. \u00b7 target corrected 'Other_or_unknown' \u2192 'FAP' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT05302037",

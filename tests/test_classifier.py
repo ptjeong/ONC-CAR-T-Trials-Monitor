@@ -280,6 +280,62 @@ def test_liver_metastases_routes_to_gi():
     assert result["category"] == "GI"
 
 
+def test_antigen_il5_for_eosinophilic_leukemia():
+    """IL-5 added 2026-04-25 from independent-LLM validation (NCT07257640)."""
+    row = _mk(BriefTitle="Anti-IL-5 CAR-T in eosinophilic leukemia",
+              Interventions="anti-il-5 car t cells")
+    assert _assign_target(row) == "IL-5"
+
+
+def test_antigen_cd1a_for_t_all():
+    """CD1a added 2026-04-25 from independent-LLM validation (NCT05745181)."""
+    row = _mk(BriefTitle="CD1a-targeted CAR-T for relapsed T-ALL",
+              Interventions="cd1a car t cells")
+    assert _assign_target(row) == "CD1a"
+
+
+def test_antigen_cd4_for_t_cell_malignancies():
+    """CD4 added 2026-04-25 from independent-LLM validation (NCT06071624)."""
+    row = _mk(BriefTitle="Anti-CD4 CAR-T in CMML",
+              Interventions="anti-cd4 chimeric antigen receptor t cells")
+    assert _assign_target(row) == "CD4"
+
+
+def test_antigen_fap_for_mesothelioma():
+    """FAP added 2026-04-25 from independent-LLM validation (NCT01722149).
+    FAP = fibroblast activation protein."""
+    row = _mk(BriefTitle="FAP-directed CAR-T for malignant pleural mesothelioma",
+              Interventions="fap car t cells")
+    assert _assign_target(row) == "FAP"
+
+
+def test_antigen_met_with_disambiguating_context():
+    """MET added 2026-04-25 from independent-LLM validation (NCT03060356).
+    MET overlaps the English verb so we ONLY match receptor-specific
+    contexts: c-met / cmet / anti-met / met scfv / met receptor etc."""
+    # Positive cases — every disambiguator
+    for txt in [
+        "c-met CAR-T in melanoma",
+        "anti-cMET CAR T cells",
+        "RNA CART-cMET for advanced melanoma",
+        "MET scFv CAR construct in breast carcinoma",
+        "met-positive solid tumours, anti-met therapy",
+    ]:
+        row = _mk(BriefTitle=txt, Interventions=txt)
+        assert _assign_target(row) == "MET", f"failed: {txt!r}"
+    # Negative cases — bare "met" the verb must NOT trigger MET classification
+    row = _mk(BriefTitle="Patients met the inclusion criteria for CD19 CAR-T",
+              Interventions="cd19 car t")
+    assert _assign_target(row) == "CD19"
+
+
+def test_antigen_fgfr4_for_rhabdomyosarcoma():
+    """FGFR4 added 2026-04-25 from independent-LLM validation (NCT06865664)."""
+    row = _mk(BriefTitle="FGFR4 CAR-T for rhabdomyosarcoma",
+              Interventions="fgfr4 car t cells")
+    assert _assign_target(row) == "FGFR4"
+
+
 def test_unknown_branch_with_basket_category_normalised_to_mixed():
     """Unknown branch + Basket/Multidisease category is incoherent — basket
     means the trial spans multiple categories, which is enough information

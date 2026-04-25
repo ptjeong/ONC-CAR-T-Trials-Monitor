@@ -387,6 +387,11 @@ HEME_TARGET_TERMS: dict[str, list[str]] = {
     "FLT3": ["flt3", "anti-flt3", "flt3 positive"],
     "CLL1": ["cll1", "clec12a", "clec 12a"],
     "CD147": ["cd147", "basigin", "emmprin"],
+    # Added 2026-04-25 from independent-LLM validation (Llama 3.3 surfaced
+    # all four; user confirmed each on CT.gov):
+    "CD4":  ["cd4", "anti-cd4"],          # NCT06071624 (CMML), T-cell malignancies
+    "CD1a": ["cd1a", "anti-cd1a"],        # NCT05745181 (T-ALL)
+    "IL-5": ["il-5", "il5", "interleukin-5", "interleukin 5"],  # NCT07257640 (eosinophilic leukemia)
 }
 
 SOLID_TARGET_TERMS: dict[str, list[str]] = {
@@ -415,6 +420,21 @@ SOLID_TARGET_TERMS: dict[str, list[str]] = {
     "CDH17": ["cdh17", "cadherin 17", "cadherin-17"],
     "GUCY2C": ["gucy2c", "guanylyl cyclase 2c"],
     "GPNMB": ["gpnmb", "glycoprotein nmb"],
+    # Added 2026-04-25 from independent-LLM validation (Llama 3.3 surfaced
+    # all three; user confirmed each on CT.gov). Word-boundary regex in
+    # _term_in_text handles 3-letter abbrev safety without padding.
+    "FAP":   ["fap", "fibroblast activation protein"],   # NCT01722149 (mesothelioma)
+    # MET is a 3-letter token that overlaps the English verb "met" — only
+    # use receptor-specific patterns. "c-met"/"cmet" (normaliser strips the
+    # hyphen so both forms collapse to "cmet"), "anti-met", "met receptor",
+    # "met-positive" / "met positive", and CAR-construct phrases like
+    # "met scfv" / "met chimeric antigen receptor" / "met car". All are
+    # unambiguous; they won't fire on "patients met the criteria".
+    "MET":   ["c-met", "cmet", "anti-met", "met receptor", "met-positive",
+              "met positive", "met scfv", "met chimeric antigen receptor",
+              "met car-t", "met car t", "hepatocyte growth factor receptor"],   # NCT03060356
+    "FGFR4": ["fgfr4", "fgfr 4", "anti-fgfr4",
+              "fibroblast growth factor receptor 4"],   # NCT06865664 (rhabdomyosarcoma)
 }
 
 # Dual / multi-target combos (checked pair-wise against detected targets)

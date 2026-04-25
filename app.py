@@ -16,6 +16,8 @@ from pipeline import (
     list_snapshots,
     save_snapshot,
     BASE_URL,
+    _LLM_OVERRIDES,
+    _LLM_EXCLUDED_NCT_IDS,
 )
 from config import (
     ONTOLOGY,
@@ -4038,6 +4040,21 @@ def _build_methods_text(prisma: dict, snapshot_date: str, n_included: int) -> st
     n_hard_excl = prisma.get("n_hard_excluded", "N/A")
     n_indic_excl = prisma.get("n_indication_excluded", "N/A")
 
+    # Live-derive antigen counts + lists from config so the Methods text
+    # never goes stale relative to the actual classifier. Previously these
+    # were hand-maintained and drifted (had "16 heme / 25 solid" while the
+    # tables held 22 / 28 after the 2026-04-25 IL-5/CD1a/CD4/FAP/MET/FGFR4
+    # additions). REVIEW.md risk #1.
+    heme_antigen_list = ", ".join(HEME_TARGET_TERMS.keys())
+    solid_antigen_list = ", ".join(SOLID_TARGET_TERMS.keys())
+    n_heme_antigens = len(HEME_TARGET_TERMS)
+    n_solid_antigens = len(SOLID_TARGET_TERMS)
+    n_dual_combos = len(DUAL_TARGET_LABELS)
+    dual_combo_list = ", ".join(label for _pair, label in DUAL_TARGET_LABELS)
+    n_named_products = len(NAMED_PRODUCT_TARGETS)
+    n_llm_overrides_active = len(_LLM_OVERRIDES) if _LLM_OVERRIDES else 0
+    n_llm_overrides_excluded = len(_LLM_EXCLUDED_NCT_IDS) if _LLM_EXCLUDED_NCT_IDS else 0
+
     # Quantify the LLM curation layer on the current dataset.
     n_llm_override = int(df.get("LLMOverride", pd.Series(dtype=bool)).sum()) if hasattr(df, "get") else 0
 
@@ -4134,13 +4151,9 @@ Target Classification (Priority Order)
 3. Platform detection — CAR-NK, CAAR-T, CAR-Treg, CAR-γδ T (text-level match
    with word-boundary enforcement).
 4. Antigen detection:
-   • Heme-typical (16): CD19, BCMA, CD20, CD22, CD5, CD7, CD30, CD33, CD38, CD70,
-     CD123, GPRC5D, FcRH5, SLAMF7, CD79b, Kappa LC, FLT3, CLL1, CD147.
-   • Solid-typical (25): GPC3, Claudin 18.2, Mesothelin, GD2, HER2, EGFR,
-     EGFRvIII, B7-H3, PSMA, PSCA, CEA, EpCAM, MUC1, CLDN6, NKG2D-L, ROR1,
-     L1CAM, CD133, AFP, IL13Rα2, HER3, DLL3, CDH17, GUCY2C, GPNMB.
-5. Dual-target combos (7 explicit pairs): CD19/CD22, CD19/CD20, CD19/BCMA,
-   BCMA/GPRC5D, BCMA/CD70, HER2/MUC1, GPC3/MSLN.
+   • Heme-typical ({n_heme_antigens}): {heme_antigen_list}.
+   • Solid-typical ({n_solid_antigens}): {solid_antigen_list}.
+5. Dual-target combos ({n_dual_combos} explicit pairs): {dual_combo_list}.
 6. Residual: "CAR-T_unspecified" (CAR mentioned but antigen not in public text)
    or "Other_or_unknown" (no CAR-T confirmation).
 
@@ -4180,37 +4193,61 @@ combining the above signals:
 The column is surfaced in the Data tab and can be used to filter analyses
 to high-confidence rows only.
 
-LLM-Assisted Curation Loop (validate.py + llm_overrides.json)
--------------------------------------------------------------
-The pipeline's keyword layer is supplemented by a structured LLM validation
-loop (Claude Opus). Workflow:
+LLM Curation and Independent-LLM Validation
+-------------------------------------------
+The pipeline's deterministic keyword layer is supplemented by two LLM
+mechanisms — initial curation of low-confidence trials, then ongoing
+independent cross-validation against a different vendor's LLM.
 
-1. The Methods & Appendix tab exports `curation_loop.csv` — every trial with
-   any field in {{Branch=Unknown, DiseaseEntity=Unclassified,
+1. Initial curation (Claude Opus, 2-round, recorded in llm_overrides.json):
+   the Methods & Appendix tab exports `curation_loop.csv` listing every
+   trial with any field in {{Branch=Unknown, DiseaseEntity=Unclassified,
    TargetCategory ∈ [CAR-T_unspecified, Other_or_unknown], ProductType=Unclear}}.
-2. A batched subagent workflow (6 parallel Claude agents, ~130 trials each)
-   receives each batch CSV plus an allowed_values.json listing every valid
-   branch / category / entity / target / product label. Each agent emits a
-   strict-schema JSON array (nct_id, branch, disease_category, disease_entity,
-   target_category, product_type, exclude, exclude_reason, confidence, notes).
-3. A second round re-curates only the trials still low-confidence after the
-   architectural upgrade, with stricter exclusion criteria (PRO studies,
-   registries, bispecifics/mAbs, device trials, out-of-scope indications).
-4. Results are merged into llm_overrides.json. On load the pipeline populates:
+   A batched subagent workflow processed every flagged trial; results merged
+   into llm_overrides.json. The current snapshot has {n_llm_overrides_active}
+   active per-trial overrides plus {n_llm_overrides_excluded} trials flagged
+   for exclusion (PRO studies, registries, bispecifics/mAbs, device trials,
+   out-of-scope indications). At pipeline load the overrides populate two
+   caches:
      _LLM_OVERRIDES         — per-trial classification overrides
                               (confidence ∈ {{high, medium}}, exclude=false).
-     _LLM_EXCLUDED_NCT_IDS  — trials flagged exclude=true with high/medium
-                              confidence; these are dropped at the PRISMA
-                              hard-exclusion stage, the same step as the
+     _LLM_EXCLUDED_NCT_IDS  — trials flagged exclude=true; dropped at the
+                              PRISMA hard-exclusion stage alongside the
                               manually curated hard-exclusion list.
-5. The `LLMOverride` boolean column in the trial dataframe flags which rows
-   were reclassified by the LLM ({n_llm_override} of {n_included} in the current
-   dataset). Users can independently verify any override by inspecting the
-   corresponding entry in llm_overrides.json alongside the ClinicalTrials.gov
-   record.
 
-This hybrid (rules + defaults + LLM) approach avoids brittleness (a pure
-keyword system) and avoids cost/irreproducibility (a pure LLM system):
+2. Independent cross-validation (scripts/validate_independent_llm.py):
+   stratified samples of N trials are sent to a non-Claude LLM (Gemini
+   2.5 Flash Lite, Llama 3.3 70B via Groq, or others) for blind re-
+   classification — choosing a different vendor breaks the Claude-curates-
+   Claude agreement bias of the initial curation. Per-axis Cohen's κ is
+   computed against the live pipeline; the report's "Consensus
+   disagreements" section lists trials where every reviewer agrees on a
+   label different from the pipeline (the highest-signal triage list,
+   since two independent vendors converging on the same non-pipeline
+   label cannot be one model's quirk).
+
+3. Locked regression benchmark (tests/benchmark_set.csv +
+   tests/test_benchmark.py): a hand-curated set of pivotal CAR-T trials
+   with known ground-truth labels across every classification axis.
+   Per-axis F1 floor enforced; CI fails on regression. This catches any
+   classifier change that quietly degrades a previously-correct
+   classification.
+
+4. Snapshot-to-snapshot diff (scripts/snapshot_diff.py): compares two
+   dated snapshots and categorises every reclassification as
+   "expected (LLM override)" / "hard-listed" / "unexplained". The
+   unexplained bucket surfaces pipeline / config edits with wider blast
+   radius than intended.
+
+The `LLMOverride` boolean column in the trial dataframe flags which rows
+were reclassified by the curation LLM ({n_llm_override} of {n_included} in
+the current dataset). Users can independently verify any override by
+inspecting the corresponding entry in llm_overrides.json alongside the
+ClinicalTrials.gov record.
+
+This hybrid (rules + defaults + LLM curation + independent-LLM validation
++ locked benchmark) approach avoids brittleness (a pure keyword system)
+and avoids cost/irreproducibility (a pure LLM system):
 deterministic rules handle the bulk, the calibrated Autologous default
 cleans up cases where information is genuinely absent, and the LLM layer
 resolves the residual ambiguous cases with full reasoning and explicit

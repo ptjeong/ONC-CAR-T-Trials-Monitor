@@ -139,6 +139,23 @@ _PROVIDER_ENV = {
     "groq":      "GROQ_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
 }
+# Per-provider safe-default RPM. Each call to a given provider waits
+# 60/_PROVIDER_RPM[provider] seconds since that provider's last call.
+# Conservative — set ~80% of the documented free-tier RPM ceiling so a
+# minor clock skew doesn't trigger a 429. User can override globally with
+# --rpm (which becomes the cap for every provider).
+#
+# Free-tier ceilings (verify against the live dashboards — these change):
+#   Gemini 2.5 Flash Lite: 15 RPM / 1000 RPD  (https://ai.google.dev/pricing)
+#   Groq llama-3.3-70b:    30 RPM / 1000 RPD  (https://console.groq.com/settings/limits)
+#   OpenAI gpt-4o:         500 RPM (paid)     (https://platform.openai.com/docs/guides/rate-limits)
+#   Anthropic Haiku:       50 RPM (paid)
+_PROVIDER_RPM = {
+    "gemini":    12,    # 80% of 15 RPM free-tier ceiling
+    "groq":      25,    # 80% of 30 RPM free-tier ceiling
+    "openai":    60,    # comfortable for paid tier
+    "anthropic": 30,    # comfortable for paid tier
+}
 
 
 def _detect_reviewers(forced: list[str] | None) -> list[tuple[str, str]]:
@@ -290,9 +307,11 @@ def main() -> int:
                     "(default = use every provider whose API key is set). "
                     "Choices: gemini, openai, groq, anthropic")
     ap.add_argument("--model", help="Override the model for a SINGLE-provider run")
-    ap.add_argument("--rpm", type=int, default=12,
-                    help="Max requests per minute PER provider (default 12 — "
-                         "safe for Gemini free tier's 15 RPM ceiling)")
+    ap.add_argument("--rpm", type=int, default=0,
+                    help="Cap requests per minute (per provider). Default 0 = "
+                         "use per-provider safe defaults (Gemini 12, Groq 25, "
+                         "OpenAI 60, Anthropic 30). Pass an explicit value to "
+                         "force a uniform cap across providers.")
     ap.add_argument("--snapshot", help="Snapshot date (default = latest)")
     ap.add_argument("--out", default="reports/independent_llm_validation.md")
     ap.add_argument("--limit", type=int, help="Hard limit on trials processed (debug)")
@@ -316,9 +335,16 @@ def main() -> int:
         reviewers = [(reviewers[0][0], args.model)]
     elif args.model and len(reviewers) > 1:
         print("[warning] --model ignored — applies to single-provider runs only")
-    min_interval = 60.0 / max(args.rpm, 1)
+
+    # Per-provider RPM ceiling — use safe per-provider default unless --rpm
+    # was passed explicitly. Each provider sleeps only as long as IT needs.
+    provider_rpm = {p: (args.rpm if args.rpm > 0 else _PROVIDER_RPM.get(p, 12))
+                    for p, _ in reviewers}
+    last_call_at: dict[str, float] = {p: 0.0 for p, _ in reviewers}
+
     print(f"Reviewers: {', '.join(p+'/'+m for p, m in reviewers)}")
-    print(f"Pacing ≤ {args.rpm} req/min per provider")
+    print("Pacing per provider: " +
+          ", ".join(f"{p}={provider_rpm[p]} RPM" for p in provider_rpm))
 
     # results[reviewer_name][nct] = {axis: label, ...}
     pipeline_labels: dict[str, dict[str, str]] = {}
@@ -348,14 +374,23 @@ def main() -> int:
         any_success = False
         for provider, model in reviewers:
             tag = f"{provider}/{model}"
+            # Per-provider pacing: only wait if THIS provider has been called
+            # too recently. Lets a fast provider (Groq) hit its 25 RPM ceiling
+            # without being slowed to a slow provider's (Gemini) cadence.
+            min_interval = 60.0 / max(provider_rpm[provider], 1)
+            elapsed = time.monotonic() - last_call_at[provider]
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
             try:
                 result = _call_llm(provider, model, prompt)
             except Exception as e:
+                last_call_at[provider] = time.monotonic()
                 err_text = f"{type(e).__name__}: {str(e)}"[:300]
                 failures[tag].append((nct, err_text))
                 if len(failures[tag]) <= 3:
                     print(f"  [{i}/{len(sample)}] {nct} {tag} — {err_text}")
                 continue
+            last_call_at[provider] = time.monotonic()
             reviewer_results[tag][nct] = {
                 "Branch":          str(result.get("branch", "")),
                 "DiseaseCategory": str(result.get("disease_category", "")),
@@ -363,7 +398,6 @@ def main() -> int:
                 "ProductType":     str(result.get("product_type", "")),
             }
             any_success = True
-            time.sleep(min_interval)
         if not any_success:
             # If no reviewer succeeded, drop pipeline label for clean accounting
             pipeline_labels.pop(nct, None)

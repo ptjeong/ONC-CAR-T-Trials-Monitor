@@ -13,7 +13,7 @@ authors:
       Klinik I für Innere Medizin, Hämatologie und Onkologie, Klinische
       Immunologie und Rheumatologie, Universitätsklinikum Köln
     orcid: null  # TODO: add ORCID if available
-version: "0.4.0"
+version: "0.5.0"
 date-released: "2026-04-25"
 doi: "10.5281/zenodo.19738097"
 repository-code: "https://github.com/ptjeong/ONC-CAR-T-Trials-Monitor"

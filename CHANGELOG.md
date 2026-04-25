@@ -7,6 +7,98 @@ of minor UI / figure tweaks.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-04-25 — Click-to-drill UX + community quality-improvement loop
+
+Headline: every trial table in the app is now click-to-drill, a new
+By-target Deep Dive sub-tab landed, and the full community-flagging
+quality-improvement loop is wired end-to-end (Suggest-correction
+button → GitHub issue → 3-reviewer consensus → moderator approval
+→ `llm_overrides.json` patch).
+
+### Added — UX
+
+- **Shared trial-drilldown helper** (`_render_trial_drilldown`).
+  Single render path for the per-trial detail card used by Data tab,
+  Geography city table, and every Deep Dive sub-tab. Two-column
+  metadata + free-text payload + Suggest-correction expander.
+- **Row-click trial drilldown** wired into:
+  - Data tab (was already there)
+  - Geography city-trials table ("Trials with open <country> sites in <city>")
+  - Deep Dive by-disease focus-cohort trial list
+  - Deep Dive by-product (two-step: product pivot → trials → detail)
+  - Deep Dive by-sponsor (two-step: sponsor → trials → detail)
+  - Deep Dive by-target (two-step: antigen → trials → detail)
+- **Deep Dive by-sponsor improvements**: removed `.head(10)` cap, full
+  scrollable sponsor list, search box (case-insensitive substring on
+  LeadSponsor), select-to-trials drill.
+- **NEW Deep Dive sub-tab — By target.** Two modes: (1) Landscape
+  table of top-25 antigens with trial counts + modality split +
+  disease breadth + top sponsor; (2) Single-antigen focus with 4
+  metric tiles + 2×2 panel grid (top diseases / phase / modality /
+  top sponsors) + click-to-drill trial list + CSV download.
+
+### Added — community classification-flag system
+
+- **Suggest-correction form** on every trial card (`_render_suggest_correction`).
+  Multiselect axes + per-axis correction widget + free-text rationale +
+  link-out to a pre-filled GitHub issue (`?title=…&labels=…&body=…`)
+  containing both a markdown table for humans and a structured YAML
+  block (`<!-- BEGIN_FLAG_DATA … END_FLAG_DATA -->`) for parsers.
+- **Flag-badge column** on every trial table. `_load_active_flags()`
+  hits the public GitHub Issues API (cached 5 min). `_flag_badge()`
+  renders `⚑ N` for open flags or `⚑ consensus (N)` once threshold
+  is met. Failure mode silent-degrades.
+- **Issue template** (`.github/ISSUE_TEMPLATE/classification_flag.md`)
+  documents the BEGIN_FLAG_DATA YAML block schema other reviewers
+  must follow when adding their assessment as a comment.
+- **Consensus-detection GitHub Action**
+  (`.github/workflows/flag_consensus.yml` + `scripts/detect_flag_consensus.py`).
+  Fires on issue/comment events, parses every YAML block in the issue
+  body + comments, applies `consensus-reached` label when ≥3 distinct
+  human authors agree on the same `(axis, proposed_correction)` tuple.
+  Idempotent — re-running on the same issue is a no-op when label state
+  is already correct. Bot-author exclusion. 8 parser unit tests.
+- **Private Moderation tab** (token-gated via `?mod=<MODERATOR_TOKEN>`).
+  Triages consensus-reached issues with Approve/Reject/Defer + rationale,
+  with the actions appending per-axis records to
+  `moderator_validations.json`. When no consensus issues are pending,
+  switches to a stratified-by-branch random-validation mode that grows
+  the moderator-validated ground-truth pool. Stats panel shows per-axis
+  Cohen's κ between pipeline and moderator labels (gated to N≥10).
+- **Promotion script** (`scripts/promote_consensus_flags.py`). Reads
+  `consensus-reached` issues, optionally cross-checks against
+  `moderator_validations.json` (`--require-moderator-approval`), builds
+  a JSON patch against `llm_overrides.json`. Default dry-run; `--apply`
+  mutates the file; `--close-issues` also tags + closes the issue on
+  GitHub. SponsorType corrections are tracked but skipped on apply
+  (separate promotion path needed). 8 unit tests.
+
+### Added — tests
+
+- `tests/test_flag_consensus.py` (8 tests) — YAML parser robustness,
+  threshold enforcement, same-author dedup, bot exclusion, whitespace
+  normalization, disagreement handling.
+- `tests/test_moderator_helpers.py` (7 tests) — `_cohens_kappa`
+  closed-form helper, anchored against the Sim-Wright (2005) BMC
+  textbook example (κ ≈ 0.1304 to ±0.01).
+- `tests/test_promote_consensus.py` (8 tests) — patch insert vs
+  update, unsupported-axis handling, NCT extraction from title/body.
+
+### Added — docs
+
+- **`docs/internal/RHEUM_APP_KICKOFF.md`** — paste-ready brief for
+  porting all 6 features in this release to the rheum sister app.
+  Pinned to commit `f006d8e`. ~5-day sprint estimate, mostly mechanical
+  copy from this repo with rheum-specific tweaks called out (e.g.
+  the antigen exclusion list differs).
+
+### Fixed
+
+- Latent import-time bug: `st.secrets.get(...)` raised
+  `StreamlitSecretNotFoundError` during the `test_methods_text`
+  fixture's app.py import, silently SKIPPING 6 tests. Wrapped in
+  try/except so missing secrets.toml degrades to None.
+
 ## [0.4.0] — 2026-04-25 — Independent-LLM validation infrastructure
 
 Headline: a working three-layer validation harness (locked benchmark +

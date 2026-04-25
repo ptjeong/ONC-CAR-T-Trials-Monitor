@@ -11,15 +11,21 @@ family (OpenAI / Gemini, or a Claude model that wasn't used for curation)
 gives a meaningfully independent second opinion.
 
 Provider auto-detection (in priority order):
-    OPENAI_API_KEY   → gpt-4o (true cross-architecture)
-    GEMINI_API_KEY   → gemini-1.5-pro
-    ANTHROPIC_API_KEY → claude-haiku-4-5 (different model, same vendor;
-                        cheapest fallback, lower independence)
+    GEMINI_API_KEY   → gemini-1.5-flash       ← RECOMMENDED (free tier)
+    OPENAI_API_KEY   → gpt-4o
+    GROQ_API_KEY     → llama-3.3-70b-versatile (free tier, ~30 req/min)
+    ANTHROPIC_API_KEY → claude-haiku-4-5      (same vendor — lower independence)
+
+Free API keys for genuinely-cross-vendor validation:
+  - Gemini: https://aistudio.google.com/apikey  (1,500 req/day free)
+  - Groq:   https://console.groq.com             (free tier, fast)
 
 Usage:
+    export GEMINI_API_KEY=...
+    pip install google-generativeai
     python scripts/validate_independent_llm.py                  # n=100 default
     python scripts/validate_independent_llm.py --n 200 --seed 7
-    python scripts/validate_independent_llm.py --provider openai
+    python scripts/validate_independent_llm.py --provider groq
     python scripts/validate_independent_llm.py --out reports/independent_$(date +%F).md
 """
 from __future__ import annotations
@@ -78,16 +84,28 @@ Trial:
 # ---------------------------------------------------------------------------
 
 def _detect_provider(forced: str | None) -> tuple[str, str]:
-    """Return (provider_name, model_id) — auto or explicit."""
+    """Return (provider_name, model_id) — auto or explicit.
+
+    Priority order favours genuine cross-vendor independence (different
+    company than the one used in validate.py, which is Claude). Anthropic
+    Haiku is the lowest-priority fallback because same-vendor agreement
+    bias can leak in.
+    """
+    if forced == "gemini" or (forced is None and os.getenv("GEMINI_API_KEY")):
+        return "gemini", "gemini-1.5-flash"
     if forced == "openai" or (forced is None and os.getenv("OPENAI_API_KEY")):
         return "openai", "gpt-4o-2024-11-20"
-    if forced == "gemini" or (forced is None and os.getenv("GEMINI_API_KEY")):
-        return "gemini", "gemini-1.5-pro"
+    if forced == "groq" or (forced is None and os.getenv("GROQ_API_KEY")):
+        return "groq", "llama-3.3-70b-versatile"
     if forced == "anthropic" or (forced is None and os.getenv("ANTHROPIC_API_KEY")):
         return "anthropic", "claude-haiku-4-5-20251001"
     raise SystemExit(
-        "No LLM API key found. Set one of OPENAI_API_KEY / GEMINI_API_KEY / "
-        "ANTHROPIC_API_KEY, or pass --provider explicitly."
+        "No LLM API key found. Set one of:\n"
+        "  GEMINI_API_KEY (recommended, free at https://aistudio.google.com/apikey)\n"
+        "  OPENAI_API_KEY\n"
+        "  GROQ_API_KEY (free at https://console.groq.com)\n"
+        "  ANTHROPIC_API_KEY (same vendor — lowest independence)\n"
+        "Or pass --provider explicitly."
     )
 
 
@@ -126,6 +144,16 @@ def _call_llm(provider: str, model: str, prompt: str) -> dict:
         if text.startswith("```"):
             text = text.strip("`").lstrip("json").strip()
         return json.loads(text)
+    if provider == "groq":
+        from groq import Groq  # type: ignore
+        client = Groq()
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return json.loads(resp.choices[0].message.content)
     raise ValueError(f"Unknown provider: {provider}")
 
 

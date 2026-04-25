@@ -18,3 +18,4 @@ car-t-rheumatology-monitor/
 snapshots/*
 !snapshots/2026-04-24/
 *.parquet
+reports/

@@ -1,0 +1,43 @@
+# Locked benchmark set for pipeline classification accuracy.
+# ----------------------------------------------------------
+# Each row is a real CT.gov trial with hand-curated ground truth across every
+# classification axis. Pipeline labels are checked against these on every test
+# run; per-axis F1 is reported and any regression below the floor (see
+# tests/test_benchmark.py) fails CI.
+#
+# Status: STARTER — 11 verified trials covering pivotal approvals, allogeneic
+# constructs, dual-target CARs, CAR-NK, in-vivo CARs, and one solid-tumor
+# (B7-H3 GBM). Designed as a regression baseline: if any of these
+# classifications change in a future PR, the test fires loudly and the
+# reviewer must either fix the pipeline or update the labelled truth with
+# provenance.
+#
+# Verification protocol for new entries:
+#   1. Pull the trial from CT.gov; verify NCT ID matches the cited paper /
+#      approval letter.
+#   2. Set Branch from labelled indication; Category from the disease group;
+#      Entity from the most specific disease leaf (use pipeline's exact label,
+#      e.g. "R/R MM" not "Multiple myeloma" if r/r is in the title).
+#   3. Set Target from the published construct (CD19, BCMA, CD19/CD22 dual,
+#      CAR-NK: CD19 etc.).
+#   4. Set ProductType = Autologous / Allogeneic-Off-the-shelf / In vivo.
+#   5. Set Modality = Auto CAR-T / Allo CAR-T / CAR-NK / CAR-γδ T / In vivo CAR.
+#   6. SponsorType from the LeadSponsor name; leave blank if industry-academic
+#      boundaries are blurry (e.g. NIH-funded but academic-led).
+#
+# Skip semantics:
+#   - Empty cells = "do not check this axis for this trial".
+#   - Trials missing from the loaded snapshot are reported as SKIPPED, not failures.
+NCTId,Branch,DiseaseCategory,DiseaseEntity,TargetCategory,ProductType,Modality,SponsorType,Source
+NCT02348216,Heme-onc,B-NHL,DLBCL,CD19,Autologous,Auto CAR-T,Industry,ZUMA-1 — axi-cel (Yescarta) pivotal r/r DLBCL (Locke Lancet 2019)
+NCT02601313,Heme-onc,B-NHL,MCL,CD19,Autologous,Auto CAR-T,Industry,ZUMA-2 — brexu-cel (Tecartus) for r/r MCL (Wang NEJM 2020)
+NCT03361748,Heme-onc,Multiple myeloma,R/R MM,BCMA,Autologous,Auto CAR-T,Industry,KarMMa — ide-cel (Abecma) pivotal r/r MM (Munshi NEJM 2021)
+NCT03548207,Heme-onc,Multiple myeloma,R/R MM,BCMA,Autologous,Auto CAR-T,Industry,CARTITUDE-1 — cilta-cel (Carvykti) for r/r MM (Berdeja Lancet 2021)
+NCT04404660,Heme-onc,B-ALL,B-ALL,CD19,Autologous,Auto CAR-T,Industry,FELIX — obe-cel (Aucatzyl) for r/r adult B-ALL (Roddie NEJM 2024)
+NCT02631044,Heme-onc,B-NHL,DLBCL,CD19,Autologous,Auto CAR-T,Industry,JCAR017 / liso-cel TRANSCEND-NHL-001 (Juno/Celgene)
+NCT04416984,Heme-onc,Basket/Multidisease,Basket/Multidisease,CD19,Allogeneic/Off-the-shelf,Allo CAR-T,Industry,ALLO-501A ALPHA2 — Allogene allogeneic CD19 for r/r LBCL/CLL/SLL
+NCT03287817,Heme-onc,B-NHL,DLBCL,CD19/CD22 dual,Autologous,Auto CAR-T,Industry,AUTO3 — Autolus dual CD19/CD22 CAR for DLBCL
+NCT02892695,Heme-onc,Basket/Multidisease,Basket/Multidisease,CAR-NK: CD19,Autologous,CAR-NK,Industry,PCAR-119 — PersonGen CAR-NK CD19 bridge therapy
+NCT05645601,Heme-onc,Heme basket,Heme basket,CAR-NK: CD19,Allogeneic/Off-the-shelf,CAR-NK,Academic,Allogeneic CD19 CAR-NK for r/r B-cell malignancies (CN academic)
+NCT07362602,Heme-onc,Basket/Multidisease,Basket/Multidisease,CD20,In vivo,In vivo CAR,Academic,Exploratory in-vivo CAR-T targeting CD20 (PLA 923rd Hospital)
+NCT07386002,Solid-onc,CNS,GBM,B7-H3,Allogeneic/Off-the-shelf,Allo CAR-T,Industry,GLIOMAX — MT027 allogeneic B7-H3 CAR for recurrent glioma

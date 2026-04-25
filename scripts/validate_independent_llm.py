@@ -50,6 +50,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline import list_snapshots, load_snapshot  # noqa: E402
+from config import (  # noqa: E402
+    HEME_CATEGORIES, SOLID_CATEGORIES,
+    BASKET_MULTI_LABEL, HEME_BASKET_LABEL, SOLID_BASKET_LABEL,
+    UNCLASSIFIED_LABEL,
+)
 
 AXES = ["Branch", "DiseaseCategory", "TargetCategory", "ProductType"]
 
@@ -58,23 +63,31 @@ ALLOWED_VALUES = {
     "ProductType": [
         "Autologous", "Allogeneic/Off-the-shelf", "In vivo", "Unclear",
     ],
+    # Closed list of pipeline categories — keeps the LLM from inventing its
+    # own vocabulary ("Lymphoma" vs "B-NHL", "Leukemia" vs "B-ALL"), which
+    # would tank the agreement metric without reflecting any real classifier
+    # disagreement.
+    "DiseaseCategory": (
+        sorted(HEME_CATEGORIES | SOLID_CATEGORIES)
+        + [HEME_BASKET_LABEL, SOLID_BASKET_LABEL, BASKET_MULTI_LABEL,
+           UNCLASSIFIED_LABEL]
+    ),
 }
 
 PROMPT = """You are an independent reviewer of a CAR-T clinical-trial classifier.
 
 For the trial below, return a JSON object with these keys (no prose, no
 markdown fences):
-  branch:           one of {branches}
-  disease_category: short label (e.g., "B-NHL", "Multiple myeloma", "GI",
-                    "CNS", "Pediatric solid", "Basket/Multidisease",
-                    "Heme basket", "Unclassified" — use your best judgment)
+  branch:           EXACTLY one of: {branches}
+  disease_category: EXACTLY one of: {categories}
+                    (use the exact label spelling — do not invent variants)
   target_category:  the antigen/construct (e.g., "CD19", "BCMA", "GPC3",
                     "CD19/CD22 dual", "CAR-NK: CD19", "B7-H3",
                     "Other_or_unknown")
-  product_type:     one of {product_types}
+  product_type:     EXACTLY one of: {product_types}
 
 Be conservative — if the trial text doesn't clearly support a label, use
-"Unclassified" or "Other_or_unknown" rather than guess.
+"Unclassified" / "Unclear" / "Other_or_unknown" rather than guess.
 
 Trial:
   NCT ID:        {nct}
@@ -281,6 +294,7 @@ def main() -> int:
         nct = row["NCTId"]
         prompt = PROMPT.format(
             branches=", ".join(ALLOWED_VALUES["Branch"]),
+            categories=", ".join(ALLOWED_VALUES["DiseaseCategory"]),
             product_types=", ".join(ALLOWED_VALUES["ProductType"]),
             nct=nct,
             title=str(row.get("BriefTitle", ""))[:300],

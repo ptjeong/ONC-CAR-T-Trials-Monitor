@@ -2738,7 +2738,12 @@ with tab_deep:
                     )
                     st.plotly_chart(_sp_fig, width='stretch')
 
-            st.markdown("**Trial list (focus cohort)**")
+            st.markdown(
+                "**Trial list (focus cohort)** "
+                "<span style='color:#64748b; font-weight:400;'>"
+                "— click any row to open the full trial record below</span>",
+                unsafe_allow_html=True,
+            )
             focus_show = focus.copy()
             focus_show["NCTLink"] = focus_show["NCTId"].apply(
                 lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
@@ -2755,10 +2760,13 @@ with tab_deep:
             # Sort first (needs PhaseOrdered), then subset columns for display.
             focus_sorted = focus_show.sort_values(
                 ["PhaseOrdered", "StartYear", "NCTId"], na_position="last",
-            )
-            st.dataframe(
+            ).reset_index(drop=True)
+            _focus_event = st.dataframe(
                 focus_sorted[[c for c in show_cols_focus if c in focus_sorted.columns]],
                 width='stretch', height=420, hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=f"deep_disease_focus_{dd_branch}_{dd_cat}_{dd_ent}",
                 column_config={
                     "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
                     "BriefTitle": st.column_config.TextColumn("Title", width="large"),
@@ -2767,6 +2775,15 @@ with tab_deep:
                     "Countries": st.column_config.TextColumn("Countries", width="medium"),
                 },
             )
+            _focus_rows = (
+                _focus_event.selection.rows
+                if _focus_event and hasattr(_focus_event, "selection") else []
+            )
+            if _focus_rows:
+                _render_trial_drilldown(
+                    focus_sorted.iloc[_focus_rows[0]],
+                    key_suffix=f"deep_disease_{dd_branch}_{dd_cat}_{dd_ent}",
+                )
 
             st.download_button(
                 "Download focus cohort as CSV",
@@ -2831,9 +2848,14 @@ with tab_deep:
                 help=f"{int(pivot.iloc[0]['Trials'])} trials" if not pivot.empty else "",
             )
 
-            st.caption(f"{len(pivot):,} named products · sorted by trial count")
-            st.dataframe(
+            st.caption(
+                f"{len(pivot):,} named products · sorted by trial count · "
+                "click any row to see that product's trial list, then click a trial for full details"
+            )
+            _prod_event = st.dataframe(
                 pivot, width='stretch', height=460, hide_index=True,
+                on_select="rerun", selection_mode="single-row",
+                key="deep_product_pivot",
                 column_config={
                     "ProductName": st.column_config.TextColumn("Product", width="medium"),
                     "Target": st.column_config.TextColumn("Primary target", width="small"),
@@ -2854,6 +2876,54 @@ with tab_deep:
                 file_name="per_product_pipeline.csv",
                 mime="text/csv",
             )
+
+            # --- Drilldown: pick a product → see its trials → click a trial
+            _prod_rows = (
+                _prod_event.selection.rows
+                if _prod_event and hasattr(_prod_event, "selection") else []
+            )
+            if _prod_rows:
+                _picked_product = pivot.iloc[_prod_rows[0]]["ProductName"]
+                _prod_trials = prod_df[prod_df["ProductName"] == _picked_product].copy()
+                _prod_trials["NCTLink"] = _prod_trials["NCTId"].apply(
+                    lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
+                )
+                _prod_trials["Phase"] = _prod_trials["PhaseLabel"].fillna(_prod_trials["Phase"])
+                _prod_trials["OverallStatus"] = _prod_trials["OverallStatus"].map(
+                    STATUS_DISPLAY).fillna(_prod_trials["OverallStatus"])
+                _prod_trials = _prod_trials.sort_values(
+                    ["PhaseOrdered", "StartYear", "NCTId"], na_position="last",
+                ).reset_index(drop=True)
+
+                st.markdown(
+                    f"### Trials for **{_picked_product}** "
+                    f"<span style='color:#64748b; font-weight:400;'>"
+                    f"({len(_prod_trials)} trials · click any row for full details)</span>",
+                    unsafe_allow_html=True,
+                )
+                _prod_trial_cols = [c for c in [
+                    "NCTId", "NCTLink", "BriefTitle",
+                    "Branch", "DiseaseCategory", "DiseaseEntity",
+                    "TargetCategory", "Phase", "OverallStatus",
+                    "StartYear", "Countries", "LeadSponsor",
+                ] if c in _prod_trials.columns]
+                _prod_trial_event = st.dataframe(
+                    _prod_trials[_prod_trial_cols],
+                    width='stretch', height=320, hide_index=True,
+                    on_select="rerun", selection_mode="single-row",
+                    key=f"deep_product_trial_table_{_picked_product}",
+                    column_config=_trial_detail_cols(),
+                )
+                _prod_trial_rows = (
+                    _prod_trial_event.selection.rows
+                    if _prod_trial_event and hasattr(_prod_trial_event, "selection")
+                    else []
+                )
+                if _prod_trial_rows:
+                    _render_trial_drilldown(
+                        _prod_trials.iloc[_prod_trial_rows[0]],
+                        key_suffix=f"deep_product_{_picked_product}",
+                    )
 
     # ===== By-sponsor-type aggregation =====
     with deep_sub_sponsor:

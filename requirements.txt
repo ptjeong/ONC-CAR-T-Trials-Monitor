@@ -7,3 +7,9 @@ pillow==12.2.0
 requests==2.33.1
 anthropic>=0.40.0
 pyarrow==24.0.0
+# Independent-LLM cross-validation harness (scripts/validate_independent_llm.py).
+# Required by the validation loop's non-Anthropic providers — without these,
+# a fresh checkout fails with ModuleNotFoundError when the script picks up
+# a GEMINI_API_KEY or GROQ_API_KEY.
+google-genai>=1.0.0
+groq>=0.20.0

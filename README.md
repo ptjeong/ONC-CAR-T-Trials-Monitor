@@ -140,20 +140,54 @@ Every trial carries a **`ClassificationConfidence`** label
 and LLM-override status. Surfaced in the Data tab and Data-Quality panel
 so users can filter analyses to high-confidence rows only.
 
-### Running the LLM validator
+### Validation infrastructure
+
+Three independent layers of validation ship with the repo:
+
+**1. Locked regression benchmark** — `tests/benchmark_set.csv` plus
+`tests/test_benchmark.py`. Pivotal CAR-T trials with hand-curated ground
+truth across every classification axis. F1 floor enforced per axis; CI
+fails on regression.
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-
-python validate.py                   # review borderline trials (≤30)
-python validate.py --nct NCT0612...  # review one trial
-python validate.py --limit 100       # expand batch
+python -m pytest tests/test_benchmark.py -v -s
 ```
 
-Results merge into `llm_overrides.json` — previously validated trials are
-preserved across runs. For a one-shot full curation of every low-confidence
-trial, see the "Curation loop" section of the Methods & Appendix tab inside
-the app.
+**2. Independent-LLM cross-validation** — `scripts/validate_independent_llm.py`.
+Stratified sample of N trials sent to a non-Claude LLM (Gemini / Groq /
+OpenAI) for blind re-classification, with Cohen's κ + consensus-disagreement
+bucket. Breaks the Claude-curates-Claude agreement bias of the original
+curation tool. Free-tier friendly (`gemini-2.5-flash-lite`,
+`llama-3.1-8b-instant`).
+
+```bash
+export GEMINI_API_KEY=...    # https://aistudio.google.com/apikey (free tier)
+export GROQ_API_KEY=...      # https://console.groq.com           (free tier)
+pip install google-genai groq
+
+python scripts/validate_independent_llm.py --n 100             # both providers if both keys set
+python scripts/validate_independent_llm.py --n 50 --providers groq
+```
+
+Output goes to `reports/independent_llm_validation.md` (gitignored) —
+per-axis κ, plus a `Consensus disagreements` section listing trials where
+every reviewer agrees on a label different from the pipeline. That
+section is the highest-signal triage list.
+
+**3. Snapshot-to-snapshot diff** — `scripts/snapshot_diff.py`. Categorises
+every reclassification between two snapshots as `expected (LLM override)` /
+`hard-listed` / `unexplained`. The `unexplained` bucket catches pipeline /
+config edits with wider blast radius than intended.
+
+```bash
+python scripts/snapshot_diff.py snapshots/2026-04-24 snapshots/<new-date>
+```
+
+#### Legacy single-vendor curation (`validate.py`)
+
+`validate.py` (Claude-only) generated the entries currently in
+`llm_overrides.json`. Kept for historical reproducibility but
+**deprecated** — use the multi-vendor harness above for new curation.
 
 ---
 

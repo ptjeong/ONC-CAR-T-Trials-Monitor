@@ -1,5 +1,27 @@
 #!/usr/bin/env python3
 """
+DEPRECATED — single-vendor (Claude Opus) LLM curation tool.
+
+This script generated the per-trial entries that currently populate
+`llm_overrides.json`. It is kept in the repo for historical reproducibility
+of that file but is no longer the recommended validation path.
+
+Use instead:
+    scripts/validate_independent_llm.py   — multi-vendor cross-validation
+                                            (Gemini + Groq + OpenAI + Anthropic)
+                                            with Cohen's κ, consensus-disagreement
+                                            bucket, and per-provider rate pacing.
+
+Why the new script: independent-vendor LLM (Gemini, Groq) breaks the
+Claude-curates-Claude agreement bias that this single-vendor tool would
+have if re-run today. The new harness also live-classifies through the
+current pipeline (so post-hoc config fixes are visible immediately) and
+locks regressions via tests/test_benchmark.py.
+
+----------------------------------------------------------------------
+Original docstring follows (still functional but superseded):
+----------------------------------------------------------------------
+
 LLM validation loop for oncology CAR-T trial classifications.
 
 Fetches live trial data, identifies borderline classifications, and sends each

@@ -11,10 +11,16 @@ family (OpenAI / Gemini, or a Claude model that wasn't used for curation)
 gives a meaningfully independent second opinion.
 
 Provider auto-detection (in priority order):
-    GEMINI_API_KEY   → gemini-2.0-flash       ← RECOMMENDED (free tier)
+    GEMINI_API_KEY   → gemini-2.5-flash-lite  ← RECOMMENDED (current free tier)
     OPENAI_API_KEY   → gpt-4o
     GROQ_API_KEY     → llama-3.3-70b-versatile (free tier, ~30 req/min)
     ANTHROPIC_API_KEY → claude-haiku-4-5      (same vendor — lower independence)
+
+Note on Gemini free tier: Google has progressively restricted which models
+are available without billing. As of 2026, gemini-2.5-flash-lite is the
+permissive free-tier default (15 RPM / 1000 RPD); gemini-2.5-flash and
+gemini-2.0-flash often require billing for new keys. Pass --model to
+override if your account has access to a different one.
 
 Free API keys for genuinely-cross-vendor validation:
   - Gemini: https://aistudio.google.com/apikey  (1,500 req/day free)
@@ -92,7 +98,7 @@ def _detect_provider(forced: str | None) -> tuple[str, str]:
     bias can leak in.
     """
     if forced == "gemini" or (forced is None and os.getenv("GEMINI_API_KEY")):
-        return "gemini", "gemini-2.0-flash"
+        return "gemini", "gemini-2.5-flash-lite"
     if forced == "openai" or (forced is None and os.getenv("OPENAI_API_KEY")):
         return "openai", "gpt-4o-2024-11-20"
     if forced == "groq" or (forced is None and os.getenv("GROQ_API_KEY")):
@@ -212,7 +218,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--n", type=int, default=100, help="Sample size (default 100)")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--provider", choices=["openai", "gemini", "anthropic"])
+    ap.add_argument("--provider", choices=["openai", "gemini", "groq", "anthropic"])
+    ap.add_argument("--model", help="Override the auto-selected model id")
+    ap.add_argument("--rpm", type=int, default=12,
+                    help="Max requests per minute (default 12 — safe for "
+                         "Gemini free tier's 15 RPM ceiling)")
     ap.add_argument("--snapshot", help="Snapshot date (default = latest)")
     ap.add_argument("--out", default="reports/independent_llm_validation.md")
     ap.add_argument("--limit", type=int, help="Hard limit on trials processed (debug)")
@@ -231,7 +241,10 @@ def main() -> int:
     print(f"Sampled {len(sample)} trials (seed={args.seed})")
 
     provider, model = _detect_provider(args.provider)
-    print(f"Independent reviewer: {provider} / {model}")
+    if args.model:
+        model = args.model
+    min_interval = 60.0 / max(args.rpm, 1)
+    print(f"Independent reviewer: {provider} / {model}  ·  pacing ≤ {args.rpm} req/min")
 
     pipeline_labels: dict[str, dict[str, str]] = {}
     independent_labels: dict[str, dict[str, str]] = {}
@@ -275,7 +288,9 @@ def main() -> int:
         }
         if i % 10 == 0:
             print(f"  [{i}/{len(sample)}] processed")
-        time.sleep(0.1)  # be polite
+        # Pace requests to stay under the provider's RPM ceiling
+        # (Gemini free tier = 15 RPM; default --rpm 12 leaves headroom).
+        time.sleep(min_interval)
 
     # Compute κ + agreement per axis.
     metrics = {}

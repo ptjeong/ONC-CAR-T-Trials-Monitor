@@ -11,7 +11,7 @@ family (OpenAI / Gemini, or a Claude model that wasn't used for curation)
 gives a meaningfully independent second opinion.
 
 Provider auto-detection (in priority order):
-    GEMINI_API_KEY   → gemini-1.5-flash       ← RECOMMENDED (free tier)
+    GEMINI_API_KEY   → gemini-2.0-flash       ← RECOMMENDED (free tier)
     OPENAI_API_KEY   → gpt-4o
     GROQ_API_KEY     → llama-3.3-70b-versatile (free tier, ~30 req/min)
     ANTHROPIC_API_KEY → claude-haiku-4-5      (same vendor — lower independence)
@@ -22,7 +22,7 @@ Free API keys for genuinely-cross-vendor validation:
 
 Usage:
     export GEMINI_API_KEY=...
-    pip install google-generativeai
+    pip install google-genai            # NOTE: new package, not "google-generativeai"
     python scripts/validate_independent_llm.py                  # n=100 default
     python scripts/validate_independent_llm.py --n 200 --seed 7
     python scripts/validate_independent_llm.py --provider groq
@@ -92,7 +92,7 @@ def _detect_provider(forced: str | None) -> tuple[str, str]:
     bias can leak in.
     """
     if forced == "gemini" or (forced is None and os.getenv("GEMINI_API_KEY")):
-        return "gemini", "gemini-1.5-flash"
+        return "gemini", "gemini-2.0-flash"
     if forced == "openai" or (forced is None and os.getenv("OPENAI_API_KEY")):
         return "openai", "gpt-4o-2024-11-20"
     if forced == "groq" or (forced is None and os.getenv("GROQ_API_KEY")):
@@ -123,12 +123,18 @@ def _call_llm(provider: str, model: str, prompt: str) -> dict:
         )
         return json.loads(resp.choices[0].message.content)
     if provider == "gemini":
-        import google.generativeai as genai  # type: ignore
-        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-        m = genai.GenerativeModel(model)
-        resp = m.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json", "temperature": 0},
+        # New SDK (`google-genai`) — the old `google-generativeai` is deprecated
+        # and its model registry no longer resolves modern Gemini IDs.
+        from google import genai  # type: ignore
+        from google.genai import types  # type: ignore
+        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        resp = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0,
+            ),
         )
         return json.loads(resp.text)
     if provider == "anthropic":

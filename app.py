@@ -2244,7 +2244,12 @@ with tab_geo:
                 selected_idx = city_event.selection.rows[0]
                 selected_city = country_city_counts.iloc[selected_idx]["City"]
 
-                st.markdown(f"### Trials with open {selected_country} sites in {selected_city}")
+                st.markdown(
+                    f"### Trials with open {selected_country} sites in {selected_city} "
+                    "<span style='color:#64748b; font-weight:400;'>"
+                    "— click any row to open the full trial record below</span>",
+                    unsafe_allow_html=True,
+                )
 
                 city_nct_ids = (
                     country_open_sites.loc[
@@ -2266,9 +2271,12 @@ with tab_geo:
                         "OverallStatus", "LeadSponsor",
                         "Cities", "SiteStatuses",
                     ] if c in city_trial_view.columns]
-                    st.dataframe(
+                    _city_trial_event = st.dataframe(
                         city_trial_view[_cols],
                         width='stretch', height=320, hide_index=True,
+                        on_select="rerun",
+                        selection_mode="single-row",
+                        key=f"city_trial_table_{selected_country}_{selected_city}",
                         column_config={
                             "NCTId": st.column_config.TextColumn("NCT ID"),
                             "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
@@ -2285,6 +2293,31 @@ with tab_geo:
                             "SiteStatuses": st.column_config.TextColumn("Site status", width="medium"),
                         },
                     )
+
+                    # Row-click drilldown — same shared helper used by Data tab
+                    # and Deep Dive sub-tabs. Look up the full record in df_filt
+                    # (which has Modality, AgeGroup, ClassificationConfidence,
+                    # BriefSummary, etc.) since country_study_view is a subset.
+                    _selected_trial_rows = (
+                        _city_trial_event.selection.rows
+                        if _city_trial_event and hasattr(_city_trial_event, "selection")
+                        else []
+                    )
+                    if _selected_trial_rows:
+                        _sel_nct = city_trial_view.iloc[_selected_trial_rows[0]]["NCTId"]
+                        _full_rec = df_filt[df_filt["NCTId"] == _sel_nct]
+                        if not _full_rec.empty:
+                            _render_trial_drilldown(
+                                _full_rec.iloc[0],
+                                key_suffix=f"geo_city_{selected_country}_{selected_city}",
+                            )
+                        else:
+                            # Fallback: use the country_study_view row if df_filt
+                            # doesn't have it (unlikely but defensive).
+                            _render_trial_drilldown(
+                                city_trial_view.iloc[_selected_trial_rows[0]],
+                                key_suffix=f"geo_city_{selected_country}_{selected_city}",
+                            )
             else:
                 st.caption("Select a city row in the table to open the related trial list below.")
 

@@ -58,6 +58,26 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+def _resolve_classifier_git_sha() -> str:
+    """Return the short git SHA of the deployed classifier code, for
+    embedding in CSV provenance headers. A reviewer downloading a CSV
+    later can join (snapshot date, classifier SHA) to reproduce the
+    classification deterministically. Falls back to "dev" outside a
+    git checkout."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL,
+        ).decode().strip() or "dev"
+    except Exception:
+        return "dev"
+
+
+CLASSIFIER_GIT_SHA = _resolve_classifier_git_sha()
+
+
 STATUS_OPTIONS = [
     "RECRUITING",
     "NOT_YET_RECRUITING",
@@ -1123,6 +1143,12 @@ def _csv_with_provenance(
             f"# Data source: ClinicalTrials.gov API v2 — live fetch (cached 24h, pulled on {snap})"
         )
     lines.append(f"# Source URL: {BASE_URL}")
+    # Classifier git SHA — lets a reviewer downloading this CSV pin the
+    # exact pipeline version that produced the labels. Without this,
+    # downloading the same snapshot through two different code revisions
+    # could produce different classifications and the CSV is
+    # indistinguishable.
+    lines.append(f"# Classifier code: ptjeong/ONC-CAR-T-Trials-Monitor @ {CLASSIFIER_GIT_SHA}")
 
     if include_filters:
         def _fmt(sel, opts) -> str:

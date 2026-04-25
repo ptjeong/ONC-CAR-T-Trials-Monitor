@@ -149,10 +149,17 @@ _PROVIDER_ENV = {
 # --rpm (which becomes the cap for every provider).
 #
 # Free-tier ceilings (verify against the live dashboards — these change):
-#   Gemini 2.5 Flash Lite: 15 RPM / 1000 RPD  (https://ai.google.dev/pricing)
-#   Groq llama-3.3-70b:    30 RPM / 1000 RPD  (https://console.groq.com/settings/limits)
-#   OpenAI gpt-4o:         500 RPM (paid)     (https://platform.openai.com/docs/guides/rate-limits)
-#   Anthropic Haiku:       50 RPM (paid)
+#   Gemini 2.5 Flash Lite:    15 RPM /  1,000 RPD                  (https://ai.google.dev/pricing)
+#   Groq llama-3.3-70b:       30 RPM /  1,000 RPD / 100,000 TPD    (https://console.groq.com/settings/limits)
+#   Groq llama-3.1-8b-instant:30 RPM / 14,400 RPD / 500,000 TPD    (5x more headroom, lower quality)
+#   OpenAI gpt-4o:            500 RPM (paid)                       (https://platform.openai.com/docs/guides/rate-limits)
+#   Anthropic Haiku:          50 RPM (paid)
+#
+# IMPORTANT: Groq's binding constraint at scale is TPD (tokens per day),
+# not RPM. Each trial-classification call consumes ~600-800 tokens, so the
+# 100k TPD on llama-3.3-70b caps you at ~140 calls/day. For sustained
+# n=200+ runs use --model llama-3.1-8b-instant (500k TPD = ~700 calls/day)
+# or rotate providers (Gemini still has 1k RPD, Groq 8b instant has 14k).
 _PROVIDER_RPM = {
     "gemini":    12,    # 80% of 15 RPM free-tier ceiling
     "groq":      25,    # 80% of 30 RPM free-tier ceiling
@@ -344,6 +351,7 @@ def main() -> int:
     provider_rpm = {p: (args.rpm if args.rpm > 0 else _PROVIDER_RPM.get(p, 12))
                     for p, _ in reviewers}
     last_call_at: dict[str, float] = {p: 0.0 for p, _ in reviewers}
+    quota_exhausted: dict[str, bool] = {f"{p}/{m}": False for p, m in reviewers}
 
     print(f"Reviewers: {', '.join(p+'/'+m for p, m in reviewers)}")
     print("Pacing per provider: " +
@@ -377,6 +385,10 @@ def main() -> int:
         any_success = False
         for provider, model in reviewers:
             tag = f"{provider}/{model}"
+            if quota_exhausted.get(tag):
+                # Already hit a daily-quota wall on this provider — don't
+                # bother burning more wall-clock time on doomed retries.
+                continue
             # Per-provider pacing: only wait if THIS provider has been called
             # too recently. Lets a fast provider (Groq) hit its 25 RPM ceiling
             # without being slowed to a slow provider's (Gemini) cadence.
@@ -390,7 +402,19 @@ def main() -> int:
                 last_call_at[provider] = time.monotonic()
                 err_text = f"{type(e).__name__}: {str(e)}"[:300]
                 failures[tag].append((nct, err_text))
-                if len(failures[tag]) <= 3:
+                # Detect daily-quota exhaustion and stop hammering this
+                # provider. "tokens per day" / "RESOURCE_EXHAUSTED" / 429s
+                # with multi-minute wait times all signal "wait for reset".
+                lower = str(e).lower()
+                if (("tokens per day" in lower or "tpd" in lower
+                        or "resource_exhausted" in lower
+                        or "quota" in lower)
+                        and "429" in lower):
+                    quota_exhausted[tag] = True
+                    print(f"  [{i}/{len(sample)}] {nct} {tag} — DAILY QUOTA "
+                          f"EXHAUSTED. Skipping remaining {tag} calls. "
+                          f"Wait for reset or use a different provider/model.")
+                elif len(failures[tag]) <= 3:
                     print(f"  [{i}/{len(sample)}] {nct} {tag} — {err_text}")
                 continue
             last_call_at[provider] = time.monotonic()
@@ -406,6 +430,13 @@ def main() -> int:
             pipeline_labels.pop(nct, None)
         if i % 10 == 0:
             print(f"  [{i}/{len(sample)}] processed")
+        # If every reviewer has hit its daily quota wall, stop early — no
+        # point iterating through the rest of the sample.
+        if all(quota_exhausted.values()):
+            print(f"\nAll reviewers quota-exhausted at trial {i}/{len(sample)}. "
+                  f"Stopping early — re-run after daily reset, or pass a "
+                  f"different --providers / --model.")
+            break
 
     # ------ Per-reviewer metrics ------
     per_reviewer_metrics: dict[str, dict[str, dict]] = {}

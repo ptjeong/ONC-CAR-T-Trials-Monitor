@@ -5,12 +5,17 @@
 # run; per-axis F1 is reported and any regression below the floor (see
 # tests/test_benchmark.py) fails CI.
 #
-# Status: STARTER — 11 verified trials covering pivotal approvals, allogeneic
-# constructs, dual-target CARs, CAR-NK, in-vivo CARs, and one solid-tumor
-# (B7-H3 GBM). Designed as a regression baseline: if any of these
-# classifications change in a future PR, the test fires loudly and the
-# reviewer must either fix the pipeline or update the labelled truth with
-# provenance.
+# Status: 25 trials. 12 heme + 13 solid covering pivotal approvals,
+# allogeneic constructs, dual-target CARs, CAR-NK (auto + allo), in-vivo
+# CARs, and the major solid-tumour antigen / category combinations
+# (CD70 GBM, EGFR/EGFRvIII GBM, B7-H3 across PDAC + GBM + ovarian +
+# pediatric basket, GD2 across pediatric solid + lung, GPC3 HCC,
+# Claudin 18.2 gastric/GEJ, mesothelin in mesothelioma + ovarian,
+# GPNMB sarcoma, HER2 sarcoma).
+#
+# Designed as a regression baseline: if any of these classifications
+# change in a future PR, the test fires loudly and the reviewer must
+# either fix the pipeline or update the labelled truth with provenance.
 #
 # Verification protocol for new entries:
 #   1. Pull the trial from CT.gov; verify NCT ID matches the cited paper /
@@ -41,3 +46,17 @@ NCT02892695,Heme-onc,Basket/Multidisease,Basket/Multidisease,CAR-NK: CD19,Autolo
 NCT05645601,Heme-onc,Heme basket,Heme basket,CAR-NK: CD19,Allogeneic/Off-the-shelf,CAR-NK,Academic,Allogeneic CD19 CAR-NK for r/r B-cell malignancies (CN academic)
 NCT07362602,Heme-onc,Basket/Multidisease,Basket/Multidisease,CD20,In vivo,In vivo CAR,Academic,Exploratory in-vivo CAR-T targeting CD20 (PLA 923rd Hospital)
 NCT07386002,Solid-onc,CNS,GBM,B7-H3,Allogeneic/Off-the-shelf,Allo CAR-T,Industry,GLIOMAX — MT027 allogeneic B7-H3 CAR for recurrent glioma
+# --- Solid-tumour expansion (added 2026-04-25 to close heme-bias of original benchmark) ---
+NCT03283631,Solid-onc,CNS,GBM,EGFR,Autologous,Auto CAR-T,Academic,Intracerebral EGFRvIII CAR-T for recurrent GBM (academic)
+NCT05353530,Solid-onc,CNS,GBM,CD70,Autologous,Auto CAR-T,Academic,IL-8 receptor-modified CD70 CAR-T for CD70+ GBM (academic)
+NCT06461624,Solid-onc,GI,HCC,GPC3,Autologous,Auto CAR-T,Academic,Autologous GPC3 CAR-T (CBG166) for advanced HCC (academic)
+NCT06158139,Solid-onc,GI,Pancreatic,B7-H3,Autologous,Auto CAR-T,Academic,Autologous B7-H3 CAR-T in PDAC (academic)
+NCT06857786,Solid-onc,GI,Gastric/GEJ,Claudin 18.2,Autologous,Auto CAR-T,Academic,CT041 / satri-cel postoperative adjuvant in gastric/GEJ (academic-led)
+NCT06684639,Solid-onc,Pediatric solid,Neuroblastoma,GD2,Autologous,Auto CAR-T,Academic,GD2 CAR-T for neuroblastoma (academic)
+NCT04483778,Solid-onc,Pediatric solid,Pediatric solid,B7-H3,Autologous,Auto CAR-T,Academic,B7-H3 CAR-T immunotherapy for r/r pediatric solid tumours (Seattle Children's basket)
+NCT06646627,Solid-onc,Gyn,Ovarian,B7-H3,Autologous,Auto CAR-T,Academic,Autologous B7-H3 CAR-T in platinum-resistant recurrent ovarian (academic)
+NCT03799913,Solid-onc,Gyn,Ovarian,Mesothelin,Autologous,Auto CAR-T,Academic,MESO-CAR T cells for r/r ovarian cancer (academic)
+NCT06726564,Solid-onc,Thoracic,Mesothelioma,Mesothelin,Autologous,Auto CAR-T,Industry,MT027 in pleural malignant tumors (industry)
+NCT05620342,Solid-onc,Thoracic,NSCLC,GD2,Autologous,Auto CAR-T,Academic,Autologous GD2 CAR-T for NSCLC (academic)
+NCT06789081,Solid-onc,Sarcoma,Soft tissue sarcoma,GPNMB,Autologous,Auto CAR-T,Academic,GPNMB CAR-T (GCAR1) for soft-tissue sarcoma (academic)
+NCT00902044,Solid-onc,Sarcoma,Sarcoma,HER2,Autologous,Auto CAR-T,Academic,HER2 CAR-T in advanced sarcoma (Baylor / academic)

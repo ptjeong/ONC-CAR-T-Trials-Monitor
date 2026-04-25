@@ -251,8 +251,14 @@ def main() -> int:
         try:
             result = _call_llm(provider, model, prompt)
         except Exception as e:
-            failures.append((nct, str(e)[:120]))
-            print(f"  [{i}/{len(sample)}] {nct} — ERROR: {type(e).__name__}")
+            err_text = f"{type(e).__name__}: {str(e)}"[:300]
+            failures.append((nct, err_text))
+            # Print the FULL error on the first 3 failures so the user can
+            # diagnose key / model / quota issues without grepping a report.
+            if len(failures) <= 3:
+                print(f"  [{i}/{len(sample)}] {nct} — {err_text}")
+            else:
+                print(f"  [{i}/{len(sample)}] {nct} — {type(e).__name__} (see report)")
             continue
 
         pipeline_labels[nct] = {

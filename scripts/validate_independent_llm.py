@@ -89,30 +89,46 @@ Trial:
 # Provider abstraction
 # ---------------------------------------------------------------------------
 
-def _detect_provider(forced: str | None) -> tuple[str, str]:
-    """Return (provider_name, model_id) — auto or explicit.
+_DEFAULT_MODELS = {
+    "gemini":    "gemini-2.5-flash-lite",
+    "openai":    "gpt-4o-2024-11-20",
+    "groq":      "llama-3.3-70b-versatile",
+    "anthropic": "claude-haiku-4-5-20251001",
+}
+_PROVIDER_ENV = {
+    "gemini":    "GEMINI_API_KEY",
+    "openai":    "OPENAI_API_KEY",
+    "groq":      "GROQ_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
 
-    Priority order favours genuine cross-vendor independence (different
-    company than the one used in validate.py, which is Claude). Anthropic
-    Haiku is the lowest-priority fallback because same-vendor agreement
-    bias can leak in.
+
+def _detect_reviewers(forced: list[str] | None) -> list[tuple[str, str]]:
+    """Return list of (provider, model) reviewer pairs.
+
+    With multiple reviewers, the report adds a 'consensus disagreement'
+    section: trials where ALL reviewers agree on a label but the pipeline
+    disagrees — the highest-signal bucket because it can't be a single LLM
+    quirk. Two-LLM agreement is much harder to dismiss than one.
+
+    Anthropic stays last (same vendor as validate.py — lowest independence).
     """
-    if forced == "gemini" or (forced is None and os.getenv("GEMINI_API_KEY")):
-        return "gemini", "gemini-2.5-flash-lite"
-    if forced == "openai" or (forced is None and os.getenv("OPENAI_API_KEY")):
-        return "openai", "gpt-4o-2024-11-20"
-    if forced == "groq" or (forced is None and os.getenv("GROQ_API_KEY")):
-        return "groq", "llama-3.3-70b-versatile"
-    if forced == "anthropic" or (forced is None and os.getenv("ANTHROPIC_API_KEY")):
-        return "anthropic", "claude-haiku-4-5-20251001"
-    raise SystemExit(
-        "No LLM API key found. Set one of:\n"
-        "  GEMINI_API_KEY (recommended, free at https://aistudio.google.com/apikey)\n"
-        "  OPENAI_API_KEY\n"
-        "  GROQ_API_KEY (free at https://console.groq.com)\n"
-        "  ANTHROPIC_API_KEY (same vendor — lowest independence)\n"
-        "Or pass --provider explicitly."
-    )
+    available = []
+    for provider in ("gemini", "openai", "groq", "anthropic"):
+        if forced and provider not in forced:
+            continue
+        if os.getenv(_PROVIDER_ENV[provider]):
+            available.append((provider, _DEFAULT_MODELS[provider]))
+    if not available:
+        raise SystemExit(
+            "No LLM API key found. Set one or more of:\n"
+            "  GEMINI_API_KEY (free at https://aistudio.google.com/apikey)\n"
+            "  OPENAI_API_KEY\n"
+            "  GROQ_API_KEY (free at https://console.groq.com)\n"
+            "  ANTHROPIC_API_KEY (same vendor — lowest independence)\n"
+            "Or pass --providers explicitly."
+        )
+    return available
 
 
 def _call_llm(provider: str, model: str, prompt: str) -> dict:
@@ -218,11 +234,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--n", type=int, default=100, help="Sample size (default 100)")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--provider", choices=["openai", "gemini", "groq", "anthropic"])
-    ap.add_argument("--model", help="Override the auto-selected model id")
+    ap.add_argument("--providers", help="Comma-separated provider list "
+                    "(default = use every provider whose API key is set). "
+                    "Choices: gemini, openai, groq, anthropic")
+    ap.add_argument("--model", help="Override the model for a SINGLE-provider run")
     ap.add_argument("--rpm", type=int, default=12,
-                    help="Max requests per minute (default 12 — safe for "
-                         "Gemini free tier's 15 RPM ceiling)")
+                    help="Max requests per minute PER provider (default 12 — "
+                         "safe for Gemini free tier's 15 RPM ceiling)")
     ap.add_argument("--snapshot", help="Snapshot date (default = latest)")
     ap.add_argument("--out", default="reports/independent_llm_validation.md")
     ap.add_argument("--limit", type=int, help="Hard limit on trials processed (debug)")
@@ -240,15 +258,24 @@ def main() -> int:
         sample = sample.head(args.limit)
     print(f"Sampled {len(sample)} trials (seed={args.seed})")
 
-    provider, model = _detect_provider(args.provider)
-    if args.model:
-        model = args.model
+    forced = [p.strip() for p in args.providers.split(",")] if args.providers else None
+    reviewers = _detect_reviewers(forced)
+    if args.model and len(reviewers) == 1:
+        reviewers = [(reviewers[0][0], args.model)]
+    elif args.model and len(reviewers) > 1:
+        print("[warning] --model ignored — applies to single-provider runs only")
     min_interval = 60.0 / max(args.rpm, 1)
-    print(f"Independent reviewer: {provider} / {model}  ·  pacing ≤ {args.rpm} req/min")
+    print(f"Reviewers: {', '.join(p+'/'+m for p, m in reviewers)}")
+    print(f"Pacing ≤ {args.rpm} req/min per provider")
 
+    # results[reviewer_name][nct] = {axis: label, ...}
     pipeline_labels: dict[str, dict[str, str]] = {}
-    independent_labels: dict[str, dict[str, str]] = {}
-    failures = []
+    reviewer_results: dict[str, dict[str, dict[str, str]]] = {
+        f"{p}/{m}": {} for p, m in reviewers
+    }
+    failures: dict[str, list[tuple[str, str]]] = {
+        f"{p}/{m}": [] for p, m in reviewers
+    }
 
     for i, (_, row) in enumerate(sample.iterrows(), 1):
         nct = row["NCTId"]
@@ -261,102 +288,173 @@ def main() -> int:
             interventions=str(row.get("Interventions", ""))[:300],
             summary=str(row.get("BriefSummary", ""))[:600],
         )
-        try:
-            result = _call_llm(provider, model, prompt)
-        except Exception as e:
-            err_text = f"{type(e).__name__}: {str(e)}"[:300]
-            failures.append((nct, err_text))
-            # Print the FULL error on the first 3 failures so the user can
-            # diagnose key / model / quota issues without grepping a report.
-            if len(failures) <= 3:
-                print(f"  [{i}/{len(sample)}] {nct} — {err_text}")
-            else:
-                print(f"  [{i}/{len(sample)}] {nct} — {type(e).__name__} (see report)")
-            continue
-
         pipeline_labels[nct] = {
             "Branch":          str(row.get("Branch", "")),
             "DiseaseCategory": str(row.get("DiseaseCategory", "")),
             "TargetCategory":  str(row.get("TargetCategory", "")),
             "ProductType":     str(row.get("ProductType", "")),
         }
-        independent_labels[nct] = {
-            "Branch":          result.get("branch", ""),
-            "DiseaseCategory": result.get("disease_category", ""),
-            "TargetCategory":  result.get("target_category", ""),
-            "ProductType":     result.get("product_type", ""),
-        }
+        any_success = False
+        for provider, model in reviewers:
+            tag = f"{provider}/{model}"
+            try:
+                result = _call_llm(provider, model, prompt)
+            except Exception as e:
+                err_text = f"{type(e).__name__}: {str(e)}"[:300]
+                failures[tag].append((nct, err_text))
+                if len(failures[tag]) <= 3:
+                    print(f"  [{i}/{len(sample)}] {nct} {tag} — {err_text}")
+                continue
+            reviewer_results[tag][nct] = {
+                "Branch":          str(result.get("branch", "")),
+                "DiseaseCategory": str(result.get("disease_category", "")),
+                "TargetCategory":  str(result.get("target_category", "")),
+                "ProductType":     str(result.get("product_type", "")),
+            }
+            any_success = True
+            time.sleep(min_interval)
+        if not any_success:
+            # If no reviewer succeeded, drop pipeline label for clean accounting
+            pipeline_labels.pop(nct, None)
         if i % 10 == 0:
             print(f"  [{i}/{len(sample)}] processed")
-        # Pace requests to stay under the provider's RPM ceiling
-        # (Gemini free tier = 15 RPM; default --rpm 12 leaves headroom).
-        time.sleep(min_interval)
 
-    # Compute κ + agreement per axis.
-    metrics = {}
-    disagreements = defaultdict(list)
-    for axis in AXES:
-        a, b = [], []
+    # ------ Per-reviewer metrics ------
+    per_reviewer_metrics: dict[str, dict[str, dict]] = {}
+    per_reviewer_disagreements: dict[str, dict[str, list]] = {}
+    for tag, labels in reviewer_results.items():
+        per_reviewer_metrics[tag] = {}
+        per_reviewer_disagreements[tag] = defaultdict(list)
+        for axis in AXES:
+            a, b = [], []
+            for nct in labels:
+                pa = _norm(pipeline_labels.get(nct, {}).get(axis, ""))
+                pb = _norm(labels[nct][axis])
+                a.append(pa); b.append(pb)
+                if pa != pb:
+                    per_reviewer_disagreements[tag][axis].append(
+                        (nct, pipeline_labels[nct][axis], labels[nct][axis])
+                    )
+            n = len(a)
+            agreed = sum(1 for x, y in zip(a, b) if x == y)
+            per_reviewer_metrics[tag][axis] = {
+                "n":         n,
+                "agreed":    agreed,
+                "agreement": agreed / n if n else float("nan"),
+                "kappa":     _cohen_kappa(a, b),
+            }
+
+    # ------ Consensus disagreement (only when ≥2 reviewers) ------
+    # A trial is "consensus disagreement" on an axis when EVERY reviewer
+    # classified it AND they all agree with each other AND they all disagree
+    # with the pipeline. This is the highest-signal bucket — it can't be
+    # explained as one LLM's quirk.
+    consensus_disagreements: dict[str, list] = defaultdict(list)
+    if len(reviewers) >= 2:
         for nct in pipeline_labels:
-            pa = _norm(pipeline_labels[nct][axis])
-            pb = _norm(independent_labels[nct][axis])
-            a.append(pa); b.append(pb)
-            if pa != pb:
-                disagreements[axis].append((nct, pipeline_labels[nct][axis],
-                                            independent_labels[nct][axis]))
-        n = len(a)
-        agreed = sum(1 for x, y in zip(a, b) if x == y)
-        metrics[axis] = {
-            "n":         n,
-            "agreed":    agreed,
-            "agreement": agreed / n if n else float("nan"),
-            "kappa":     _cohen_kappa(a, b),
-        }
+            for axis in AXES:
+                pip = _norm(pipeline_labels[nct][axis])
+                rev_labels = []
+                rev_raw = []
+                for tag in reviewer_results:
+                    if nct not in reviewer_results[tag]:
+                        rev_labels = []  # missing → can't be consensus
+                        break
+                    rev_labels.append(_norm(reviewer_results[tag][nct][axis]))
+                    rev_raw.append(reviewer_results[tag][nct][axis])
+                if not rev_labels:
+                    continue
+                if len(set(rev_labels)) == 1 and rev_labels[0] != pip:
+                    consensus_disagreements[axis].append(
+                        (nct, pipeline_labels[nct][axis], rev_raw[0])
+                    )
 
-    # Report
+    # ------ Report ------
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
+    L = []
+    L += [
         "# Independent-LLM cross-validation report",
         "",
         f"- **Snapshot**: `{snap}`",
         f"- **Sample**: {len(sample)} trials (stratified by Branch × DiseaseCategory, seed={args.seed})",
-        f"- **Independent reviewer**: `{provider}` · `{model}`",
-        f"- **Successful comparisons**: {len(pipeline_labels)}",
-        f"- **API failures**: {len(failures)}",
+        f"- **Reviewers**: {', '.join(reviewer_results.keys())}",
+        f"- **Successful comparisons**: {len(pipeline_labels)} (pipeline rows with ≥1 reviewer success)",
         "",
-        "## Per-axis agreement",
+        "Cohen's κ interpretation: <0.20 slight · 0.20–0.40 fair · "
+        "0.40–0.60 moderate · 0.60–0.80 substantial · ≥0.80 almost perfect.",
         "",
-        "| Axis | n | Agreed | Agreement % | Cohen's κ |",
-        "|---|---:|---:|---:|---:|",
     ]
-    for axis, m in metrics.items():
-        lines.append(
-            f"| {axis} | {m['n']} | {m['agreed']} | "
-            f"{100 * m['agreement']:.1f}% | {m['kappa']:.3f} |"
-        )
-    lines += ["", "Cohen's κ interpretation: <0.20 slight · 0.20–0.40 fair · "
-              "0.40–0.60 moderate · 0.60–0.80 substantial · ≥0.80 almost perfect.",
-              ""]
-    for axis in AXES:
-        if not disagreements[axis]:
-            continue
-        lines += [f"## Disagreements — {axis} ({len(disagreements[axis])} trials)", ""]
-        for nct, pip, ind in disagreements[axis][:50]:  # cap per axis
-            lines.append(f"- `{nct}` · pipeline=`{pip}` · independent=`{ind}`")
-        if len(disagreements[axis]) > 50:
-            lines.append(f"  ... and {len(disagreements[axis]) - 50} more")
-        lines.append("")
-    if failures:
-        lines += ["## API failures", ""]
-        for nct, err in failures:
-            lines.append(f"- `{nct}` — {err}")
 
-    out_path.write_text("\n".join(lines))
+    # Per-reviewer agreement tables
+    for tag, metrics in per_reviewer_metrics.items():
+        L += [f"## Per-reviewer agreement — `{tag}`", ""]
+        n_fail = len(failures[tag])
+        L.append(f"- API failures on this reviewer: **{n_fail}**")
+        L.append("")
+        L += ["| Axis | n | Agreed | Agreement % | Cohen's κ |",
+              "|---|---:|---:|---:|---:|"]
+        for axis, m in metrics.items():
+            L.append(f"| {axis} | {m['n']} | {m['agreed']} | "
+                     f"{100 * m['agreement']:.1f}% | {m['kappa']:.3f} |")
+        L.append("")
+
+    # Consensus disagreements (highest-signal triage list)
+    if len(reviewers) >= 2:
+        n_consensus = sum(len(v) for v in consensus_disagreements.values())
+        L += [
+            f"## Consensus disagreements ({n_consensus} across all axes) — HIGHEST PRIORITY",
+            "",
+            "Trials where every reviewer agrees on a label different from the "
+            "pipeline. These cannot be explained by a single LLM's quirk and "
+            "are the most actionable signal — investigate each before any "
+            "classifier change.",
+            "",
+        ]
+        for axis in AXES:
+            if not consensus_disagreements[axis]:
+                continue
+            L += [f"### {axis} — {len(consensus_disagreements[axis])} trials", ""]
+            for nct, pip, ind in consensus_disagreements[axis][:80]:
+                L.append(f"- `{nct}` · pipeline=`{pip}` · all reviewers=`{ind}`")
+            L.append("")
+
+    # Per-reviewer disagreement detail (lower-priority triage)
+    for tag, ax_dis in per_reviewer_disagreements.items():
+        any_dis = sum(len(v) for v in ax_dis.values())
+        if not any_dis:
+            continue
+        L += [f"## Solo disagreements — `{tag}` ({any_dis} across all axes)", ""]
+        for axis in AXES:
+            if not ax_dis[axis]:
+                continue
+            L += [f"### {axis} — {len(ax_dis[axis])} trials", ""]
+            for nct, pip, ind in ax_dis[axis][:50]:
+                L.append(f"- `{nct}` · pipeline=`{pip}` · {tag}=`{ind}`")
+            if len(ax_dis[axis]) > 50:
+                L.append(f"  ... and {len(ax_dis[axis]) - 50} more")
+            L.append("")
+
+    # Failures
+    for tag, fails in failures.items():
+        if not fails:
+            continue
+        L += [f"## API failures — `{tag}`", ""]
+        for nct, err in fails:
+            L.append(f"- `{nct}` — {err}")
+        L.append("")
+
+    out_path.write_text("\n".join(L))
     print(f"\nReport written to {out_path}")
-    print("\nSummary:")
-    for axis, m in metrics.items():
-        print(f"  {axis:<18} n={m['n']:<4} agreement={100 * m['agreement']:5.1f}%  κ={m['kappa']:.3f}")
+
+    print("\nPer-reviewer summary:")
+    for tag, metrics in per_reviewer_metrics.items():
+        print(f"  {tag}")
+        for axis, m in metrics.items():
+            print(f"    {axis:<18} n={m['n']:<4} agreement={100 * m['agreement']:5.1f}%  κ={m['kappa']:.3f}")
+    if len(reviewers) >= 2:
+        n_consensus = sum(len(v) for v in consensus_disagreements.values())
+        print(f"\nConsensus disagreements: {n_consensus} trial-axis pairs (highest-priority triage)")
     return 0
 
 

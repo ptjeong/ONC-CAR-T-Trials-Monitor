@@ -190,6 +190,22 @@ def _lookup_named_product(text: str, product_dict: dict[str, list[str]]) -> str 
 # Tri-level disease classifier
 # ---------------------------------------------------------------------------
 
+def _normalize_disease_result(result: dict) -> dict:
+    """Post-classification normalisation: catch logically-incoherent
+    combinations regardless of upstream source (rule-based or LLM override).
+
+    Rule: Branch=Unknown + Category=Basket/Multidisease is incoherent — a
+    basket trial spans multiple categories by definition, which means we
+    know enough about its scope to call it Mixed rather than Unknown.
+    Surfaced by the independent-LLM run flagging Llama=Mixed for several
+    LLM-overridden Unknown-basket trials (NCT05437328, NCT05438368, etc.).
+    """
+    if (result.get("branch") == "Unknown"
+            and result.get("category") == BASKET_MULTI_LABEL):
+        result["branch"] = "Mixed"
+    return result
+
+
 def _classify_disease(row: dict) -> dict:
     """Return {'branch', 'category', 'entity', 'entities', 'design'}."""
     nct = _safe_text(row.get("NCTId")).strip()
@@ -203,10 +219,10 @@ def _classify_disease(row: dict) -> dict:
         if not branch:
             branch = CATEGORY_TO_BRANCH.get(category, "Unknown")
         design = "Basket/Multidisease" if entity == BASKET_MULTI_LABEL else "Single disease"
-        return {
+        return _normalize_disease_result({
             "branch": branch, "category": category, "entity": entity,
             "entities": entity, "design": design,
-        }
+        })
 
     conditions_raw = _safe_text(row.get("Conditions"))
     full_text = _row_text(row)
@@ -250,13 +266,13 @@ def _classify_disease(row: dict) -> dict:
 
         # Multi-category (entity-derived OR category-fallback-derived) → Basket.
         if len(categories) >= 2:
-            return {
+            return _normalize_disease_result({
                 "branch": branch,
                 "category": BASKET_MULTI_LABEL,
                 "entity": BASKET_MULTI_LABEL,
                 "entities": "|".join(all_entities),
                 "design": "Basket/Multidisease",
-            }
+            })
         # Single category — prefer the specific entity if we have one.
         primary_category = categories[0]
         if all_entities:
@@ -264,13 +280,13 @@ def _classify_disease(row: dict) -> dict:
         else:
             primary_entity = primary_category  # category-fallback only
         design = "Basket/Multidisease" if len(all_entities) >= 2 else "Single disease"
-        return {
+        return _normalize_disease_result({
             "branch": branch,
             "category": primary_category,
             "entity": primary_entity,
             "entities": "|".join(all_entities),
             "design": design,
-        }
+        })
 
     # 2. No leaf match — category-level fallback.
     cat_matches = _match_terms(full_text, CATEGORY_FALLBACK_TERMS)
@@ -279,47 +295,47 @@ def _classify_disease(row: dict) -> dict:
         branches = sorted({CATEGORY_TO_BRANCH[c] for c in categories})
         branch = branches[0] if len(branches) == 1 else "Mixed"
         if len(categories) >= 2:
-            return {
+            return _normalize_disease_result({
                 "branch": branch,
                 "category": BASKET_MULTI_LABEL,
                 "entity": BASKET_MULTI_LABEL,
                 "entities": "",
                 "design": "Basket/Multidisease",
-            }
+            })
         primary_category = categories[0]
-        return {
+        return _normalize_disease_result({
             "branch": branch,
             "category": primary_category,
             "entity": primary_category,
             "entities": "",
             "design": "Single disease",
-        }
+        })
 
     # 3. Branch-level basket fallbacks.
     if _contains_any(full_text, SOLID_BASKET_TERMS):
-        return {
+        return _normalize_disease_result({
             "branch": "Solid-onc",
             "category": SOLID_BASKET_LABEL,
             "entity": SOLID_BASKET_LABEL,
             "entities": "",
             "design": "Basket/Multidisease",
-        }
+        })
     if _contains_any(full_text, HEME_BASKET_TERMS):
-        return {
+        return _normalize_disease_result({
             "branch": "Heme-onc",
             "category": HEME_BASKET_LABEL,
             "entity": HEME_BASKET_LABEL,
             "entities": "",
             "design": "Basket/Multidisease",
-        }
+        })
 
-    return {
+    return _normalize_disease_result({
         "branch": "Unknown",
         "category": UNCLASSIFIED_LABEL,
         "entity": UNCLASSIFIED_LABEL,
         "entities": "",
         "design": "Single disease",
-    }
+    })
 
 
 # ---------------------------------------------------------------------------

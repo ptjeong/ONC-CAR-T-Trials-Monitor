@@ -104,9 +104,11 @@ markdown fences):
   branch:           EXACTLY one of: {branches}
   disease_category: EXACTLY one of: {categories}
                     (use the exact label spelling — do not invent variants)
-  target_category:  the antigen/construct (e.g., "CD19", "BCMA", "GPC3",
-                    "CD19/CD22 dual", "CAR-NK: CD19", "B7-H3",
-                    "Other_or_unknown")
+  target_category:  the antigen/construct, using the protein name (NOT the
+                    gene symbol) — e.g. "Mesothelin" not "MSLN"; "GPC3" not
+                    "Glypican-3"; "Claudin 18.2" not "CLDN18.2". Other
+                    examples: "CD19", "BCMA", "B7-H3", "CD19/CD22 dual",
+                    "CAR-NK: CD19", "Other_or_unknown".
   product_type:     EXACTLY one of: {product_types}
 
 Be conservative — if the trial text doesn't clearly support a label, use

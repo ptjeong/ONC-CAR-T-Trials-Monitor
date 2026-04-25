@@ -280,6 +280,27 @@ def test_liver_metastases_routes_to_gi():
     assert result["category"] == "GI"
 
 
+def test_unknown_branch_with_basket_category_normalised_to_mixed():
+    """Unknown branch + Basket/Multidisease category is incoherent — basket
+    means the trial spans multiple categories, which is enough information
+    to route to Mixed instead of Unknown. Surfaced by independent-LLM
+    cross-validation (NCT05437328 etc., GD2/CD56 bi-specific basket trials
+    where the LLM curation chose Branch=Unknown but Llama-3.3 said Mixed)."""
+    row = _mk(
+        NCTId="NCT05437328",  # has an LLM override that sets Branch=Unknown
+        BriefTitle="GD2/CD56 Bi-specific CAR-T Cell Therapy",
+        Conditions="Malignant Disease",
+    )
+    result = _classify_disease(row)
+    # The post-classification normaliser must promote Unknown → Mixed when
+    # the category is already Basket/Multidisease.
+    if result["category"] == "Basket/Multidisease":
+        assert result["branch"] != "Unknown", (
+            "Branch=Unknown + Category=Basket/Multidisease is incoherent — "
+            "must be normalised to Mixed."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Exclusion
 # ---------------------------------------------------------------------------

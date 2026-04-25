@@ -49,12 +49,35 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline import list_snapshots, load_snapshot  # noqa: E402
+from pipeline import (  # noqa: E402
+    list_snapshots, load_snapshot,
+    _classify_disease, _assign_target, _assign_product_type,
+)
 from config import (  # noqa: E402
     HEME_CATEGORIES, SOLID_CATEGORIES,
     BASKET_MULTI_LABEL, HEME_BASKET_LABEL, SOLID_BASKET_LABEL,
     UNCLASSIFIED_LABEL,
 )
+
+
+def _live_pipeline_labels(row: dict) -> dict:
+    """Re-classify a snapshot row through the LIVE pipeline.
+
+    Snapshot CSVs freeze the classifier output as of the day they were saved.
+    Without re-running the classifier here, validation would compare the LLM
+    against stale labels — a classifier fix wouldn't move agreement metrics
+    until a fresh snapshot is taken. Re-classifying inline means the script
+    always validates current code.
+    """
+    disease = _classify_disease(row)
+    target = _assign_target(row)
+    ptype, _ = _assign_product_type(row)
+    return {
+        "Branch":          disease["branch"],
+        "DiseaseCategory": disease["category"],
+        "TargetCategory":  target,
+        "ProductType":     ptype,
+    }
 
 AXES = ["Branch", "DiseaseCategory", "TargetCategory", "ProductType"]
 
@@ -204,16 +227,30 @@ def _call_llm(provider: str, model: str, prompt: str) -> dict:
 
 def _stratified_sample(df: pd.DataFrame, n: int, seed: int) -> pd.DataFrame:
     """Sample n trials, stratified by Branch × DiseaseCategory so the cohort
-    represents the dataset's heterogeneity rather than the modal class."""
+    represents the dataset's heterogeneity rather than the modal class.
+
+    Two-pass: (1) take ⌈n/strata⌉ per stratum so every stratum is represented,
+    then (2) top up randomly from the remaining pool until we hit n. The
+    earlier single-pass version capped output at one-per-stratum when n was
+    smaller than the stratum count (e.g., asking for n=50 returned 27 rows
+    when there were 27 strata).
+    """
     rng = random.Random(seed)
-    strata = df.groupby(["Branch", "DiseaseCategory"], observed=True)
-    per_stratum = max(1, n // max(len(strata), 1))
-    rows = []
+    strata = list(df.groupby(["Branch", "DiseaseCategory"], observed=True))
+    per_stratum = max(1, -(-n // max(len(strata), 1)))  # ceiling division
+    picked = set()
     for _, grp in strata:
-        k = min(per_stratum, len(grp))
-        rows.extend(rng.sample(grp.index.tolist(), k))
-    rows = rng.sample(rows, min(len(rows), n))
-    return df.loc[rows].copy()
+        idxs = grp.index.tolist()
+        k = min(per_stratum, len(idxs))
+        picked.update(rng.sample(idxs, k))
+    if len(picked) > n:
+        picked = set(rng.sample(list(picked), n))
+    elif len(picked) < n:
+        # Top up from the unpicked remainder so we actually hit n.
+        remainder = [i for i in df.index if i not in picked]
+        rng.shuffle(remainder)
+        picked.update(remainder[: (n - len(picked))])
+    return df.loc[list(picked)].copy()
 
 
 # ---------------------------------------------------------------------------
@@ -302,12 +339,10 @@ def main() -> int:
             interventions=str(row.get("Interventions", ""))[:300],
             summary=str(row.get("BriefSummary", ""))[:600],
         )
-        pipeline_labels[nct] = {
-            "Branch":          str(row.get("Branch", "")),
-            "DiseaseCategory": str(row.get("DiseaseCategory", "")),
-            "TargetCategory":  str(row.get("TargetCategory", "")),
-            "ProductType":     str(row.get("ProductType", "")),
-        }
+        # Re-classify through LIVE pipeline so the comparison reflects the
+        # current code, not the snapshot's frozen labels (which would mask
+        # any classifier fix shipped after the snapshot was saved).
+        pipeline_labels[nct] = _live_pipeline_labels(row.to_dict())
         any_success = False
         for provider, model in reviewers:
             tag = f"{provider}/{model}"

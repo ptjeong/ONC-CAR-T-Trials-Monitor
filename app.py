@@ -394,14 +394,227 @@ def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
             st.markdown(f"> {record['BriefSummary']}")
 
         # Suggest-correction affordance — populated by _render_suggest_correction
-        # if available; tolerates the helper not yet existing during partial
-        # rollouts (early commits add the helper, later commits add the form).
+        # below. Wrapped in try/except NameError as a defence against the helper
+        # being trimmed out of a future revision; keeps the drilldown rendering
+        # even if the suggest-correction subsystem fails to import.
         try:
             _render_suggest_correction(record, key_suffix=key_suffix)
         except NameError:
-            # Helper not defined yet — silently omit the form. Keeps this
-            # commit self-contained until C7 lands.
             pass
+
+
+# ---------------------------------------------------------------------------
+# Community quality-improvement: Suggest-correction form
+# ---------------------------------------------------------------------------
+# Architecture (per design discussion 2026-04-25):
+#   - Public flags submitted via GitHub Issues API
+#   - Auth handled by GitHub (link-out to a pre-filled issue) — zero auth
+#     code on our side, no tokens stored, GitHub username = identity
+#   - Three-reviewer consensus (configurable) before promotion to llm_overrides
+#   - Moderator-approval gate on top of consensus (Peter only, for now)
+#   - Helper (this function) runs INSIDE _render_trial_drilldown so the
+#     affordance appears on every trial card across the app
+# ---------------------------------------------------------------------------
+
+GITHUB_REPO_SLUG = "ptjeong/ONC-CAR-T-Trials-Monitor"
+
+# Per-axis option lists shown in the form. Restricted to canonical labels
+# already used by the classifier so submitted corrections feed cleanly back
+# into the override schema.
+_FLAG_AXIS_OPTIONS: dict[str, list[str]] = {
+    "Branch":           ["Heme-onc", "Solid-onc", "Mixed", "Unknown"],
+    "DiseaseCategory":  sorted(set(VALID_CATEGORIES)) if (
+        "VALID_CATEGORIES" in dir() and VALID_CATEGORIES
+    ) else [],
+    "DiseaseEntity":    [],   # free text — too many leaves to enumerate cleanly
+    "TargetCategory":   [],   # free text — antigen list is dynamic
+    "ProductType":      ["Autologous", "Allogeneic/Off-the-shelf", "In vivo", "Unclear"],
+    "SponsorType":      ["Industry", "Academic", "Government", "Other"],
+}
+
+
+def _build_flag_issue_url(record, *, axes: list[str], corrections: dict[str, str],
+                            notes: str) -> str:
+    """Construct a GitHub issue URL with title + labels + structured YAML
+    body pre-filled. The user lands on github.com with everything ready;
+    they review and click Submit. Auth is handled by GitHub.
+
+    The body uses an HTML-comment-bracketed YAML block so the
+    consensus-detection GitHub Action can parse it back without needing
+    a custom front-matter convention. Free-form notes appear AFTER the
+    machine-readable block.
+    """
+    import urllib.parse as _up
+
+    nct = record.get("NCTId", "")
+    title_axes = ", ".join(axes) if axes else "general"
+    title = f"[Flag] {nct} — {title_axes}"
+
+    # Machine-readable block first
+    yaml_lines = [
+        "<!-- BEGIN_FLAG_DATA",
+        f"nct_id: {nct}",
+        f"flagged_axes:",
+    ]
+    for axis in axes:
+        pipeline_label = record.get(axis, "")
+        yaml_lines += [
+            f"  - axis: {axis}",
+            f"    pipeline_label: \"{pipeline_label}\"",
+            f"    proposed_correction: \"{corrections.get(axis, '')}\"",
+        ]
+    yaml_lines.append("END_FLAG_DATA -->")
+    yaml_block = "\n".join(yaml_lines)
+
+    body_md = f"""## Trial classification correction
+
+**Trial**: [{nct}](https://clinicaltrials.gov/study/{nct})
+**Title**: {record.get("BriefTitle", "")}
+
+### Current pipeline classification
+| Axis | Current label |
+|---|---|
+"""
+    for axis in axes:
+        body_md += f"| {axis} | `{record.get(axis, '')}` |\n"
+
+    body_md += "\n### Proposed correction\n"
+    body_md += "| Axis | Proposed |\n|---|---|\n"
+    for axis in axes:
+        body_md += f"| {axis} | `{corrections.get(axis, '')}` |\n"
+
+    if notes:
+        body_md += f"\n### Reviewer notes\n\n{notes}\n"
+
+    body_md += f"""
+### Reviewer information
+- **Submitted via**: dashboard at https://onc-car-t-trial-monitor.streamlit.app
+- **GitHub identity**: this issue was created by your GitHub login (visible above)
+
+### Moderator workflow
+1. Reviewers add their own assessment as a comment using the same axis schema.
+2. Once 3 independent reviewers agree on the same proposed correction, the
+   issue gets the `consensus-reached` label automatically.
+3. The moderator (@ptjeong) approves the consensus, which promotes the
+   correction to `llm_overrides.json` via `scripts/promote_consensus_flags.py`.
+
+---
+
+{yaml_block}
+
+<sub>This issue was pre-filled by the dashboard's Suggest-correction
+affordance. See `docs/methods.md` § 4.4 for the validation methodology.</sub>
+"""
+
+    labels = ["classification-flag", "needs-review"]
+    for axis in axes:
+        labels.append(f"axis-{axis}")
+
+    params = {
+        "title": title,
+        "body":  body_md,
+        "labels": ",".join(labels),
+    }
+    return (
+        f"https://github.com/{GITHUB_REPO_SLUG}/issues/new?"
+        + _up.urlencode(params)
+    )
+
+
+def _render_suggest_correction(record, *, key_suffix: str = "") -> None:
+    """Suggest-correction form inside the trial drilldown.
+
+    Renders an expander with a per-axis correction form. On submit,
+    builds a pre-filled GitHub issue URL and surfaces a button that
+    opens it in a new tab. Submission completes on github.com — the
+    user authenticates via GitHub and clicks Submit there.
+
+    Why link-out instead of in-app POST: zero auth code in this app,
+    no PAT to manage, identity verified by GitHub. The "extra click"
+    is also a feature — kills spam at the entry point.
+    """
+    nct = record.get("NCTId", "")
+    if not nct:
+        return  # nothing to flag against
+
+    with st.expander("Suggest a classification correction", expanded=False):
+        st.caption(
+            "If you think the classifier got an axis wrong, propose a correction "
+            "below. Submission opens a pre-filled GitHub issue — you'll log in "
+            "(or sign up) on GitHub and click Submit there. Three independent "
+            "reviewers agreeing on the same correction promotes it to the "
+            "moderator-approval queue."
+        )
+
+        # Axis multiselect — only enumerable axes; free-text fallback for
+        # entity / target where the option space is too wide.
+        _selected_axes = st.multiselect(
+            "Which axis is wrong?",
+            options=list(_FLAG_AXIS_OPTIONS.keys()),
+            key=f"flag_axes_{nct}_{key_suffix}",
+            help="Pick every axis you'd like to suggest a correction on.",
+        )
+
+        corrections: dict[str, str] = {}
+        if _selected_axes:
+            for axis in _selected_axes:
+                _current = record.get(axis, "")
+                _options = _FLAG_AXIS_OPTIONS.get(axis, [])
+                _label = f"{axis} should be (current: `{_current}`)"
+                if _options:
+                    corrections[axis] = st.selectbox(
+                        _label,
+                        options=[""] + _options,
+                        key=f"flag_correction_{axis}_{nct}_{key_suffix}",
+                    )
+                else:
+                    corrections[axis] = st.text_input(
+                        _label,
+                        value="",
+                        key=f"flag_correction_{axis}_{nct}_{key_suffix}",
+                        placeholder="Type the correct label",
+                    )
+
+        notes = st.text_area(
+            "Notes (optional)",
+            value="",
+            key=f"flag_notes_{nct}_{key_suffix}",
+            height=80,
+            placeholder="Briefly explain your reasoning, cite the trial text or a "
+                        "reference if helpful. Visible publicly in the GitHub issue.",
+        )
+
+        ready = bool(_selected_axes) and any(
+            corrections.get(a) for a in _selected_axes
+        )
+
+        if not ready:
+            st.caption(
+                "Pick at least one axis and provide a proposed correction to "
+                "enable the submit button."
+            )
+        else:
+            # Filter to only axes with a non-empty correction
+            _final_axes = [a for a in _selected_axes if corrections.get(a)]
+            _url = _build_flag_issue_url(
+                record,
+                axes=_final_axes,
+                corrections={a: corrections[a] for a in _final_axes},
+                notes=notes,
+            )
+            st.link_button(
+                "Open as GitHub issue ↗",
+                _url,
+                type="primary",
+                help="Opens a pre-filled GitHub issue in a new tab. You'll need a "
+                     "GitHub account (free, fast to register).",
+            )
+            st.caption(
+                "After clicking Submit on GitHub, the issue enters the moderator "
+                "review queue. You can track all open flags at "
+                f"[github.com/{GITHUB_REPO_SLUG}/issues?q=label%3Aclassification-flag]"
+                f"(https://github.com/{GITHUB_REPO_SLUG}/issues?q=label%3Aclassification-flag)."
+            )
 
 
 px.defaults.template = "plotly_white"

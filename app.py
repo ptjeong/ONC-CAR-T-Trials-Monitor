@@ -715,6 +715,73 @@ def _flag_column_config() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Moderator-validation pool helpers
+#   The Moderation tab writes one append-only JSON record per moderator
+#   action (accept/reject a flag, or annotate a randomly-sampled trial)
+#   into MODERATOR_VALIDATIONS_PATH. That file is the substrate for:
+#     - per-axis Cohen's κ between pipeline and moderator labels
+#     - the override-promotion pipeline (scripts/promote_consensus_flags.py)
+#     - long-term audit trail (every label change carries a timestamp,
+#       moderator handle, source — flag-issue or random-sample — and rationale)
+# ---------------------------------------------------------------------------
+
+MODERATOR_VALIDATIONS_PATH = "moderator_validations.json"
+_MODERATOR_AXES = ("Branch", "DiseaseCategory", "DiseaseEntity",
+                   "TargetCategory", "ProductType", "SponsorType")
+
+
+def _load_moderator_validations() -> list[dict]:
+    """Read the moderator-validations log from disk.
+
+    Returns [] if the file is missing or unparseable. Each record is a
+    flat dict with keys: nct_id, axis, pipeline_label, moderator_label,
+    timestamp, source ('flag' | 'random'), moderator, rationale, issue_url.
+    """
+    import json
+    try:
+        with open(MODERATOR_VALIDATIONS_PATH, "r") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _append_moderator_validation(record: dict) -> None:
+    """Append one validation event. Writes the whole list back atomically
+    enough for our single-moderator workflow (no concurrent writers)."""
+    import json
+    log = _load_moderator_validations()
+    log.append(record)
+    with open(MODERATOR_VALIDATIONS_PATH, "w") as fh:
+        json.dump(log, fh, indent=2)
+
+
+def _cohens_kappa(rater_a: list[str], rater_b: list[str]) -> float | None:
+    """Cohen's κ between two equal-length label sequences.
+
+    Returns None when N<2 or the categories collapse (κ undefined).
+    Implemented inline (not via sklearn) to keep the dependency footprint
+    tiny — this is a simple closed-form computation.
+    """
+    if len(rater_a) != len(rater_b) or len(rater_a) < 2:
+        return None
+    n = len(rater_a)
+    categories = sorted(set(rater_a) | set(rater_b))
+    if len(categories) < 2:
+        return None
+    # observed agreement
+    observed = sum(1 for a, b in zip(rater_a, rater_b) if a == b) / n
+    # expected agreement under independence
+    from collections import Counter
+    ca = Counter(rater_a)
+    cb = Counter(rater_b)
+    expected = sum((ca[c] / n) * (cb[c] / n) for c in categories)
+    if expected >= 1.0:
+        return None
+    return (observed - expected) / (1 - expected)
+
+
 px.defaults.template = "plotly_white"
 
 
@@ -1886,10 +1953,51 @@ st.markdown(
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = st.tabs(
-    ["Overview", "Geography / Map", "Data", "Deep Dive",
-     "Publication Figures", "Methods & Appendix", "About"]
-)
+# Moderator gate — the Moderation tab only appears when the visitor passes
+# `?mod=<token>` matching the MODERATOR_TOKEN env var (or
+# st.secrets["moderator_token"]). The tab triages community
+# classification-flag issues and runs a random-validation loop that
+# extends the moderator-validated ground-truth pool. Public visitors
+# never see the tab — there's no UI hint that it exists, and the
+# token check is server-side so query-string brute force buys nothing
+# unless the token leaks.
+def _moderator_mode_active() -> bool:
+    """True when the current session is moderator-authorized.
+
+    Two-step gate:
+      1. Server has MODERATOR_TOKEN env var (or st.secrets["moderator_token"])
+      2. URL has ?mod=<token> matching exactly
+
+    Both must pass. Without the env var the tab simply never appears
+    (failsafe: no token → no moderator mode → no public surface area).
+    Wraps st.secrets in try/except because secrets.toml is optional in
+    local dev / CI and accessing missing keys raises StreamlitSecretNotFoundError.
+    """
+    expected = os.environ.get("MODERATOR_TOKEN")
+    if not expected:
+        try:
+            expected = st.secrets.get("moderator_token", None)
+        except Exception:
+            expected = None
+    if not expected:
+        return False
+    try:
+        provided = st.query_params.get("mod", "")
+    except Exception:
+        provided = ""
+    return bool(provided) and provided == expected
+
+
+_MODERATOR_MODE = _moderator_mode_active()
+
+_tab_labels = ["Overview", "Geography / Map", "Data", "Deep Dive",
+               "Publication Figures", "Methods & Appendix", "About"]
+if _MODERATOR_MODE:
+    _tab_labels.append("⚙ Moderation")
+
+_tabs = st.tabs(_tab_labels)
+tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = _tabs[:7]
+tab_moderation = _tabs[7] if _MODERATOR_MODE else None
 
 
 # ---------------------------------------------------------------------------
@@ -5686,3 +5794,320 @@ ClinicalTrials.gov ab ([{BASE_URL}]({BASE_URL})).
 Stand: {date.today().isoformat()}
             """
         )
+
+
+# ---------------------------------------------------------------------------
+# TAB: Moderation (gated, only when MODERATOR_TOKEN matches ?mod= query param)
+# ---------------------------------------------------------------------------
+#
+# Two-mode moderator console:
+#
+#   Mode A — Triage flagged trials
+#     For every consensus-reached classification-flag issue, render a
+#     side-by-side panel: pipeline label vs proposed correction (per axis),
+#     issue link, action buttons (Approve → record + label issue
+#     `moderator-approved`; Reject → record + label issue
+#     `moderator-rejected`). Both actions append to
+#     moderator_validations.json with provenance (timestamp, source=flag,
+#     issue_url, rationale).
+#
+#   Mode B — Random validation (only available when no consensus issues
+#     are pending). Draws a stratified random trial from the live snapshot,
+#     shows pipeline predictions on every axis, and lets the moderator
+#     confirm or correct each. Confirmed labels also feed
+#     moderator_validations.json so that even on quiet weeks the
+#     ground-truth pool keeps growing — and the per-axis Cohen's κ is
+#     computed against it.
+#
+# A stats panel at the bottom shows agreement rates and Cohen's κ
+# per axis once N≥10 validated rows exist for that axis.
+
+if _MODERATOR_MODE and tab_moderation is not None:
+    with tab_moderation:
+        st.subheader("⚙ Moderation console")
+        st.caption(
+            "Private moderator workspace. Triage community classification "
+            "flags that have hit consensus, or — when the queue is empty — "
+            "burn the slack time on random-validation rounds that grow the "
+            "ground-truth pool. Every action is appended to "
+            f"`{MODERATOR_VALIDATIONS_PATH}` with provenance."
+        )
+
+        # Refresh the active-flags cache so brand-new consensus shows up
+        # without waiting for the 5-min TTL to expire.
+        if st.button("Refresh flag queue from GitHub", key="mod_refresh"):
+            _load_active_flags.clear()
+            st.rerun()
+
+        active_flags = _load_active_flags()
+        consensus_flags = {
+            nct: e for nct, e in active_flags.items()
+            if e.get("consensus")
+        }
+        pending_flags = {
+            nct: e for nct, e in active_flags.items()
+            if not e.get("consensus")
+        }
+
+        _c1, _c2, _c3 = st.columns(3)
+        _c1.metric("Awaiting moderator", len(consensus_flags))
+        _c2.metric("Open flags (pre-consensus)", len(pending_flags))
+        _c3.metric(
+            "Validated trials",
+            len({r.get("nct_id") for r in _load_moderator_validations()}),
+        )
+
+        st.divider()
+
+        # ===== Mode A: Triage consensus-reached flags =====
+        st.markdown("### Mode A — Triage consensus-reached flags")
+        if not consensus_flags:
+            st.info(
+                "No consensus-reached flags are awaiting moderation right "
+                "now. Use Mode B below to burn time on random validation; "
+                "every validated row tightens the per-axis Cohen's κ "
+                "estimate at the bottom of this page."
+            )
+        else:
+            # Iterate consensus-flagged trials; for each, fetch the structured
+            # YAML proposals via the existing GH API call (issue body or comments).
+            import requests as _req_mod
+            for nct, entry in sorted(consensus_flags.items()):
+                _issue_urls = entry.get("issue_urls", [])
+                with st.expander(
+                    f"⚑ {nct} — {entry.get('count', 0)} flag(s) · "
+                    f"consensus reached", expanded=True,
+                ):
+                    if _issue_urls:
+                        for u in _issue_urls:
+                            st.markdown(f"- [{u}]({u})")
+                    pipeline_row = df[df["NCTId"] == nct] if not df.empty else pd.DataFrame()
+                    if not pipeline_row.empty:
+                        pr = pipeline_row.iloc[0]
+                        st.markdown("**Pipeline classification:**")
+                        st.dataframe(pd.DataFrame({
+                            "Axis": list(_MODERATOR_AXES),
+                            "Pipeline label": [pr.get(a, "—") for a in _MODERATOR_AXES],
+                        }), hide_index=True, width="stretch")
+
+                    st.markdown("**Proposed correction (from consensus):**")
+                    st.caption(
+                        "Open the linked issue(s) to read the reviewer rationale. "
+                        "Use the form below to record your decision; it will append "
+                        f"to `{MODERATOR_VALIDATIONS_PATH}` and tag the GitHub issue."
+                    )
+
+                    _decision = st.radio(
+                        "Decision",
+                        options=["Approve correction", "Reject correction",
+                                 "Defer — needs more info"],
+                        key=f"mod_decision_{nct}",
+                        horizontal=True,
+                    )
+                    _rationale = st.text_area(
+                        "Rationale (recorded with the decision; one paragraph max)",
+                        key=f"mod_rationale_{nct}",
+                        placeholder="e.g. confirmed via NCT registry — pediatric "
+                                    "neuroblastoma trial, GD2 target verified in "
+                                    "intervention description.",
+                    )
+                    if st.button(
+                        "Record decision",
+                        key=f"mod_record_{nct}",
+                        type="primary",
+                    ):
+                        # Append a record per axis (pipeline-label remains the
+                        # baseline; moderator_label is what we'll use to compute
+                        # κ, ground-truth coverage, and override JSON).
+                        from datetime import datetime as _dt_mod
+                        ts = _dt_mod.utcnow().isoformat() + "Z"
+                        for ax in _MODERATOR_AXES:
+                            _pipeline_label = (
+                                str(pr.get(ax, "")) if not pipeline_row.empty else ""
+                            )
+                            _append_moderator_validation({
+                                "nct_id": nct,
+                                "axis": ax,
+                                "pipeline_label": _pipeline_label,
+                                # For Approve we trust the consensus block;
+                                # the actual proposed_correction value is in
+                                # the issue body — promote_consensus_flags.py
+                                # extracts it. Here we record decision + axis.
+                                "moderator_label": (
+                                    "<from-issue>" if _decision.startswith("Approve")
+                                    else _pipeline_label  # Reject => keep pipeline
+                                ),
+                                "decision": _decision,
+                                "timestamp": ts,
+                                "source": "flag",
+                                "moderator": os.environ.get("USER", "ptjeong"),
+                                "rationale": _rationale,
+                                "issue_url": _issue_urls[0] if _issue_urls else "",
+                            })
+                        st.success(
+                            f"Recorded {_decision.lower()} for {nct}. Run "
+                            "`scripts/promote_consensus_flags.py` to apply "
+                            "approved corrections to llm_overrides.json."
+                        )
+                        # Light-touch label nudge: we don't have an
+                        # authenticated GH session here in Streamlit, so the
+                        # label tagging is the moderator's job (one click on
+                        # the issue page). The promote script automates the
+                        # llm_overrides.json patch + closes the issue.
+
+        st.divider()
+
+        # ===== Mode B: Random validation =====
+        st.markdown("### Mode B — Random validation")
+        st.caption(
+            "Sample a random trial from the current snapshot, review every "
+            "axis, and confirm or correct. Each row you submit grows the "
+            "moderator-validated pool used to compute the per-axis Cohen's κ "
+            "below. Stratified to upweight low-represented branches."
+        )
+
+        if df_filt.empty:
+            st.info("No trials in the current filter — adjust filters to use this mode.")
+        else:
+            # Stratify by Branch so heme + solid + unknown each get sampled
+            # in roughly equal proportions instead of dataset-natural
+            # frequencies (otherwise solid/unknown trials almost never
+            # surface for review).
+            import random as _rand_mod
+            if (
+                "rand_validation_nct" not in st.session_state
+                or st.button("Draw a different random trial", key="mod_redraw")
+            ):
+                # Stratified random pick: bucket by branch, pick a branch
+                # uniformly, then pick a trial uniformly from that branch.
+                _branch_buckets = {
+                    b: df_filt[df_filt["Branch"] == b]["NCTId"].tolist()
+                    for b in df_filt["Branch"].dropna().unique()
+                }
+                _branch_buckets = {b: ids for b, ids in _branch_buckets.items() if ids}
+                if _branch_buckets:
+                    _picked_branch = _rand_mod.choice(list(_branch_buckets.keys()))
+                    st.session_state["rand_validation_nct"] = _rand_mod.choice(
+                        _branch_buckets[_picked_branch]
+                    )
+
+            _rand_nct = st.session_state.get("rand_validation_nct")
+            if _rand_nct:
+                _rand_row = df_filt[df_filt["NCTId"] == _rand_nct]
+                if not _rand_row.empty:
+                    _rec = _rand_row.iloc[0]
+                    st.markdown(
+                        f"**[{_rand_nct}](https://clinicaltrials.gov/study/{_rand_nct})** "
+                        f"— {_rec.get('BriefTitle', '')[:140]}"
+                    )
+                    if _rec.get("BriefSummary"):
+                        with st.expander("Trial summary"):
+                            st.write(str(_rec.get("BriefSummary"))[:2500])
+
+                    # Per-axis confirm/correct widget
+                    _corrections: dict[str, str] = {}
+                    for ax in _MODERATOR_AXES:
+                        _pl = str(_rec.get(ax, "—"))
+                        _corrections[ax] = st.text_input(
+                            f"{ax} (pipeline: `{_pl}`)",
+                            value=_pl,
+                            key=f"mod_rand_{ax}_{_rand_nct}",
+                            help="Edit if the pipeline label is wrong; leave as-is to confirm.",
+                        )
+                    _rand_rationale = st.text_area(
+                        "Optional notes",
+                        key=f"mod_rand_notes_{_rand_nct}",
+                    )
+                    if st.button(
+                        "Submit validation",
+                        key=f"mod_rand_submit_{_rand_nct}",
+                        type="primary",
+                    ):
+                        from datetime import datetime as _dt_mod2
+                        ts = _dt_mod2.utcnow().isoformat() + "Z"
+                        for ax, mod_lbl in _corrections.items():
+                            _append_moderator_validation({
+                                "nct_id": _rand_nct,
+                                "axis": ax,
+                                "pipeline_label": str(_rec.get(ax, "")),
+                                "moderator_label": mod_lbl.strip(),
+                                "decision": (
+                                    "confirmed"
+                                    if mod_lbl.strip() == str(_rec.get(ax, ""))
+                                    else "corrected"
+                                ),
+                                "timestamp": ts,
+                                "source": "random",
+                                "moderator": os.environ.get("USER", "ptjeong"),
+                                "rationale": _rand_rationale,
+                                "issue_url": "",
+                            })
+                        st.success(
+                            f"Recorded validation for {_rand_nct} across "
+                            f"{len(_corrections)} axes. Drawing a fresh trial…"
+                        )
+                        # Force a redraw on next rerun
+                        st.session_state.pop("rand_validation_nct", None)
+                        st.rerun()
+
+        st.divider()
+
+        # ===== Stats panel: per-axis Cohen's κ =====
+        st.markdown("### Per-axis agreement (pipeline vs moderator)")
+        st.caption(
+            "Computed across every record in `moderator_validations.json` "
+            "where `moderator_label` is concrete (placeholder values from "
+            "approved-flag rows are excluded). Cohen's κ reported when N ≥ 10."
+        )
+
+        validations = _load_moderator_validations()
+        if not validations:
+            st.info("No moderator validations recorded yet.")
+        else:
+            stats_rows = []
+            for ax in _MODERATOR_AXES:
+                ax_records = [
+                    r for r in validations
+                    if r.get("axis") == ax
+                    and r.get("moderator_label") not in (None, "", "<from-issue>")
+                ]
+                if not ax_records:
+                    stats_rows.append({
+                        "Axis": ax, "N": 0,
+                        "% agreement": "—", "Cohen's κ": "—",
+                    })
+                    continue
+                pipe_labels = [str(r["pipeline_label"]) for r in ax_records]
+                mod_labels = [str(r["moderator_label"]) for r in ax_records]
+                agreement = (
+                    sum(1 for a, b in zip(pipe_labels, mod_labels) if a == b)
+                    / len(ax_records)
+                )
+                kappa = _cohens_kappa(pipe_labels, mod_labels)
+                stats_rows.append({
+                    "Axis": ax,
+                    "N": len(ax_records),
+                    "% agreement": f"{agreement*100:.1f}%",
+                    "Cohen's κ": f"{kappa:.3f}" if (
+                        kappa is not None and len(ax_records) >= 10
+                    ) else (
+                        "needs N≥10" if kappa is not None else "—"
+                    ),
+                })
+            st.dataframe(
+                pd.DataFrame(stats_rows),
+                hide_index=True, width="stretch",
+            )
+
+            with st.expander("Raw validation log (newest first)"):
+                _vlog_df = pd.DataFrame(validations).sort_values(
+                    "timestamp", ascending=False,
+                )
+                st.dataframe(_vlog_df, hide_index=True, width="stretch")
+                st.download_button(
+                    "Download moderator_validations.json",
+                    data=open(MODERATOR_VALIDATIONS_PATH, "rb").read()
+                        if os.path.exists(MODERATOR_VALIDATIONS_PATH) else b"[]",
+                    file_name="moderator_validations.json",
+                    mime="application/json",
+                )

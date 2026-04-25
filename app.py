@@ -2981,14 +2981,48 @@ with tab_deep:
             if pick and pick != "—":
                 sub = df_filt[df_filt["SponsorType"] == pick]
 
-                st.markdown(f"**Top sponsors in *{pick}* ({len(sub)} trials, {sub['LeadSponsor'].nunique()} distinct sponsors)**")
-                top_sponsors = (
-                    sub["LeadSponsor"].dropna().value_counts().head(10)
+                st.markdown(
+                    f"**Sponsors in *{pick}*** "
+                    f"<span style='color:#64748b; font-weight:400;'>"
+                    f"({len(sub)} trials, {sub['LeadSponsor'].nunique()} distinct sponsors)"
+                    f"</span>",
+                    unsafe_allow_html=True,
+                )
+
+                # Sponsor list — searchable + scrollable, NOT capped at top-N.
+                # User wanted ability to scroll through every sponsor in the
+                # selected class (was previously capped at top-10) and to
+                # filter by name. Table dimension stays the same; the data
+                # source changes from .head(10) to the full list.
+                _sponsor_search = st.text_input(
+                    "Search sponsors",
+                    value="",
+                    key=f"dd_sponsor_search_{pick}",
+                    placeholder="Filter by sponsor name (case-insensitive substring)",
+                    label_visibility="collapsed",
+                )
+                all_sponsors = (
+                    sub["LeadSponsor"].dropna().value_counts()
                     .rename_axis("Lead sponsor").reset_index(name="Trials")
                 )
-                st.caption(f"{len(top_sponsors)} sponsors · top-10 by trial count")
-                st.dataframe(
-                    top_sponsors, width='stretch', hide_index=True,
+                if _sponsor_search:
+                    _q = _sponsor_search.strip().lower()
+                    all_sponsors = all_sponsors[
+                        all_sponsors["Lead sponsor"].astype(str).str.lower().str.contains(_q, na=False)
+                    ]
+
+                st.caption(
+                    f"{len(all_sponsors)} sponsor"
+                    f"{'s' if len(all_sponsors) != 1 else ''} "
+                    f"{'(filtered) ' if _sponsor_search else ''}"
+                    "· click a sponsor row to see its trials below"
+                )
+                _sponsor_event = st.dataframe(
+                    all_sponsors, width='stretch', hide_index=True,
+                    height=320,  # fixed height keeps the layout tidy regardless of N
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key=f"dd_sponsor_table_{pick}",
                     column_config=_mini_count_cols("Lead sponsor"),
                 )
 
@@ -3029,6 +3063,54 @@ with tab_deep:
                     _branch_sub, width='stretch', hide_index=True,
                     column_config=_mini_count_cols("Branch"),
                 )
+
+                # --- Sponsor → trials → trial drilldown ---
+                _sponsor_rows = (
+                    _sponsor_event.selection.rows
+                    if _sponsor_event and hasattr(_sponsor_event, "selection") else []
+                )
+                if _sponsor_rows:
+                    _picked_sponsor = all_sponsors.iloc[_sponsor_rows[0]]["Lead sponsor"]
+                    _spon_trials = sub[sub["LeadSponsor"] == _picked_sponsor].copy()
+                    _spon_trials["NCTLink"] = _spon_trials["NCTId"].apply(
+                        lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
+                    )
+                    _spon_trials["Phase"] = _spon_trials["PhaseLabel"].fillna(_spon_trials["Phase"])
+                    _spon_trials["OverallStatus"] = _spon_trials["OverallStatus"].map(
+                        STATUS_DISPLAY).fillna(_spon_trials["OverallStatus"])
+                    _spon_trials = _spon_trials.sort_values(
+                        ["PhaseOrdered", "StartYear", "NCTId"], na_position="last",
+                    ).reset_index(drop=True)
+
+                    st.markdown(
+                        f"### Trials sponsored by **{_picked_sponsor}** "
+                        f"<span style='color:#64748b; font-weight:400;'>"
+                        f"({len(_spon_trials)} trials · click any row for full details)</span>",
+                        unsafe_allow_html=True,
+                    )
+                    _spon_trial_cols = [c for c in [
+                        "NCTId", "NCTLink", "BriefTitle",
+                        "Branch", "DiseaseCategory", "DiseaseEntity",
+                        "TargetCategory", "ProductType", "Phase",
+                        "OverallStatus", "StartYear", "Countries",
+                    ] if c in _spon_trials.columns]
+                    _spon_trial_event = st.dataframe(
+                        _spon_trials[_spon_trial_cols],
+                        width='stretch', height=320, hide_index=True,
+                        on_select="rerun", selection_mode="single-row",
+                        key=f"dd_sponsor_trial_table_{pick}_{_picked_sponsor}",
+                        column_config=_trial_detail_cols(),
+                    )
+                    _spon_trial_rows = (
+                        _spon_trial_event.selection.rows
+                        if _spon_trial_event and hasattr(_spon_trial_event, "selection")
+                        else []
+                    )
+                    if _spon_trial_rows:
+                        _render_trial_drilldown(
+                            _spon_trials.iloc[_spon_trial_rows[0]],
+                            key_suffix=f"deep_sponsor_{pick}_{_picked_sponsor}",
+                        )
 
             st.download_button(
                 "Download sponsor-type aggregation (CSV)",

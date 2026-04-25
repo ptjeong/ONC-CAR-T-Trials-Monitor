@@ -233,6 +233,53 @@ def test_no_car_no_signal():
     assert source == "no_signal"
 
 
+def test_allogenic_single_e_spelling():
+    """Single-'e' "Allogenic" (common in Chinese trial titles) must trigger
+    explicit_allogeneic — surfaced by NCT05739227 misclassified as autologous."""
+    row = _mk(
+        BriefTitle="Allogenic CD19-CAR-NK cells in B-cell malignancies",
+        Interventions="allogenic CD19-CAR-NK cells",
+    )
+    ptype, source = _assign_product_type(row)
+    assert ptype == "Allogeneic/Off-the-shelf"
+    assert source == "explicit_allogeneic"
+
+
+# ---------------------------------------------------------------------------
+# Multi-condition basket detection
+# ---------------------------------------------------------------------------
+
+def test_multi_chunk_category_fallback_basket():
+    """When conditions list spans multiple categories — even where some only
+    match category-fallback terms (e.g., generic "B-cell Lymphoma" without a
+    specific subtype) — pipeline must collapse to Basket/Multidisease.
+    Surfaced by NCT05739227: B-ALL + B-NHL + CLL was being labelled CLL_SLL."""
+    row = _mk(
+        Conditions=(
+            "Acute Lymphoblastic Leukemia|"
+            "B-cell Lymphoma|"
+            "Chronic Lymphocytic Leukemia"
+        ),
+        BriefTitle="CD19 CAR-T in B-cell malignancies",
+    )
+    result = _classify_disease(row)
+    assert result["category"] == "Basket/Multidisease"
+    assert result["branch"] == "Heme-onc"
+
+
+def test_liver_metastases_routes_to_gi():
+    """Generic "Liver Metastases" must route to GI (most liver-mets primary
+    tumours are GI). Surfaced by NCT02862704 (MG7 CAR-T) which had been
+    falling to Unknown / Unclassified."""
+    row = _mk(
+        Conditions="Liver Metastases",
+        BriefTitle="MG7 CAR-T for advanced liver metastases",
+    )
+    result = _classify_disease(row)
+    assert result["branch"] == "Solid-onc"
+    assert result["category"] == "GI"
+
+
 # ---------------------------------------------------------------------------
 # Exclusion
 # ---------------------------------------------------------------------------

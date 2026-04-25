@@ -244,7 +244,12 @@ CATEGORY_FALLBACK_TERMS: dict[str, list[str]] = {
     "MDS_MPN": ["myelodysplastic", "myeloproliferative"],
     "CNS": ["glioma", "high grade glioma", "brain tumor", "brain tumour", "cns tumor"],
     "Thoracic": ["lung cancer", "thoracic cancer", "thoracic malignancy"],
-    "GI": ["gastrointestinal cancer", "gi cancer", "gi malignancy"],
+    # "liver metastases" / "metastatic liver" route through GI because the
+    # vast majority of liver-mets primary tumours (CRC, gastric, pancreatic,
+    # HCC) are GI primaries. Surfaced by NCT02862704 (MG7 CAR-T for liver
+    # metastases) which had been falling to Unknown.
+    "GI": ["gastrointestinal cancer", "gi cancer", "gi malignancy",
+           "liver metastases", "liver metastasis", "metastatic liver"],
     "GU": ["genitourinary cancer", "gu malignancy"],
     "Gyn": ["gynecologic cancer", "gynaecologic cancer", "gynecologic malignancy"],
     "Breast": ["breast cancer", "metastatic breast cancer", "advanced breast cancer"],
@@ -331,7 +336,10 @@ CAR_GD_T_TERMS: list[str] = [
 ]
 
 ALLOGENEIC_MARKERS: list[str] = [
-    "allogeneic", "off-the-shelf", "off the shelf",
+    # "allogenic" (single 'e') is a common spelling variant in non-English
+    # CT.gov titles — keep both. Without it, NCT05739227 etc. fall through
+    # to the autologous smart-default.
+    "allogeneic", "allogenic", "off-the-shelf", "off the shelf",
     "universal car-t", "universal car t", "ucar", "ucart",
     "healthy donor", "donor-derived", "donor derived", "allo1",
     "umbilical cord blood", "cord blood",

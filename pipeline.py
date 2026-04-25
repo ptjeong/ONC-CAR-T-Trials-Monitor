@@ -214,23 +214,41 @@ def _classify_disease(row: dict) -> dict:
         _normalize_text(c) for c in conditions_raw.split("|") if _normalize_text(c)
     ]
 
-    # 1. Leaf-level term matching on conditions and full text.
-    cond_matches: list[str] = []
+    # 1. Per-chunk leaf-level OR category-fallback matching.
+    # ----------------------------------------------------
+    # Each condition chunk gets BOTH passes — first ENTITY_TERMS for a
+    # specific leaf match, and if that misses, CATEGORY_FALLBACK_TERMS for
+    # a category-level signal. This catches basket trials where one chunk
+    # lists a specific subtype ("Chronic Lymphocytic Leukemia" → CLL entity)
+    # while another lists only the generic family ("Acute Lymphoblastic
+    # Leukemia" → B-ALL category fallback). Surfaced by NCT05739227 which
+    # had been mis-classified as CLL_SLL even though the conditions field
+    # explicitly listed B-ALL + B-NHL + CLL.
+    cond_entities: list[str] = []
+    cond_categories: set[str] = set()
     for chunk in condition_chunks:
-        cond_matches.extend(_match_terms(chunk, ENTITY_TERMS))
-    cond_matches = sorted(set(cond_matches))
+        ents = _match_terms(chunk, ENTITY_TERMS)
+        if ents:
+            cond_entities.extend(ents)
+            cond_categories.update(ENTITY_TO_CATEGORY[e] for e in ents)
+        else:
+            cond_categories.update(_match_terms(chunk, CATEGORY_FALLBACK_TERMS))
+
+    # Full-text scan still uses entity-only (avoids "lymphoma" anywhere
+    # in a paragraph triggering B-NHL spuriously; the chunk-level fallback
+    # already handles the legitimate cases).
+    cond_matches = sorted(set(cond_entities))
     full_matches = sorted(set(_match_terms(full_text, ENTITY_TERMS)))
     all_entities = sorted(set(cond_matches + full_matches))
+    cond_categories.update(ENTITY_TO_CATEGORY[e] for e in full_matches)
 
-    if all_entities:
-        categories = sorted({ENTITY_TO_CATEGORY[e] for e in all_entities})
+    if all_entities or cond_categories:
+        categories = sorted(cond_categories) if cond_categories else \
+            sorted({ENTITY_TO_CATEGORY[e] for e in all_entities})
         branches = sorted({CATEGORY_TO_BRANCH[c] for c in categories})
         branch = branches[0] if len(branches) == 1 else "Mixed"
 
-        primary_entity = cond_matches[0] if cond_matches else all_entities[0]
-        primary_category = ENTITY_TO_CATEGORY[primary_entity]
-
-        # Multi-category within one branch → Basket/Multidisease.
+        # Multi-category (entity-derived OR category-fallback-derived) → Basket.
         if len(categories) >= 2:
             return {
                 "branch": branch,
@@ -239,7 +257,12 @@ def _classify_disease(row: dict) -> dict:
                 "entities": "|".join(all_entities),
                 "design": "Basket/Multidisease",
             }
-        # Same category, multiple entities — keep primary, flag as basket design.
+        # Single category — prefer the specific entity if we have one.
+        primary_category = categories[0]
+        if all_entities:
+            primary_entity = cond_matches[0] if cond_matches else all_entities[0]
+        else:
+            primary_entity = primary_category  # category-fallback only
         design = "Basket/Multidisease" if len(all_entities) >= 2 else "Single disease"
         return {
             "branch": branch,
@@ -448,7 +471,11 @@ def _assign_product_type(row: dict) -> tuple[str, str]:
         "universal car t", "universal car-t",
         "universal cd19", "universal bcma",
         "u car t", "u car-t",
-        "off the shelf", "allogeneic",
+        # Both "allogeneic" (US/EU) and "allogenic" (single-e variant common
+        # in Chinese trial titles, e.g. NCT05739227 "Allogenic CD19-CAR-NK")
+        # surface in CT.gov text. Missing the variant misclassifies the
+        # trial as Autologous via the smart default.
+        "off the shelf", "allogeneic", "allogenic",
         "healthy donor", "donor derived", "donor sourced",
     ]
     if any(term in text for term in strong_allo_terms):

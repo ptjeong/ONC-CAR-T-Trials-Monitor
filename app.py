@@ -319,6 +319,91 @@ def _mini_count_cols(label: str) -> dict:
     }
 
 
+def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
+    """Render the per-trial detail card used everywhere a single trial is
+    selected (Data tab, Geography city table, Deep Dive sub-tabs).
+
+    Parameters
+    ----------
+    record : pd.Series or dict-like
+        A single trial row. Accessed via .get(); missing fields render as "—".
+    key_suffix : str
+        Disambiguator for any session_state-keyed widgets inside the card
+        (e.g. the Suggest-correction form). Required when multiple
+        drilldowns might appear on the same page or tab.
+
+    The card has three layers:
+      1. Two-column metadata table (disease/clinical + product/sponsor)
+      2. External link + free-text fields (conditions, interventions,
+         endpoints, countries, brief summary)
+      3. Suggest-correction expander — opens a pre-filled GitHub issue
+         link so any reader can flag a misclassification.
+
+    The drilldown is wrapped in a `st.expander(expanded=True)` so the
+    caller doesn't manage layout. Pass a record matching the
+    DataFrame schema; missing optional fields are tolerated.
+    """
+    _sel_nct = record.get("NCTId", "")
+    _title = record.get("BriefTitle", "")
+    with st.expander(f"**{_sel_nct}** — {_title}", expanded=True):
+        d1, d2 = st.columns([1, 1])
+        with d1:
+            _start_year = record.get("StartYear")
+            _start_disp = (
+                int(_start_year) if pd.notna(_start_year) else "—"
+            )
+            st.markdown(
+                f"""
+**Branch**: {record.get('Branch', '—')}  ·  **Category**: {record.get('DiseaseCategory', '—')}
+**Entity**: {record.get('DiseaseEntity', '—')}
+**All entities matched**: {record.get('DiseaseEntities', '—') or '—'}
+**Trial design**: {record.get('TrialDesign', '—')}
+**Phase**: {record.get('Phase', '—')}  ·  **Status**: {record.get('OverallStatus', '—')}
+**Start year**: {_start_disp}
+                """
+            )
+        with d2:
+            _enroll_raw = record.get("EnrollmentCount")
+            _enroll_display = (
+                int(_enroll_raw) if pd.notna(_enroll_raw) else "—"
+            )
+            st.markdown(
+                f"""
+**Target**: {record.get('TargetCategory', '—')}
+**Product type**: {record.get('ProductType', '—')}  ·  **Named product**: {record.get('ProductName', '—') or '—'}
+**Modality**: {record.get('Modality', '—')}
+**Age group**: {record.get('AgeGroup', '—')}  ·  **Sponsor type**: {record.get('SponsorType', '—')}
+**Lead sponsor**: {record.get('LeadSponsor', '—')}
+**Enrollment**: {_enroll_display}
+**Classification confidence**: {record.get('ClassificationConfidence', '—')}
+                """
+            )
+        # External link + free-text payload
+        if record.get("NCTLink"):
+            st.markdown(f"[Open on ClinicalTrials.gov ↗]({record['NCTLink']})")
+        if record.get("Conditions"):
+            st.markdown(f"**Conditions**: {record['Conditions']}")
+        if record.get("Interventions"):
+            st.markdown(f"**Interventions**: {record['Interventions']}")
+        if record.get("PrimaryEndpoints"):
+            st.markdown(f"**Primary endpoints**: {record['PrimaryEndpoints']}")
+        if record.get("Countries"):
+            st.markdown(f"**Countries**: {record['Countries']}")
+        if record.get("BriefSummary"):
+            st.markdown("**Brief summary**")
+            st.markdown(f"> {record['BriefSummary']}")
+
+        # Suggest-correction affordance — populated by _render_suggest_correction
+        # if available; tolerates the helper not yet existing during partial
+        # rollouts (early commits add the helper, later commits add the form).
+        try:
+            _render_suggest_correction(record, key_suffix=key_suffix)
+        except NameError:
+            # Helper not defined yet — silently omit the form. Keeps this
+            # commit self-contained until C7 lands.
+            pass
+
+
 px.defaults.template = "plotly_white"
 
 
@@ -2311,55 +2396,16 @@ with tab_data:
     )
 
     # Row-click trial detail — scales to any dataset size (a selectbox would
-    # balloon once the filtered set passes 100+ rows).
+    # balloon once the filtered set passes 100+ rows). All trial-level views
+    # across the app render via _render_trial_drilldown so the layout, links,
+    # and (in C7+) Suggest-correction form stay consistent everywhere.
     _selected_rows = (
         _table_event.selection.rows
         if _table_event and hasattr(_table_event, "selection") else []
     )
     if _selected_rows:
-        rec = table_df.iloc[_selected_rows[0]]
-        _sel_nct = rec.get("NCTId", "")
-        with st.expander(f"**{_sel_nct}** — {rec.get('BriefTitle', '')}", expanded=True):
-            d1, d2 = st.columns([1, 1])
-            with d1:
-                st.markdown(
-                    f"""
-**Branch**: {rec.get('Branch', '—')}  ·  **Category**: {rec.get('DiseaseCategory', '—')}
-**Entity**: {rec.get('DiseaseEntity', '—')}
-**All entities matched**: {rec.get('DiseaseEntities', '—') or '—'}
-**Trial design**: {rec.get('TrialDesign', '—')}
-**Phase**: {rec.get('Phase', '—')}  ·  **Status**: {rec.get('OverallStatus', '—')}
-**Start year**: {int(rec['StartYear']) if pd.notna(rec.get('StartYear')) else '—'}
-                    """
-                )
-            with d2:
-                _enroll_raw = rec.get('EnrollmentCount', None)
-                _enroll_display = int(_enroll_raw) if pd.notna(_enroll_raw) else '—'
-                st.markdown(
-                    f"""
-**Target**: {rec.get('TargetCategory', '—')}
-**Product type**: {rec.get('ProductType', '—')}  ·  **Named product**: {rec.get('ProductName', '—') or '—'}
-**Modality**: {rec.get('Modality', '—')}
-**Age group**: {rec.get('AgeGroup', '—')}  ·  **Sponsor type**: {rec.get('SponsorType', '—')}
-**Lead sponsor**: {rec.get('LeadSponsor', '—')}
-**Enrollment**: {_enroll_display}
-**Classification confidence**: {rec.get('ClassificationConfidence', '—')}
-                    """
-                )
-            # External link + full record
-            if rec.get("NCTLink"):
-                st.markdown(f"[Open on ClinicalTrials.gov ↗]({rec['NCTLink']})")
-            if rec.get("Conditions"):
-                st.markdown(f"**Conditions**: {rec['Conditions']}")
-            if rec.get("Interventions"):
-                st.markdown(f"**Interventions**: {rec['Interventions']}")
-            if rec.get("PrimaryEndpoints"):
-                st.markdown(f"**Primary endpoints**: {rec['PrimaryEndpoints']}")
-            if rec.get("Countries"):
-                st.markdown(f"**Countries**: {rec['Countries']}")
-            if rec.get("BriefSummary"):
-                st.markdown("**Brief summary**")
-                st.markdown(f"> {rec['BriefSummary']}")
+        _render_trial_drilldown(table_df.iloc[_selected_rows[0]],
+                                 key_suffix="data_tab")
     else:
         st.info(
             "Select a row in the table above to see the full trial record "

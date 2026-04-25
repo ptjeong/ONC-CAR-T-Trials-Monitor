@@ -617,6 +617,104 @@ def _render_suggest_correction(record, *, key_suffix: str = "") -> None:
             )
 
 
+@st.cache_data(ttl=60 * 5, show_spinner=False)
+def _load_active_flags() -> dict:
+    """Fetch open classification-flag GitHub issues and group by NCT ID.
+
+    Returns {nct_id: {"count": int, "consensus": bool, "issue_urls": [...]}}.
+    Cached 5 minutes so a single page render doesn't hit the API per-trial.
+
+    Uses the GitHub public-issues API (no auth needed, 60 requests/hour
+    rate limit unauthenticated — fine for a 5-minute cache and ~1 fetch
+    per session). On any error (network, rate limit, JSON parse), returns
+    {} so badge rendering silently degrades rather than crashing the page.
+    """
+    try:
+        import requests
+        url = (
+            f"https://api.github.com/repos/{GITHUB_REPO_SLUG}/issues"
+            "?state=open&labels=classification-flag&per_page=100"
+        )
+        resp = requests.get(url, timeout=8)
+        if resp.status_code != 200:
+            return {}
+        issues = resp.json()
+        flags: dict[str, dict] = {}
+        import re as _re_flag
+        nct_re = _re_flag.compile(r"NCT\d{8}")
+        for issue in issues:
+            title = issue.get("title", "")
+            labels = {lbl.get("name", "") for lbl in (issue.get("labels") or [])}
+            # Try to extract NCT from title first (we put it there); fall back
+            # to issue body if needed.
+            m = nct_re.search(title) or nct_re.search(issue.get("body", "") or "")
+            if not m:
+                continue
+            nct = m.group(0)
+            entry = flags.setdefault(nct, {
+                "count": 0, "consensus": False, "issue_urls": [],
+            })
+            entry["count"] += 1
+            entry["issue_urls"].append(issue.get("html_url", ""))
+            if "consensus-reached" in labels:
+                entry["consensus"] = True
+        return flags
+    except Exception:
+        return {}
+
+
+def _flag_badge(flag_entry: dict | None) -> str:
+    """Compact badge string for a trial table cell. Empty when no flags."""
+    if not flag_entry:
+        return ""
+    n = flag_entry.get("count", 0)
+    if n == 0:
+        return ""
+    if flag_entry.get("consensus"):
+        return f"⚑ consensus ({n})"
+    return f"⚑ {n}"
+
+
+_FLAG_COL_HELP = (
+    "⚑ N = N open classification-correction issues on GitHub. "
+    "⚑ consensus (N) = ≥3 reviewers agree on a correction; "
+    "awaiting moderator approval. Click row → Suggest correction."
+)
+
+
+def _attach_flag_column(
+    df: "pd.DataFrame", show_cols: list[str]
+) -> "tuple[pd.DataFrame, list[str]]":
+    """Inject `_Flag` column populated from open GitHub flag issues.
+
+    Idempotent: if `_Flag` already in df / show_cols, recomputes badge values
+    but does not duplicate the column placement. Returns (df_copy, new_show_cols)
+    so the caller can drop straight into st.dataframe — pair with
+    `column_config={**_trial_detail_cols(), "_Flag": _flag_column_config()}`
+    or pass `_Flag` via `_trial_detail_cols`'s extra dict.
+
+    The badge is purely cosmetic: it doesn't filter or sort; reviewers click
+    through to GitHub for the actual flag thread.
+    """
+    flags = _load_active_flags()
+    out = df.copy()
+    if "NCTId" in out.columns:
+        out["_Flag"] = out["NCTId"].map(lambda _n: _flag_badge(flags.get(_n)))
+    else:
+        out["_Flag"] = ""
+    new_cols = ["_Flag"] + [c for c in show_cols if c != "_Flag"]
+    return out, new_cols
+
+
+def _flag_column_config() -> dict:
+    """Streamlit column_config entry for the `_Flag` column."""
+    return {
+        "_Flag": st.column_config.TextColumn(
+            "Flag", width="small", help=_FLAG_COL_HELP,
+        ),
+    }
+
+
 px.defaults.template = "plotly_white"
 
 
@@ -2484,6 +2582,7 @@ with tab_geo:
                         "OverallStatus", "LeadSponsor",
                         "Cities", "SiteStatuses",
                     ] if c in city_trial_view.columns]
+                    city_trial_view, _cols = _attach_flag_column(city_trial_view, _cols)
                     _city_trial_event = st.dataframe(
                         city_trial_view[_cols],
                         width='stretch', height=320, hide_index=True,
@@ -2491,6 +2590,7 @@ with tab_geo:
                         selection_mode="single-row",
                         key=f"city_trial_table_{selected_country}_{selected_city}",
                         column_config={
+                            **_flag_column_config(),
                             "NCTId": st.column_config.TextColumn("NCT ID"),
                             "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
                             "BriefTitle": st.column_config.TextColumn("Title", width="large"),
@@ -2556,6 +2656,11 @@ with tab_data:
     ).copy()
     table_df["Phase"] = table_df["PhaseLabel"]
     table_df["OverallStatus"] = table_df["OverallStatus"].map(STATUS_DISPLAY).fillna(table_df["OverallStatus"])
+
+    # Flag-badge column — surfaces open community classification-flag GitHub
+    # issues so reviewers see at a glance which trials have been challenged.
+    # `_load_active_flags` is cached 5min so this is one API call per render.
+    table_df, show_cols = _attach_flag_column(table_df, show_cols)
 
     # Search + country-zoom header ------------------------------------------------
     _ALL_COUNTRIES_LABEL = "All countries"
@@ -2627,6 +2732,7 @@ with tab_data:
         on_select="rerun", selection_mode="single-row",
         key="data_table_sel",
         column_config=_trial_detail_cols({
+            **_flag_column_config(),
             "ClassificationConfidence": st.column_config.TextColumn(
                 "Conf.", width="small",
                 help="high = explicit markers / LLM-validated; medium = defaults or weak markers; low = Unknown branch/entity or combined Unclear.",
@@ -2977,6 +3083,7 @@ with tab_deep:
             focus_sorted = focus_show.sort_values(
                 ["PhaseOrdered", "StartYear", "NCTId"], na_position="last",
             ).reset_index(drop=True)
+            focus_sorted, show_cols_focus = _attach_flag_column(focus_sorted, show_cols_focus)
             _focus_event = st.dataframe(
                 focus_sorted[[c for c in show_cols_focus if c in focus_sorted.columns]],
                 width='stretch', height=420, hide_index=True,
@@ -2984,6 +3091,7 @@ with tab_deep:
                 selection_mode="single-row",
                 key=f"deep_disease_focus_{dd_branch}_{dd_cat}_{dd_ent}",
                 column_config={
+                    **_flag_column_config(),
                     "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
                     "BriefTitle": st.column_config.TextColumn("Title", width="large"),
                     "ProductName": st.column_config.TextColumn("Product", width="medium"),
@@ -3216,12 +3324,15 @@ with tab_deep:
                     "ProductType", "ProductName", "Phase",
                     "OverallStatus", "StartYear", "Countries", "LeadSponsor",
                 ] if c in _focus_sorted.columns]
+                _focus_sorted, _target_trial_cols = _attach_flag_column(
+                    _focus_sorted, _target_trial_cols
+                )
                 _target_event = st.dataframe(
                     _focus_sorted[_target_trial_cols],
                     width="stretch", height=420, hide_index=True,
                     on_select="rerun", selection_mode="single-row",
                     key=f"deep_target_trial_table_{target_pick}",
-                    column_config=_trial_detail_cols(),
+                    column_config=_trial_detail_cols(_flag_column_config()),
                 )
                 _target_rows = (
                     _target_event.selection.rows
@@ -3361,12 +3472,15 @@ with tab_deep:
                     "TargetCategory", "Phase", "OverallStatus",
                     "StartYear", "Countries", "LeadSponsor",
                 ] if c in _prod_trials.columns]
+                _prod_trials, _prod_trial_cols = _attach_flag_column(
+                    _prod_trials, _prod_trial_cols
+                )
                 _prod_trial_event = st.dataframe(
                     _prod_trials[_prod_trial_cols],
                     width='stretch', height=320, hide_index=True,
                     on_select="rerun", selection_mode="single-row",
                     key=f"deep_product_trial_table_{_picked_product}",
-                    column_config=_trial_detail_cols(),
+                    column_config=_trial_detail_cols(_flag_column_config()),
                 )
                 _prod_trial_rows = (
                     _prod_trial_event.selection.rows
@@ -3548,12 +3662,15 @@ with tab_deep:
                         "TargetCategory", "ProductType", "Phase",
                         "OverallStatus", "StartYear", "Countries",
                     ] if c in _spon_trials.columns]
+                    _spon_trials, _spon_trial_cols = _attach_flag_column(
+                        _spon_trials, _spon_trial_cols
+                    )
                     _spon_trial_event = st.dataframe(
                         _spon_trials[_spon_trial_cols],
                         width='stretch', height=320, hide_index=True,
                         on_select="rerun", selection_mode="single-row",
                         key=f"dd_sponsor_trial_table_{pick}_{_picked_sponsor}",
-                        column_config=_trial_detail_cols(),
+                        column_config=_trial_detail_cols(_flag_column_config()),
                     )
                     _spon_trial_rows = (
                         _spon_trial_event.selection.rows

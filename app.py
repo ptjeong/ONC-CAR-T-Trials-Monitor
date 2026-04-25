@@ -3956,17 +3956,28 @@ with tab_pub:
             for c in top_cats_hm
         ]
 
+        # Sparse-matrix treatment: render zero-trial cells as white (NaN
+        # masked out of z so plotly skips them) and only label cells that
+        # actually have data. This is the standard publication idiom for
+        # sparse heatmaps — the colour scale stays clean for the signal,
+        # and the empty quadrants (heme antigens × solid categories etc.)
+        # become pre-attentively obvious as the headline finding.
+        _z_dense = pivot.values.astype(float)
+        _z_masked = np.where(_z_dense == 0, np.nan, _z_dense)
+        _text_masked = np.where(_z_dense == 0, "", _z_dense.astype(int).astype(str))
+
         fig8 = go.Figure(data=go.Heatmap(
-            z=pivot.values,
+            z=_z_masked,
             x=pivot.columns.tolist(),
             y=pivot.index.tolist(),
-            text=pivot.values,
+            text=_text_masked,
             texttemplate="%{text}",
             textfont=dict(size=10, color="#0b1220"),
-            colorscale=[[0, "#f8fafc"], [0.2, "#dbeafe"], [0.5, "#93c5fd"], [0.8, "#1d4ed8"], [1, "#0b3d91"]],
+            colorscale=[[0, "#dbeafe"], [0.4, "#93c5fd"], [0.7, "#1d4ed8"], [1, "#0b3d91"]],
             colorbar=dict(title=dict(text="Trials", font=dict(size=11, color=_AX_COLOR)),
                            tickfont=dict(size=10, color=_AX_COLOR), thickness=14, len=0.55),
             hovertemplate="Category: %{y}<br>Target: %{x}<br>Trials: %{z}<extra></extra>",
+            hoverongaps=False,
         ))
         fig8.update_layout(
             **PUB_BASE,
@@ -3991,7 +4002,7 @@ with tab_pub:
 
         st.markdown(
             '<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
-            'Heme-onc categories shown against a navy background; solid-onc against amber. '
+            '<b>White cells = no trials</b> (every shaded cell is labelled with its count). '
             f'Up to the top {len(top_cats_hm)} categor'
             f"{'y' if len(top_cats_hm) == 1 else 'ies'} × top "
             f"{len(top_tgts_hm)} antigen{'s' if len(top_tgts_hm) != 1 else ''} shown."

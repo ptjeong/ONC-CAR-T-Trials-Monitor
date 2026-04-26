@@ -95,10 +95,10 @@ AXIS_HELP = {
                    "Government = NIH/NCI/etc., Other = NGO/foundation.",
 }
 
-# Garden gamification — random bloom assignment per completed trial
-GARDEN_BLOOMS = ["🌷", "🌹", "🌺", "🌻", "🌸", "🪻", "🌼", "💐", "🍀"]
-MILESTONE_EMOJIS = {25: "🌱", 50: "🌿", 75: "🌳", 100: "🎉",
-                    125: "🌳", 150: "🌸", 175: "🌹", 200: "🏆"}
+# Progress visualisation — clean unicode block characters, no emoji.
+# Filled cell = rated; empty cell = pending.
+PROGRESS_FILLED = "■"
+PROGRESS_EMPTY = "□"
 
 
 # ---------------------------------------------------------------------------
@@ -107,29 +107,52 @@ MILESTONE_EMOJIS = {25: "🌱", 50: "🌿", 75: "🌳", 100: "🎉",
 
 st.set_page_config(
     page_title="Trial Classification Validation Study",
-    page_icon="🧪",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 st.markdown("""
 <style>
-    /* Tighter, calmer typography for a long rater session */
+    /* Tight typography for a long rater session — clean but with polish.
+       Inspired by Linear, Stripe, and the GitHub contributions heatmap:
+       sophisticated gamification through CSS, never through emoji. */
     .block-container { max-width: 1100px; padding-top: 2rem; }
     .stRadio > div { gap: 0.4rem; }
-    /* Garden cells */
-    .garden-cell {
-        display: inline-block; width: 22px; height: 22px;
-        text-align: center; font-size: 16px; line-height: 22px;
-    }
-    /* Save indicator pulse */
-    @keyframes pulse-stale {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.4; }
-    }
-    .save-stale { animation: pulse-stale 1.5s ease-in-out infinite;
-                   color: #d93f0b; }
-    .save-fresh { color: #0e8a16; }
+
+    /* Progress heatmap — GitHub-contributions-style cell grid.
+       Fills with a deep clinical blue as trials are rated. Hover reveals
+       NCT ID in the tooltip. The visual reward is the grid filling in;
+       no cartoon glyphs needed. */
+    .pgrid { display: grid; grid-template-columns: repeat(20, 1fr);
+             gap: 3px; padding: 8px 0; }
+    .pcell { width: 100%; aspect-ratio: 1 / 1; border-radius: 2px;
+             transition: transform 120ms ease, box-shadow 120ms ease; }
+    .pcell.empty  { background: #f1f5f9; border: 1px solid #e2e8f0; }
+    .pcell.filled { background: #1e40af;
+                    box-shadow: 0 1px 2px rgba(30, 64, 175, 0.25); }
+    .pcell.filled:hover { transform: scale(1.4);
+                           box-shadow: 0 2px 6px rgba(30, 64, 175, 0.4);
+                           cursor: default; }
+
+    /* Stat tiles — clean numeric callouts in the session-stats panel.
+       Big number, small label — the same hierarchy Linear / Stripe use. */
+    .stat-tile { display: inline-block; padding: 12px 18px;
+                 margin-right: 8px; border-radius: 6px;
+                 background: #f8fafc; border: 1px solid #e2e8f0; }
+    .stat-tile .num { font-size: 22px; font-weight: 700;
+                       color: #0f172a; line-height: 1.0; }
+    .stat-tile .lbl { font-size: 11px; color: #64748b;
+                       text-transform: uppercase; letter-spacing: 0.5px;
+                       margin-top: 4px; }
+
+    /* Save-state indicator: text only, no animation, color-coded by age */
+    .save-stale { color: #b91c1c; font-weight: 600; }
+    .save-fresh { color: #166534; }
+
+    /* Subtle separator between trials so the page feels rhythmic */
+    hr.trial-sep { border: none; border-top: 1px solid #e2e8f0;
+                    margin: 24px 0 16px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -267,51 +290,136 @@ def _persist(state: dict) -> None:
 # Garden gamification
 # ---------------------------------------------------------------------------
 
-def _garden_html(state: dict, sample: dict) -> str:
-    """Render a 20×10 garden grid as inline HTML.
+def _progress_grid_html(state: dict, sample: dict) -> str:
+    """Render the progress heatmap — GitHub-contributions-style.
 
-    Each completed trial is a deterministic-random bloom (seeded by NCT
-    so re-renders are stable). Empty cells show 🪴.
+    Each rated trial fills a cell with deep clinical blue; pending cells
+    are pale. Hover reveals the NCT ID. The visual reward is watching
+    the grid saturate over a session — no cartoon glyphs, just a
+    satisfying CSS-styled accumulation.
     """
-    n_total = len(sample["trials"])
     cells = []
-    for i, trial in enumerate(sample["trials"]):
+    for trial in sample["trials"]:
         nct = trial["NCTId"]
         if nct in state["ratings"]:
-            # Deterministic bloom assignment seeded by NCT
-            bloom_idx = int(hashlib.md5(nct.encode()).hexdigest(), 16) % len(GARDEN_BLOOMS)
-            bloom = GARDEN_BLOOMS[bloom_idx]
-            cells.append(f'<span class="garden-cell" title="{nct}">{bloom}</span>')
+            cells.append(
+                f'<div class="pcell filled" title="{nct} — rated"></div>'
+            )
         else:
-            cells.append('<span class="garden-cell" style="opacity:0.25">🪴</span>')
-
-    # Layout 20 cells per row
-    rows = []
-    for r in range(0, n_total, 20):
-        rows.append("".join(cells[r:r + 20]))
-    return "<div style='line-height:24px;'>" + "<br>".join(rows) + "</div>"
+            cells.append(
+                f'<div class="pcell empty" title="{nct} — pending"></div>'
+            )
+    return f'<div class="pgrid">{"".join(cells)}</div>'
 
 
-def _milestone_message(n_done: int) -> str | None:
-    """Return a celebration message at major milestones, else None."""
-    pct = n_done / 200 * 100
+def _stat_tiles_html(stats: list[tuple[str, str]]) -> str:
+    """Render a row of stat tiles for the session-stats panel.
+
+    Each tile = (number, label). Stripe/Linear-style typography:
+    large number, small all-caps label below. Sophisticated, never
+    cartoonish.
+    """
+    tiles = "".join(
+        f'<div class="stat-tile">'
+        f'  <div class="num">{num}</div>'
+        f'  <div class="lbl">{lbl}</div>'
+        f'</div>'
+        for num, lbl in stats
+    )
+    return f'<div>{tiles}</div>'
+
+
+def _milestone_message(n_done: int, median_secs: int = 0) -> str | None:
+    """Sophisticated milestone messages — informative, never childish.
+
+    Each milestone surfaces a real stat or piece of methodology context
+    that the rater would actually find interesting. The reward is
+    knowledge, not confetti.
+    """
+    n_left = max(0, 200 - n_done)
+    eta_min = (median_secs * n_left) / 60 if median_secs else None
+
+    def _eta_clause() -> str:
+        if eta_min is None:
+            return ""
+        if eta_min < 60:
+            return f" Median pace says ~{eta_min:.0f} min remaining."
+        return (f" Median pace says ~{eta_min/60:.1f} h remaining "
+                f"(~{eta_min:.0f} min).")
+
     if n_done == 25:
-        return "🌱 First quarter — your garden is sprouting!"
+        return ("Quartile 1 complete (25 trials, 12.5%)."
+                + _eta_clause()
+                + " Baseline rhythm established; subsequent sessions "
+                "typically run faster.")
     if n_done == 50:
-        return "🌿 Halfway through the first half!"
+        return ("First half of half complete (50 trials, 25%)."
+                + _eta_clause()
+                + " Inter-rater κ studies typically need ≥100 to power "
+                "detection of κ ≥ 0.40; you're already past half of that.")
     if n_done == 75:
-        return "🌳 Three-eighths complete. The forest is taking shape."
+        return ("Three eighths complete (75 trials, 37.5%)."
+                + _eta_clause())
     if n_done == 100:
-        return "🎉 **Halfway there!** Take a stretch break — you've earned it."
+        return ("Halfway: 100 trials rated."
+                + _eta_clause()
+                + " Now is the right time for a short break — fatigue "
+                "effects on κ become detectable past ~60 min of "
+                "uninterrupted rating (Gwet 2014).")
     if n_done == 125:
-        return "🌳 Five-eighths complete. The hard part is behind you."
+        return ("Five eighths complete (125 trials, 62.5%)."
+                + _eta_clause())
     if n_done == 150:
-        return "🌸 Three-quarters bloomed. Nearly there!"
+        return ("Three quarters complete (150 trials, 75%)."
+                + _eta_clause()
+                + " The bootstrap CI on κ stabilises around N=150 — your "
+                "remaining ratings tighten the interval rather than "
+                "shifting the point estimate.")
     if n_done == 175:
-        return "🌹 Final stretch — 25 trials to go."
+        return ("Final stretch: 25 trials remaining."
+                + _eta_clause())
     if n_done == 200:
-        return "🏆 **Complete!** All 200 trials rated. Thank you — your contribution is preserved in `responses/`."
+        return ("Complete: all 200 trials rated. Your submission is "
+                "preserved on the server. Please use **Download FINAL "
+                "submission** below and email the JSON to "
+                "peter.jeong@uk-koeln.de. The κ analysis runs once both "
+                "rater files are committed.")
     return None
+
+
+def _session_stats_html(state: dict) -> str:
+    """Build the stat-tile row shown above the rating area.
+
+    Surfaces: trials rated, median seconds per trial, total time spent,
+    estimated time to completion. Makes the rater aware of their own
+    pace — same psychology as a runner watching pace tick down.
+    """
+    n_done = len(state["ratings"])
+    durations = [r.get("duration_seconds", 0) for r in state["ratings"].values()
+                 if not r.get("skipped")]
+    n_left = max(0, 200 - n_done)
+    if durations:
+        median_s = sorted(durations)[len(durations) // 2]
+        total_min = sum(durations) / 60
+        eta_min = (median_s * n_left) / 60
+    else:
+        median_s = 0
+        total_min = 0
+        eta_min = 0
+
+    def _fmt_min(m: float) -> str:
+        if m < 1:
+            return "—"
+        if m < 60:
+            return f"{m:.0f} min"
+        return f"{m/60:.1f} h"
+
+    return _stat_tiles_html([
+        (f"{n_done}/200", "rated"),
+        (f"{median_s}s" if median_s else "—", "median per trial"),
+        (_fmt_min(total_min), "session time"),
+        (_fmt_min(eta_min), "est. remaining"),
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +531,7 @@ def _format_trial_for_rater(trial: dict) -> None:
 
     if trial.get("DetailedDescription"):
         with st.expander(
-            f"📋 Detailed description "
+            f"Detailed description "
             f"({len(trial['DetailedDescription'])} chars)",
             expanded=False,
         ):
@@ -434,7 +542,7 @@ def _format_trial_for_rater(trial: dict) -> None:
 
     if trial.get("InterventionDescription"):
         with st.expander(
-            "💉 Intervention details (antigen / construct / route)",
+            "Intervention details (antigen / construct / route)",
             expanded=False,
         ):
             _scrollbox(
@@ -449,7 +557,7 @@ def _format_trial_for_rater(trial: dict) -> None:
 
     if trial.get("EligibilityCriteria"):
         with st.expander(
-            f"👤 Eligibility criteria "
+            f"Eligibility criteria "
             f"({len(trial['EligibilityCriteria'])} chars — often disease-defining)",
             expanded=False,
         ):
@@ -460,7 +568,7 @@ def _format_trial_for_rater(trial: dict) -> None:
 
     if trial.get("PrimaryEndpoints"):
         with st.expander(
-            "🎯 Primary endpoints + study design", expanded=False,
+            "Primary endpoints + study design", expanded=False,
         ):
             _scrollbox(
                 "", trial["PrimaryEndpoints"],
@@ -482,7 +590,7 @@ def _format_trial_for_rater(trial: dict) -> None:
 
     if trial.get("CollaboratorNames") or trial.get("ResponsiblePartyType"):
         with st.expander(
-            "🏢 Sponsor + collaborators (SponsorType signal)",
+            "Sponsor + collaborators (SponsorType signal)",
             expanded=False,
         ):
             st.markdown(
@@ -507,7 +615,7 @@ def _format_trial_for_rater(trial: dict) -> None:
     # Always-visible direct CT.gov link at the bottom — for raters who want
     # to verify against the live record (or check anything we didn't cache).
     st.caption(
-        f"📎 **Anything else you need?** "
+        f"**Anything else you need?** "
         f"[Open the full record on ClinicalTrials.gov ↗]"
         f"(https://clinicaltrials.gov/study/{nct}) "
         f"(opens in a new tab)."
@@ -594,8 +702,8 @@ def _render_rater(rater_id: str) -> None:
             secs_ago = (datetime.now(timezone.utc) - dt).total_seconds()
             stale = secs_ago > 120
             klass = "save-stale" if stale else "save-fresh"
-            label = (f"⚠ {int(secs_ago)}s ago — save!" if stale
-                     else f"✓ {int(secs_ago)}s ago")
+            label = (f"{int(secs_ago)}s ago — save!" if stale
+                     else f"saved {int(secs_ago)}s ago")
             st.markdown(
                 f"<small>Last saved: <span class='{klass}'>{label}</span></small>",
                 unsafe_allow_html=True,
@@ -604,7 +712,7 @@ def _render_rater(rater_id: str) -> None:
             st.caption("Last saved: —")
     with _c3:
         st.download_button(
-            "💾 Download progress",
+            "Download progress",
             data=json.dumps(state, indent=2),
             file_name=f"{rater_id}_progress_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
             mime="application/json",
@@ -614,12 +722,34 @@ def _render_rater(rater_id: str) -> None:
             use_container_width=True,
         )
 
-    # ---- Garden (live) ----
-    with st.expander(f"🌱 Your garden — {n_done} blooms so far", expanded=False):
-        st.markdown(_garden_html(state, sample), unsafe_allow_html=True)
+    # ---- Session stats tile row (sophisticated gamification) ----
+    # Surfaces pace + time + ETA so the rater can see their own
+    # progress in real numbers — same psychology as a runner watching
+    # pace tick down. Replaces childish badges with informative ones.
+    st.markdown(_session_stats_html(state), unsafe_allow_html=True)
 
-    # ---- Milestone banner ----
-    msg = _milestone_message(n_done)
+    # ---- Progress heatmap (GitHub-contributions-style) ----
+    with st.expander(
+        f"Progress heatmap — {n_done} of {n_total} rated",
+        expanded=False,
+    ):
+        st.caption(
+            "Each cell represents one trial in the locked sample. "
+            "Cells fill in deep clinical blue as you rate. Hover for "
+            "the NCT ID."
+        )
+        st.markdown(_progress_grid_html(state, sample), unsafe_allow_html=True)
+
+    # ---- Milestone banner (informative + methodologically grounded) ----
+    _durations_for_msg = [
+        r.get("duration_seconds", 0) for r in state["ratings"].values()
+        if not r.get("skipped")
+    ]
+    _median_for_msg = (
+        sorted(_durations_for_msg)[len(_durations_for_msg) // 2]
+        if _durations_for_msg else 0
+    )
+    msg = _milestone_message(n_done, median_secs=_median_for_msg)
     if msg and st.session_state.get("last_milestone_shown") != n_done:
         st.success(msg)
         st.session_state["last_milestone_shown"] = n_done
@@ -713,9 +843,8 @@ def _render_rater(rater_id: str) -> None:
         # Auto-prompt for backup every 10 ratings
         if (n_done + 1) % 10 == 0:
             st.toast(
-                f"💾 {n_done + 1} done — please click 'Download progress' "
+                f"{n_done + 1} done — please click 'Download progress' "
                 f"as a backup. Takes 2 sec.",
-                icon="🌱",
             )
         st.rerun()
 
@@ -756,7 +885,7 @@ def _render_footer(state: dict, rater_id: str) -> None:
         f"subject={_up.quote(subj)}&body={_up.quote(body)}"
     )
     st.markdown(
-        f"[📧 Email progress to Peter (open mail client + attach the JSON)]({mailto})",
+        f"[Email progress to Peter (open mail client + attach the JSON)]({mailto})",
         unsafe_allow_html=True,
     )
 
@@ -793,9 +922,8 @@ def _render_footer(state: dict, rater_id: str) -> None:
 
 def _render_done(state: dict, rater_id: str) -> None:
     """All 200 done — celebration + final-submission instructions."""
-    st.balloons()
     st.success(
-        f"### 🏆 Complete! {len(state['ratings'])} trials rated.\n\n"
+        f"### Complete: {len(state['ratings'])} trials rated.\n\n"
         "Your contribution is preserved on the server. **One last step:**"
     )
     st.markdown(
@@ -811,7 +939,7 @@ def _render_done(state: dict, rater_id: str) -> None:
 
     # Always-visible final download
     st.download_button(
-        "📥 Download FINAL submission",
+        "Download FINAL submission",
         data=json.dumps(state, indent=2),
         file_name=f"{rater_id}_FINAL.json",
         mime="application/json",
@@ -890,11 +1018,11 @@ def _disagreements(rater_docs: dict[str, dict]) -> list[dict]:
 
 def _render_admin(rater_id: str) -> None:
     sample = _load_sample()
-    st.title(f"⚙ Admin — {rater_id}")
+    st.title(f"Admin — {rater_id}")
     st.caption(f"Sample: {sample['sha256'][:16]}… · N={sample['n']} · "
                f"Schema v{SCHEMA_VERSION} · App v{APP_VERSION}")
 
-    tab_status, tab_adj = st.tabs(["📊 Rater status", "⚖ Adjudication queue"])
+    tab_status, tab_adj = st.tabs(["Rater status", "Adjudication queue"])
 
     # --- Tab 1: rater status ---
     with tab_status:
@@ -986,7 +1114,7 @@ def _render_admin(rater_id: str) -> None:
 
         if not outstanding:
             st.success(
-                "🎉 All disagreements adjudicated. Run "
+                "All disagreements adjudicated. Run "
                 "`python3 scripts/compute_pipeline_f1.py` "
                 "to compute pipeline F1 against the gold standard."
             )
@@ -1090,8 +1218,7 @@ def _render_admin(rater_id: str) -> None:
                     "adjudicated_at": datetime.now(timezone.utc).isoformat(),
                 }
                 _save_adjudicated(adj)
-                st.toast(f"Adjudicated {nct} / {axis} → {gold}",
-                         icon="⚖")
+                st.toast(f"Adjudicated {nct} / {axis} → {gold}")
                 st.rerun()
 
         if skipped_keys:
@@ -1106,7 +1233,7 @@ def _render_admin(rater_id: str) -> None:
 def main() -> None:
     rater_id, role = _get_rater_identity()
     if rater_id is None:
-        st.title("🧪 Trial Classification Validation Study")
+        st.title("Trial Classification Validation Study")
         st.caption("Inter-rater reliability study for the CAR-T Trials "
                    "Monitor classification pipeline.")
         st.error(
@@ -1118,7 +1245,7 @@ def main() -> None:
         )
         return
 
-    st.title("🧪 Trial Classification Validation Study")
+    st.title("Trial Classification Validation Study")
     st.caption(
         f"Rater: **{rater_id}** ({role}) · "
         f"Sample v1 · sha256: `{_load_sample()['sha256'][:16]}…`"

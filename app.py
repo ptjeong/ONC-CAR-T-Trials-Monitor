@@ -55,7 +55,7 @@ from config import (
 
 st.set_page_config(
     page_title="CAR-T Oncology Trials Monitor",
-    page_icon="🧬",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -367,9 +367,13 @@ def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
                 if _sel_nct else None)
         )
         if _link:
-            st.markdown(f"📎 **[Open on ClinicalTrials.gov ↗]({_link})**")
+            st.markdown(f"**[Open on ClinicalTrials.gov ↗]({_link})**")
 
-        # ---- 3. Three-column metadata grid (spec v1.0) ----
+        # ---- 3. Three-column metadata grid (spec v1.2) ----
+        # Each column carries a bold section header ("Disease" / "Product" /
+        # "Sponsor") so the visual structure is unmissable when scrolling
+        # through many drilldowns. Inline `*(via Source)*` tags on Target
+        # and ProductType for at-a-glance audit.
         d1, d2, d3 = st.columns(3)
         with d1:
             # DISEASE column
@@ -379,6 +383,7 @@ def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
             )
             _all_ents = record.get("DiseaseEntities") or record.get("DiseaseEntity") or "—"
             _all_ents = str(_all_ents).replace("|", ", ")
+            st.markdown("### Disease")
             st.markdown(
                 f"**Branch:** {record.get('Branch', '—')}  \n"
                 f"**Category:** {record.get('DiseaseCategory', '—')}  \n"
@@ -409,6 +414,7 @@ def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
                 "**LLM override applied**  \n"
                 if bool(record.get("LLMOverride", False)) else ""
             )
+            st.markdown("### Product")
             st.markdown(
                 f"{_target_str}  \n"
                 f"{_ptype_str}  \n"
@@ -423,6 +429,7 @@ def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
             _enroll_display = (
                 int(_enroll_raw) if pd.notna(_enroll_raw) else "—"
             )
+            st.markdown("### Sponsor")
             st.markdown(
                 f"**Lead sponsor:** {record.get('LeadSponsor', '—')}  \n"
                 f"**Sponsor type:** {record.get('SponsorType', '—')}  \n"
@@ -628,11 +635,13 @@ def _render_classification_rationale(record, *, key_suffix: str = "") -> None:
         # 3-bucket label alone.
         try:
             cf = compute_confidence_factors(row)
-            _level_color = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+            # NEJM-clean text label — no traffic-light emojis. Word + percent.
+            _level_word = {
+                "high": "High", "medium": "Moderate", "low": "Limited",
+            }.get(cf["level"], cf["level"].title())
             st.markdown(
                 f"#### Composite confidence: "
-                f"{_level_color[cf['level']]} **{cf['level']}** "
-                f"({cf['score']*100:.0f}%)"
+                f"**{_level_word}** ({cf['score']*100:.0f}%)"
             )
             _cols = st.columns(len(cf["factors"]))
             for col, (axis, info) in zip(_cols, cf["factors"].items()):
@@ -2294,7 +2303,7 @@ _MODERATOR_MODE = _moderator_mode_active()
 _tab_labels = ["Overview", "Geography / Map", "Data", "Deep Dive",
                "Publication Figures", "Methods & Appendix", "About"]
 if _MODERATOR_MODE:
-    _tab_labels.append("⚙ Moderation")
+    _tab_labels.append("Moderation")
 
 _tabs = st.tabs(_tab_labels)
 tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = _tabs[:7]
@@ -3099,16 +3108,17 @@ with tab_data:
     with _c_refresh:
         # Public refresh of the GitHub flag cache. The fetch is otherwise
         # cached 5 min (60 req/hr unauthenticated rate limit), but a user
-        # who just filed a flag wants to see the 🚩 immediately, not 5 min
-        # from now. `.clear()` busts BOTH the open-flags fetch and the
-        # per-issue detail fetch so the drilldown banner also reflects
-        # the latest issue body.
+        # who just filed a flag wants to see the 🚩 indicator immediately,
+        # not 5 min from now. `.clear()` busts BOTH the open-flags fetch
+        # and the per-issue detail fetch so the drilldown banner also
+        # reflects the latest issue body.
         if st.button(
-            "🔄",
+            "Refresh ↻",
             key="data_refresh_flags",
             help="Refresh community flags from GitHub. Use this right "
                  "after filing a flag to see the 🚩 indicator appear "
                  "immediately (otherwise the cache lags up to 5 min).",
+            use_container_width=True,
         ):
             _load_active_flags.clear()
             _load_flag_issue_details.clear()
@@ -5999,7 +6009,7 @@ or decision-support tool.
         transition: background 0.12s, border-color 0.12s;
     " onmouseover="this.style.background='{THEME['surf3']}';this.style.borderColor='{THEME['primary']}'"
        onmouseout="this.style.background='{THEME['surf2']}';this.style.borderColor='{THEME['border']}'">
-        ✉ peter.jeong@uk-koeln.de
+        Email: peter.jeong@uk-koeln.de
     </a>
 </div>
         """,
@@ -6139,7 +6149,7 @@ Stand: {date.today().isoformat()}
 
 if _MODERATOR_MODE and tab_moderation is not None:
     with tab_moderation:
-        st.subheader("⚙ Moderation console")
+        st.subheader("Moderation console")
         st.caption(
             "Private moderator workspace. Triage community classification "
             "flags that have hit consensus, or — when the queue is empty — "

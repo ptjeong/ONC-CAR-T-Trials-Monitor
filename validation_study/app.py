@@ -114,85 +114,146 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Minimalist palette — single accent (#1e40af), one neutral text
-       (#0f172a), one muted (#64748b). Whitespace separates content;
-       no card borders, no gradients, no shadows except on the
-       active submit button. Inspired by Things, Linear, Notion. */
-    .block-container { max-width: 980px; padding-top: 1.6rem; }
+    /* Modern flat design system — confident, structured, single accent.
+       Inspired by Vercel / Linear (current) / Stripe Atlas.
+       - Single accent color: #1e40af (deep blue)
+       - Neutral text scale: #111827 / #1f2937 / #4b5563 / #6b7280
+       - Background neutrals: #ffffff (cards) / #f9fafb (subtle inset)
+       - Borders: solid 1px #e5e7eb (no gradients, no shadows)
+       - Typography: bolder weights on headers (600-700), generous hierarchy
+       - Soft rounded corners (8-10px), consistent across cards
+       - Hover states obvious but never animated past 200ms
+    */
+    .block-container { max-width: 1000px; padding-top: 1.8rem; }
     .stRadio > div { gap: 0.4rem; }
 
-    /* Heatmap — naked grid, no card frame. Cells are the only visual
-       texture; whitespace below separates from the next block. */
+    /* Section card — solid white, flat border, no shadow */
+    .v-card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin: 0 0 14px 0;
+    }
+
+    /* Heatmap card with header row */
+    .heatmap-head {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 12px;
+    }
+    .heatmap-head-title {
+        font-size: 13px; font-weight: 600; color: #111827;
+        letter-spacing: -0.01em;
+    }
+    .heatmap-head-stats {
+        font-size: 13px; color: #6b7280;
+        font-variant-numeric: tabular-nums;
+    }
+    .heatmap-head-stats .pct {
+        color: #1e40af; font-weight: 700; font-size: 16px;
+        margin-left: 4px;
+    }
+    .heatmap-head-stats .count {
+        color: #111827; font-weight: 600;
+    }
+    .heatmap-head-stats .save-stale {
+        color: #b91c1c; font-weight: 600; font-size: 11px;
+        background: #fef2f2; padding: 2px 8px; border-radius: 4px;
+        margin-left: 10px;
+    }
+
+    /* Heatmap grid — flat solid colors, slightly larger gap for breathing */
     .pgrid {
         display: grid;
         grid-template-columns: repeat(50, 1fr);
-        gap: 2px;
+        gap: 3px;
         margin: 0;
     }
     .pcell {
         width: 100%; aspect-ratio: 1 / 1;
-        border-radius: 2px;
+        border-radius: 3px;
         transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .pcell.empty  { background: #eef2f7; }
-    .pcell.older  { background: #94abda; }
-    .pcell.recent { background: #2c5cc7; }
+    .pcell.empty  { background: #f3f4f6; }
+    .pcell.older  { background: #93b3e3; }
+    .pcell.recent { background: #3b6ad4; }
     .pcell.fresh  { background: #1e40af; }
     .pcell:hover {
-        transform: scale(2.2);
+        transform: scale(2.5);
         z-index: 2; position: relative;
         cursor: default;
     }
 
-    /* Single-line meta under the heatmap — count + percentage,
-       right-aligned, muted gray. No border, no background. */
-    .heatmap-meta {
-        font-size: 12px; color: #64748b;
-        text-align: right; margin: 6px 0 18px 0;
-        font-variant-numeric: tabular-nums;
-        letter-spacing: 0.01em;
-    }
-    .heatmap-meta strong {
-        color: #0f172a; font-weight: 600;
-    }
-    .heatmap-meta .save-stale {
-        color: #b91c1c; font-weight: 500; margin-left: 10px;
-    }
-
-    /* Trial card — no frame. Title large, metadata muted small,
-       conditions/interventions inline subtle, summary as quote bar. */
+    /* Trial card — bolder title, structured metadata */
     .trial-title {
-        font-size: 18px; font-weight: 600; color: #0f172a;
-        line-height: 1.3; margin: 4px 0 4px 0;
-        letter-spacing: -0.01em;
+        font-size: 18px; font-weight: 700; color: #111827;
+        line-height: 1.3; margin: 0 0 6px 0;
+        letter-spacing: -0.015em;
     }
     .trial-meta {
-        font-size: 12px; color: #64748b;
-        margin-bottom: 10px; line-height: 1.5;
+        font-size: 12.5px; color: #6b7280;
+        margin-bottom: 12px; line-height: 1.5;
     }
     .trial-meta a {
-        color: #1e40af; text-decoration: none; font-weight: 500;
+        color: #1e40af; text-decoration: none; font-weight: 600;
     }
     .trial-meta strong {
-        color: #334155; font-weight: 600;
+        color: #1f2937; font-weight: 600;
     }
     .trial-cond {
-        font-size: 13px; color: #334155; line-height: 1.45;
-        margin-bottom: 4px;
+        font-size: 13px; color: #1f2937; line-height: 1.5;
+        margin-bottom: 6px;
     }
     .trial-cond .lbl {
-        color: #64748b; font-weight: 500;
+        color: #6b7280; font-weight: 600;
         text-transform: uppercase; font-size: 10px;
-        letter-spacing: 0.05em; margin-right: 6px;
+        letter-spacing: 0.06em; margin-right: 8px;
+        display: inline-block;
     }
     .trial-summary {
-        border-left: 2px solid #cbd5e1;
-        padding: 4px 0 4px 12px;
-        color: #475569; font-size: 13px;
-        line-height: 1.45;
-        max-height: 96px; overflow-y: auto;
-        margin: 8px 0 14px 0;
+        background: #f9fafb;
+        border-left: 3px solid #1e40af;
+        padding: 10px 14px;
+        color: #374151; font-size: 13px;
+        line-height: 1.55;
+        max-height: 110px; overflow-y: auto;
+        margin: 10px 0 0 0;
+        border-radius: 0 6px 6px 0;
         white-space: pre-wrap;
+    }
+
+    /* Streamlit element overrides — flatten + tighten */
+    /* Primary button: solid accent blue, bold, full-width feel */
+    .stButton > button[kind="primary"] {
+        background: #1e40af; border: 1px solid #1e40af;
+        color: #ffffff; font-weight: 600;
+        border-radius: 8px;
+        transition: background 150ms ease;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: #1e3a8a; border-color: #1e3a8a;
+    }
+    /* Secondary button: white with thin border */
+    .stButton > button[kind="secondary"] {
+        background: #ffffff; border: 1px solid #d1d5db;
+        color: #1f2937; font-weight: 500;
+        border-radius: 8px;
+    }
+    .stButton > button[kind="secondary"]:hover {
+        background: #f9fafb; border-color: #9ca3af;
+    }
+    /* Text input — flat solid */
+    .stTextInput > div > div > input {
+        border-radius: 8px;
+        border: 1px solid #d1d5db;
+    }
+    .stTextInput > div > div > input:focus {
+        border-color: #1e40af;
+        box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+    }
+    /* Selectbox — flat */
+    .stSelectbox > div > div {
+        border-radius: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -372,11 +433,16 @@ def _progress_grid_html(state: dict, sample: dict,
 
     pct = (n_done / n_total * 100) if n_total else 0
     return (
-        f'<div class="pgrid">{"".join(cells)}</div>'
-        f'<div class="heatmap-meta">'
-        f'<strong>{n_done}</strong> of {n_total} rated · '
-        f'<strong>{pct:.0f}%</strong>'
-        f'{save_meta_html}'
+        f'<div class="v-card">'
+        f'  <div class="heatmap-head">'
+        f'    <div class="heatmap-head-title">Rating progress</div>'
+        f'    <div class="heatmap-head-stats">'
+        f'      <span class="count">{n_done}</span> of {n_total} rated'
+        f'      <span class="pct">{pct:.0f}%</span>'
+        f'      {save_meta_html}'
+        f'    </div>'
+        f'  </div>'
+        f'  <div class="pgrid">{"".join(cells)}</div>'
         f'</div>'
     )
 

@@ -954,6 +954,199 @@ def _render_done(state: dict, rater_id: str) -> None:
 _ADJUDICATED_PATH = APP_DIR / "adjudicated_v1.json"
 NON_RATING_LABELS_ADMIN = {"Unsure", "Skipped", "", None}
 
+# Flag-triage subsystem — pulls open community classification-flag GitHub
+# issues into the validation app's admin role so the moderator can triage
+# them in the same one-item-at-a-time flow as the adjudication queue,
+# instead of clicking through the GitHub UI manually.
+GITHUB_REPO_SLUG = os.environ.get(
+    "FLAG_REPO_SLUG", "ptjeong/ONC-CAR-T-Trials-Monitor"
+)
+FLAG_TRIAGE_LOG_PATH = APP_DIR / "moderator_flag_decisions.json"
+
+
+@st.cache_data(ttl=60 * 5, show_spinner=False)
+def _admin_load_active_flags() -> list[dict]:
+    """Fetch open classification-flag issues, ordered by recency.
+
+    Returns a list of issue dicts (filtered to those carrying the
+    consensus-reached label — those are the ones that have hit
+    the threshold and are awaiting moderator review). Cached 5 min
+    so triage clicks don't re-hit the rate limit.
+    """
+    try:
+        import requests
+        url = (
+            f"https://api.github.com/repos/{GITHUB_REPO_SLUG}/issues"
+            "?state=open&labels=classification-flag,consensus-reached"
+            "&per_page=100&sort=updated&direction=desc"
+        )
+        resp = requests.get(url, timeout=8)
+        if resp.status_code != 200:
+            return []
+        return resp.json() or []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=60 * 5, show_spinner=False)
+def _admin_load_issue_detail(issue_number: int) -> dict:
+    """Fetch the full issue body + comments for one classification-flag.
+
+    Parses the BEGIN_FLAG_DATA YAML blocks out of the body + every
+    human comment. Returns:
+        {"title": str, "body_md": str, "author": str,
+         "html_url": str, "proposals": [...], "comments": [...]}
+    """
+    out = {"proposals": [], "comments": []}
+    try:
+        import requests, re as _re
+        api = f"https://api.github.com/repos/{GITHUB_REPO_SLUG}/issues/{issue_number}"
+        r = requests.get(api, timeout=8)
+        if r.status_code != 200:
+            return out
+        issue = r.json()
+        out["title"] = issue.get("title", "")
+        out["body_md"] = issue.get("body", "") or ""
+        out["html_url"] = issue.get("html_url", "")
+        out["author"] = (issue.get("user") or {}).get("login", "")
+        out["created_at"] = issue.get("created_at", "")
+
+        # Comments (human only — exclude bot)
+        cr = requests.get(f"{api}/comments?per_page=100", timeout=8)
+        if cr.status_code == 200:
+            for c in cr.json() or []:
+                author = (c.get("user") or {}).get("login", "")
+                if author.endswith("[bot]"):
+                    continue
+                out["comments"].append({
+                    "author": author,
+                    "body": c.get("body", "") or "",
+                    "created_at": c.get("created_at", ""),
+                    "html_url": c.get("html_url", ""),
+                })
+
+        # Parse all BEGIN_FLAG_DATA YAML blocks across body + comments
+        block_re = _re.compile(
+            r"<!--\s*BEGIN_FLAG_DATA\s*\n(.*?)END_FLAG_DATA\s*-->",
+            _re.DOTALL,
+        )
+        try:
+            import yaml as _yaml_admin
+            yaml_safe = _yaml_admin.safe_load
+        except ImportError:
+            yaml_safe = None
+
+        all_texts = [(out["author"], out["body_md"])]
+        all_texts += [(c["author"], c["body"]) for c in out["comments"]]
+        for author, text in all_texts:
+            for blk in block_re.finditer(text or ""):
+                if yaml_safe:
+                    try:
+                        data = yaml_safe(blk.group(1))
+                    except Exception:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    for ax in (data.get("flagged_axes") or []):
+                        if isinstance(ax, dict) and ax.get("axis"):
+                            out["proposals"].append({
+                                "author": author,
+                                "axis": ax.get("axis", "").strip(),
+                                "pipeline_label": ax.get("pipeline_label") or "",
+                                "proposed_correction": ax.get("proposed_correction") or "",
+                            })
+        return out
+    except Exception:
+        return out
+
+
+def _admin_load_flag_decisions() -> dict:
+    """Local persistent log of moderator flag decisions, keyed by NCT."""
+    if not FLAG_TRIAGE_LOG_PATH.exists():
+        return {}
+    try:
+        return json.loads(FLAG_TRIAGE_LOG_PATH.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def _admin_save_flag_decision(nct: str, decision: dict) -> None:
+    """Append a moderator decision atomically. The decision dict carries
+    the full audit context: rater, axis, proposed, gold, rationale, etc."""
+    log = _admin_load_flag_decisions()
+    log[nct] = decision
+    _atomic_write_json(FLAG_TRIAGE_LOG_PATH, log)
+
+
+def _admin_post_github_action(
+    issue_number: int,
+    *,
+    comment_body: str,
+    label_to_add: str | None = None,
+    close: bool = False,
+    token: str | None = None,
+) -> tuple[bool, str]:
+    """Write back to GitHub: comment + optional label + optional close.
+
+    Returns (success, message). On any error, returns (False, error_text)
+    — the local moderator_flag_decisions.json record is the durable
+    audit; GitHub writeback is best-effort.
+    """
+    if not token:
+        return False, ("GH_MODERATOR_TOKEN not set — decision recorded "
+                        "locally only. Set the secret to enable GitHub writeback.")
+    try:
+        import requests
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        api = f"https://api.github.com/repos/{GITHUB_REPO_SLUG}/issues/{issue_number}"
+
+        # 1. Post the comment
+        cr = requests.post(
+            f"{api}/comments",
+            headers=headers, timeout=10,
+            json={"body": comment_body},
+        )
+        if cr.status_code not in (200, 201):
+            return False, f"Comment failed: HTTP {cr.status_code}: {cr.text[:200]}"
+
+        # 2. Apply the label
+        if label_to_add:
+            lr = requests.post(
+                f"{api}/labels",
+                headers=headers, timeout=10,
+                json={"labels": [label_to_add]},
+            )
+            if lr.status_code not in (200, 201):
+                return False, f"Label failed: HTTP {lr.status_code}: {lr.text[:200]}"
+
+        # 3. Close the issue
+        if close:
+            xr = requests.patch(
+                api, headers=headers, timeout=10,
+                json={"state": "closed", "state_reason": "completed"},
+            )
+            if xr.status_code != 200:
+                return False, f"Close failed: HTTP {xr.status_code}: {xr.text[:200]}"
+
+        return True, "GitHub updated."
+    except Exception as e:  # noqa: BLE001
+        return False, f"Network error: {e}"
+
+
+def _admin_get_moderator_token() -> str | None:
+    """Pull the moderator's GitHub PAT from env or st.secrets."""
+    token = os.environ.get("GH_MODERATOR_TOKEN")
+    if token:
+        return token
+    try:
+        return st.secrets.get("gh_moderator_token", None)
+    except Exception:
+        return None
+
 
 def _load_adjudicated() -> dict:
     """Load committed adjudicated gold-standard labels.
@@ -1022,7 +1215,9 @@ def _render_admin(rater_id: str) -> None:
     st.caption(f"Sample: {sample['sha256'][:16]}… · N={sample['n']} · "
                f"Schema v{SCHEMA_VERSION} · App v{APP_VERSION}")
 
-    tab_status, tab_adj = st.tabs(["Rater status", "Adjudication queue"])
+    tab_status, tab_adj, tab_flags = st.tabs([
+        "Rater status", "Adjudication queue", "Flag triage",
+    ])
 
     # --- Tab 1: rater status ---
     with tab_status:
@@ -1224,6 +1419,256 @@ def _render_admin(rater_id: str) -> None:
         if skipped_keys:
             st.caption(f"Skipped in this session: {len(skipped_keys)} "
                        "(will resurface on next session)")
+
+    # --- Tab 3: Flag triage ---
+    # Pulls open community classification-flag GitHub issues that have hit
+    # the consensus threshold (so the moderator only sees issues worth their
+    # time) and presents them one-at-a-time in the same flow as adjudication.
+    # Each decision: writes to local moderator_flag_decisions.json (durable
+    # audit) AND, if a GitHub PAT is set, posts a moderator comment +
+    # applies a label (moderator-approved / moderator-rejected) + closes
+    # the issue. No more clicking through GitHub manually.
+    with tab_flags:
+        st.markdown("### Flag triage")
+
+        # Cache-bust button + repo info
+        _fc1, _fc2 = st.columns([0.7, 0.3])
+        with _fc1:
+            st.caption(
+                f"Pulls open `consensus-reached` flags from "
+                f"[github.com/{GITHUB_REPO_SLUG}/issues]"
+                f"(https://github.com/{GITHUB_REPO_SLUG}/issues?q=is%3Aopen+label%3Aclassification-flag+label%3Aconsensus-reached). "
+                "Each decision is recorded locally and "
+                "(if GH_MODERATOR_TOKEN is set) automatically commented "
+                "+ labelled + closed on the issue itself."
+            )
+        with _fc2:
+            if st.button("Refresh from GitHub", key="flag_refresh",
+                          use_container_width=True):
+                _admin_load_active_flags.clear()
+                _admin_load_issue_detail.clear()
+                st.rerun()
+
+        flag_issues = _admin_load_active_flags()
+        flag_log = _admin_load_flag_decisions()
+        gh_token = _admin_get_moderator_token()
+
+        # Filter to issues not yet locally-decided + not session-skipped
+        _flag_skipped = st.session_state.setdefault(
+            "flag_skipped_keys", set(),
+        )
+
+        def _issue_nct(issue: dict) -> str | None:
+            import re as _re_n
+            t = issue.get("title", "") or ""
+            b = issue.get("body", "") or ""
+            m = _re_n.search(r"NCT\d{8}", t) or _re_n.search(r"NCT\d{8}", b)
+            return m.group(0) if m else None
+
+        outstanding_flags = [
+            iss for iss in flag_issues
+            if (n := _issue_nct(iss))
+            and n not in flag_log
+            and iss.get("number") not in _flag_skipped
+        ]
+
+        _m1, _m2, _m3 = st.columns(3)
+        _m1.metric("Open consensus flags", len(flag_issues))
+        _m2.metric("Decided locally", len(flag_log))
+        _m3.metric("Outstanding (not skipped)", len(outstanding_flags))
+
+        if not gh_token:
+            st.warning(
+                "**`GH_MODERATOR_TOKEN` not set.** Decisions will be "
+                "recorded locally but NOT pushed back to GitHub. To enable "
+                "automatic commenting + labelling + closing, add the secret "
+                "to Streamlit Cloud (Settings → Secrets):\n"
+                "```toml\ngh_moderator_token = \"ghp_…\"\n```\n"
+                "PAT needs `repo` scope for issue write access."
+            )
+
+        if not outstanding_flags:
+            if flag_issues:
+                st.success(
+                    "All open consensus-flagged trials have been triaged "
+                    "in this session. Click **Refresh from GitHub** if you "
+                    "expect new ones."
+                )
+            else:
+                st.info(
+                    "No open consensus-reached flags awaiting moderation. "
+                    "Either no community flags have been filed, or they "
+                    "haven't hit the consensus threshold yet."
+                )
+        else:
+            # Show the next outstanding flag
+            issue = outstanding_flags[0]
+            nct = _issue_nct(issue)
+            issue_num = issue.get("number")
+            issue_url = issue.get("html_url", "")
+
+            st.markdown(
+                f"#### Flag {len(flag_log) + 1} of "
+                f"{len(flag_log) + len(outstanding_flags)}: "
+                f"[{nct}]({issue_url})"
+            )
+            st.caption(
+                f"Issue #{issue_num} · "
+                f"opened by **{(issue.get('user') or {}).get('login', '?')}** "
+                f"· created {issue.get('created_at', '?')[:10]}"
+            )
+
+            # Pull issue details (cached)
+            details = _admin_load_issue_detail(issue_num) if issue_num else {}
+
+            # Show the trial (uses the same _format_trial_for_rater layout)
+            sample = _load_sample()
+            trial = next(
+                (t for t in sample["trials"] if t["NCTId"] == nct), None,
+            )
+            if trial:
+                with st.expander("Trial info (from validation sample)",
+                                  expanded=True):
+                    _format_trial_for_rater(trial)
+            else:
+                st.caption(
+                    f"Trial {nct} is not in the locked validation sample "
+                    "v1; only the GitHub issue context is available below."
+                )
+
+            # Show the proposed corrections
+            if details.get("proposals"):
+                st.markdown("##### Community proposed corrections")
+                _ptable = pd.DataFrame(details["proposals"]).rename(columns={
+                    "axis": "Axis",
+                    "pipeline_label": "Current label",
+                    "proposed_correction": "Proposed",
+                    "author": "Reviewer",
+                })
+                st.dataframe(_ptable, hide_index=True, width="stretch")
+            else:
+                st.caption("_(No structured BEGIN_FLAG_DATA blocks parseable "
+                           "from issue body / comments. See the full thread "
+                           "for context.)_")
+
+            # Show free-text rationale from the issue body
+            with st.expander("Issue body + comments (full thread)",
+                              expanded=False):
+                if details.get("body_md"):
+                    st.markdown("**Body**")
+                    st.markdown(details["body_md"])
+                if details.get("comments"):
+                    st.markdown("---")
+                    st.markdown("**Comments**")
+                    for c in details["comments"]:
+                        st.markdown(
+                            f"**{c['author']}** · "
+                            f"_{c.get('created_at', '')[:10]}_"
+                        )
+                        st.markdown(c["body"])
+                        st.markdown("---")
+                st.markdown(f"[Open on GitHub ↗]({issue_url})")
+
+            # Decision form
+            st.markdown("##### Your decision")
+            decision = st.radio(
+                "Action",
+                options=["Approve correction",
+                         "Reject correction",
+                         "Defer (revisit later)"],
+                key=f"flag_decision_{issue_num}",
+                horizontal=True,
+            )
+            rationale = st.text_area(
+                "Rationale (recorded locally; included in GitHub comment)",
+                key=f"flag_rationale_{issue_num}",
+                placeholder="e.g. 'Confirmed via CT.gov primary condition: "
+                            "GBM, not generic CNS.'",
+            )
+
+            _bc1, _bc2 = st.columns([0.7, 0.3])
+            with _bc1:
+                if st.button(
+                    "Skip for this session",
+                    key=f"flag_skip_{issue_num}",
+                ):
+                    _flag_skipped.add(issue_num)
+                    st.rerun()
+            with _bc2:
+                if st.button(
+                    "Record + next →",
+                    key=f"flag_record_{issue_num}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    if decision == "Defer (revisit later)":
+                        _flag_skipped.add(issue_num)
+                        st.toast(f"Deferred {nct}")
+                        st.rerun()
+                    if decision != "Defer (revisit later)" and not rationale.strip():
+                        st.error(
+                            "Please add a rationale — it gets posted as a "
+                            "moderator comment on the issue."
+                        )
+                    else:
+                        # Save local decision (durable)
+                        from datetime import datetime as _dt_flag
+                        _admin_save_flag_decision(nct, {
+                            "nct_id": nct,
+                            "issue_number": issue_num,
+                            "issue_url": issue_url,
+                            "decision": decision,
+                            "rationale": rationale.strip(),
+                            "moderator": rater_id,
+                            "decided_at": _dt_flag.now(timezone.utc).isoformat(),
+                            "proposals": details.get("proposals", []),
+                        })
+
+                        # Optional GitHub writeback
+                        if gh_token:
+                            label = ("moderator-approved"
+                                     if decision == "Approve correction"
+                                     else "moderator-rejected")
+                            comment = (
+                                f"**Moderator decision: {decision}**\n\n"
+                                f"{rationale.strip()}\n\n"
+                                f"_Recorded by @{rater_id} via the validation-app "
+                                f"flag-triage queue at "
+                                f"{_dt_flag.now(timezone.utc).isoformat()}._\n\n"
+                                f"---\n"
+                                f"_Approved corrections are queued for "
+                                f"promotion to `llm_overrides.json` via "
+                                f"`scripts/promote_consensus_flags.py "
+                                f"--require-moderator-approval --apply --close-issues`._"
+                                if decision == "Approve correction"
+                                else f"**Moderator decision: {decision}**\n\n"
+                                     f"{rationale.strip()}\n\n"
+                                     f"_Recorded by @{rater_id} via the validation-app "
+                                     f"flag-triage queue at "
+                                     f"{_dt_flag.now(timezone.utc).isoformat()}._"
+                            )
+                            ok, msg = _admin_post_github_action(
+                                issue_num,
+                                comment_body=comment,
+                                label_to_add=label,
+                                close=True,
+                                token=gh_token,
+                            )
+                            if ok:
+                                st.toast(f"GitHub: comment + label + close OK ({nct})")
+                            else:
+                                st.warning(
+                                    f"Local decision saved, but GitHub "
+                                    f"writeback failed: {msg}"
+                                )
+                        else:
+                            st.toast(
+                                f"Decision saved locally ({nct}). Set "
+                                "GH_MODERATOR_TOKEN to enable writeback."
+                            )
+                        # Bust the cache so the closed issue drops out next render
+                        _admin_load_active_flags.clear()
+                        st.rerun()
 
 
 # ---------------------------------------------------------------------------

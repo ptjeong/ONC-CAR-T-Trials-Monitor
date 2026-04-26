@@ -566,163 +566,149 @@ def _html_escape(s: str) -> str:
 def _format_trial_for_rater(trial: dict) -> None:
     """Render the trial info — ONLY the raw evidence, no pipeline labels.
 
-    Layout is optimized for one-glance scannability with progressive
-    disclosure for long-form fields:
-
-      ABOVE THE FOLD (always visible — sufficient for ~70% of trials):
-        - Title
-        - Metadata chip row (NCT link · Phase · Status · Sponsor + class · Design)
-        - Conditions + Interventions side-by-side (highest-signal)
-        - Brief summary (scrollable, max-height 240px)
-
-      BELOW THE FOLD (in expanders — open when context insufficient):
-        - Detailed description (often 5-10× the BriefSummary)
-        - Eligibility criteria (disease-defining inclusion/exclusion)
-        - Intervention + arm group details (antigen + product type signals)
-        - Primary endpoints + study design (interventional/observational, etc.)
-        - Sponsor + collaborators (SponsorType signal)
-        - Direct CT.gov link (full record)
+    Single-page-fits design: title + 1-line metadata + tight
+    conditions/interventions row + compact 100px summary scrollbox +
+    ONE consolidated "Full trial context" expander housing all
+    long-form fields. The previous 5 separate expanders cost ~150px
+    of stacked headers; folding into one drops that to ~30px.
     """
     nct = trial["NCTId"]
     title = trial.get("BriefTitle") or "(no title)"
-    st.markdown(f"#### {title}")
+    # Tight title — h5 not h4
+    st.markdown(f"##### {title}")
 
-    # Build the metadata chip row — adds LeadSponsorClass to give the
-    # rater an immediate hint for SponsorType (INDUSTRY/OTHER/NIH/etc.)
+    # Single-line metadata chip row — pipe-separated, no wrap
     sponsor_str = trial.get("LeadSponsor") or "—"
     if trial.get("LeadSponsorClass"):
         sponsor_str = f"{sponsor_str} ({trial['LeadSponsorClass']})"
-    st.caption(
-        f"[{nct}](https://clinicaltrials.gov/study/{nct}) · "
-        f"**Phase:** {trial.get('Phase') or '—'} · "
-        f"**Status:** {trial.get('OverallStatus') or '—'} · "
-        f"**Sponsor:** {sponsor_str} · "
-        f"**Design:** {trial.get('TrialDesign') or '—'} · "
-        f"**Enrollment:** {trial.get('EnrollmentCount') or '—'} · "
-        f"**Started:** {(trial.get('StartDate') or '—')[:10]}"
-    )
+    _meta_bits = [
+        f"[{nct}](https://clinicaltrials.gov/study/{nct})",
+        f"**Phase:** {trial.get('Phase') or '—'}",
+        f"**Status:** {trial.get('OverallStatus') or '—'}",
+        f"**Sponsor:** {sponsor_str}",
+        f"**Design:** {trial.get('TrialDesign') or '—'}",
+    ]
+    if trial.get("EnrollmentCount"):
+        _meta_bits.append(f"**N:** {trial['EnrollmentCount']}")
     if trial.get("Countries"):
-        st.caption(f"**Countries:** {trial['Countries']}")
+        _meta_bits.append(f"**Countries:** {trial['Countries']}")
+    st.caption(" · ".join(_meta_bits))
 
-    # Conditions + Interventions side-by-side (highest-signal fields)
+    # Conditions + Interventions side-by-side — single line each, truncated
     _ec1, _ec2 = st.columns(2)
     with _ec1:
         if trial.get("Conditions"):
-            st.markdown(f"**Conditions**")
-            st.markdown(f"<small>{_html_escape(trial['Conditions'])}</small>",
-                        unsafe_allow_html=True)
-        if trial.get("ConditionKeywords"):
-            st.caption(f"_Keywords:_ {trial['ConditionKeywords']}")
+            st.markdown(
+                f"<div style='font-size:0.85em'>"
+                f"<b>Conditions:</b> {_html_escape(trial['Conditions'])}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
     with _ec2:
         if trial.get("Interventions"):
-            st.markdown(f"**Interventions**")
             st.markdown(
-                f"<small>{_html_escape(trial['Interventions'])}</small>",
+                f"<div style='font-size:0.85em'>"
+                f"<b>Interventions:</b> {_html_escape(trial['Interventions'])}"
+                f"</div>",
                 unsafe_allow_html=True,
             )
 
-    # Brief summary always visible (no expander click)
-    _scrollbox("Brief summary", trial.get("BriefSummary") or "")
+    # Compact brief summary — 100px max instead of 240px
+    if trial.get("BriefSummary"):
+        st.markdown(
+            f"<div style='max-height:100px; overflow-y:auto; "
+            f"padding:6px 10px; background:#f8fafc; "
+            f"border-left:3px solid #cbd5e1; border-radius:4px; "
+            f"font-size:0.85em; line-height:1.35; "
+            f"white-space:pre-wrap; margin-top:4px;'>"
+            f"<b>Summary.</b> {_html_escape(trial['BriefSummary'])}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
-    # ---- Below-the-fold: expanders for deep context ----
-    # These open progressively. Most trials are classifiable from above-fold
-    # alone; expanders unlock fast for the hard ones.
+    # ---- ONE consolidated expander — all long-form context ----
+    # Was 5 separate expanders eating ~150px of headers. Folded into
+    # one for single-page density. Tabs inside for fast switching
+    # when the rater needs more context for a hard call.
+    _has_long_form = any(trial.get(k) for k in [
+        "DetailedDescription", "InterventionDescription",
+        "EligibilityCriteria", "PrimaryEndpoints",
+        "ArmGroupDescriptions", "CollaboratorNames",
+        "ResponsiblePartyType",
+    ])
+    if _has_long_form:
+        with st.expander("Full trial context (detailed description, "
+                          "eligibility, intervention, design, sponsor)",
+                          expanded=False):
+            _ctx_tabs = st.tabs([
+                "Detailed description", "Intervention", "Eligibility",
+                "Endpoints + design", "Sponsor + collaborators",
+            ])
+            with _ctx_tabs[0]:
+                if trial.get("DetailedDescription"):
+                    _scrollbox("", trial["DetailedDescription"],
+                                max_height=320, accent="#3b82f6")
+                else:
+                    st.caption("_(none provided in CT.gov record)_")
+            with _ctx_tabs[1]:
+                if trial.get("InterventionDescription"):
+                    _scrollbox("", trial["InterventionDescription"],
+                                max_height=240, accent="#10b981")
+                if trial.get("ArmGroupDescriptions"):
+                    _scrollbox("Arm groups", trial["ArmGroupDescriptions"],
+                                max_height=200, accent="#10b981")
+                if not trial.get("InterventionDescription") and not trial.get("ArmGroupDescriptions"):
+                    st.caption("_(none provided)_")
+            with _ctx_tabs[2]:
+                if trial.get("EligibilityCriteria"):
+                    _scrollbox("", trial["EligibilityCriteria"],
+                                max_height=320, accent="#f59e0b")
+                else:
+                    st.caption("_(none provided)_")
+            with _ctx_tabs[3]:
+                if trial.get("PrimaryEndpoints"):
+                    _scrollbox("", trial["PrimaryEndpoints"],
+                                max_height=200, accent="#8b5cf6")
+                _design_bits = []
+                if trial.get("StudyType"):
+                    _design_bits.append(f"**Study type:** {trial['StudyType']}")
+                if trial.get("Allocation"):
+                    _design_bits.append(f"**Allocation:** {trial['Allocation']}")
+                if trial.get("InterventionModel"):
+                    _design_bits.append(
+                        f"**Intervention model:** {trial['InterventionModel']}"
+                    )
+                if trial.get("Masking"):
+                    _design_bits.append(f"**Masking:** {trial['Masking']}")
+                if _design_bits:
+                    st.markdown(" · ".join(_design_bits))
+                if not trial.get("PrimaryEndpoints") and not _design_bits:
+                    st.caption("_(none provided)_")
+            with _ctx_tabs[4]:
+                if trial.get("LeadSponsorClass"):
+                    st.markdown(
+                        f"**LeadSponsorClass (CT.gov):** "
+                        f"`{trial['LeadSponsorClass']}`"
+                    )
+                if trial.get("CollaboratorNames"):
+                    st.markdown(
+                        f"**Collaborators:** {trial['CollaboratorNames']}"
+                    )
+                if trial.get("ResponsiblePartyType"):
+                    st.markdown(
+                        f"**Responsible party:** "
+                        f"{trial.get('ResponsiblePartyName') or '—'} "
+                        f"({trial['ResponsiblePartyType']})"
+                    )
+                if not (trial.get("LeadSponsorClass") or
+                        trial.get("CollaboratorNames") or
+                        trial.get("ResponsiblePartyType")):
+                    st.caption("_(none provided)_")
 
-    # The longest-form fields are gated behind expanders so the page is
-    # scannable on first render. Single column (full-width) inside each
-    # expander so the text isn't squeezed.
-
-    if trial.get("DetailedDescription"):
-        with st.expander(
-            f"Detailed description "
-            f"({len(trial['DetailedDescription'])} chars)",
-            expanded=False,
-        ):
-            _scrollbox(
-                "", trial["DetailedDescription"],
-                max_height=400, accent="#3b82f6",
-            )
-
-    if trial.get("InterventionDescription"):
-        with st.expander(
-            "Intervention details (antigen / construct / route)",
-            expanded=False,
-        ):
-            _scrollbox(
-                "", trial["InterventionDescription"],
-                max_height=300, accent="#10b981",
-            )
-            if trial.get("ArmGroupDescriptions"):
-                _scrollbox(
-                    "Arm groups", trial["ArmGroupDescriptions"],
-                    max_height=200, accent="#10b981",
-                )
-
-    if trial.get("EligibilityCriteria"):
-        with st.expander(
-            f"Eligibility criteria "
-            f"({len(trial['EligibilityCriteria'])} chars — often disease-defining)",
-            expanded=False,
-        ):
-            _scrollbox(
-                "", trial["EligibilityCriteria"],
-                max_height=400, accent="#f59e0b",
-            )
-
-    if trial.get("PrimaryEndpoints"):
-        with st.expander(
-            "Primary endpoints + study design", expanded=False,
-        ):
-            _scrollbox(
-                "", trial["PrimaryEndpoints"],
-                max_height=240, accent="#8b5cf6",
-            )
-            design_bits = []
-            if trial.get("StudyType"):
-                design_bits.append(f"**Study type:** {trial['StudyType']}")
-            if trial.get("Allocation"):
-                design_bits.append(f"**Allocation:** {trial['Allocation']}")
-            if trial.get("InterventionModel"):
-                design_bits.append(
-                    f"**Intervention model:** {trial['InterventionModel']}"
-                )
-            if trial.get("Masking"):
-                design_bits.append(f"**Masking:** {trial['Masking']}")
-            if design_bits:
-                st.markdown(" · ".join(design_bits))
-
-    if trial.get("CollaboratorNames") or trial.get("ResponsiblePartyType"):
-        with st.expander(
-            "Sponsor + collaborators (SponsorType signal)",
-            expanded=False,
-        ):
-            st.markdown(
-                f"**Lead sponsor:** {trial.get('LeadSponsor') or '—'}"
-            )
-            if trial.get("LeadSponsorClass"):
-                st.markdown(
-                    f"**LeadSponsorClass (CT.gov):** "
-                    f"`{trial['LeadSponsorClass']}`"
-                )
-            if trial.get("CollaboratorNames"):
-                st.markdown(
-                    f"**Collaborators:** {trial['CollaboratorNames']}"
-                )
-            if trial.get("ResponsiblePartyType"):
-                st.markdown(
-                    f"**Responsible party:** "
-                    f"{trial.get('ResponsiblePartyName') or '—'} "
-                    f"({trial['ResponsiblePartyType']})"
-                )
-
-    # Always-visible direct CT.gov link at the bottom — for raters who want
-    # to verify against the live record (or check anything we didn't cache).
-    st.caption(
-        f"**Anything else you need?** "
-        f"[Open the full record on ClinicalTrials.gov ↗]"
-        f"(https://clinicaltrials.gov/study/{nct}) "
-        f"(opens in a new tab)."
-    )
+    # Sponsor / collaborators / CT.gov link all live inside the
+    # consolidated "Full trial context" tabs above. NCT link is already
+    # in the metadata row. No trailing chrome on this card — every
+    # pixel below this point belongs to the rating widgets.
 
 
 def _render_axis_input(axis: str, sample: dict, key: str) -> str:
@@ -795,10 +781,16 @@ def _render_rater(rater_id: str) -> None:
     n_total = len(sample["trials"])
 
     # ---- Top header: progress + save status + always-on manual save ----
-    _c1, _c2, _c3 = st.columns([0.55, 0.25, 0.20])
-    with _c1:
-        st.progress(n_done / n_total, text=f"**{n_done} / {n_total} trials rated**")
-    with _c2:
+    # ---- Compact heatmap card (FIRST thing on the page) ----
+    # Side-by-side card: 50-col × 4-row grid on the left, big percent +
+    # count on the right. ~80px tall. Hover any cell for the NCT ID.
+    # Three intensity tiers (fresh/recent/older) give visual texture.
+    # The percentage replaces the old st.progress bar.
+    st.markdown(_progress_grid_html(state, sample), unsafe_allow_html=True)
+
+    # ---- Tiny utility row: save status + download (single line) ----
+    _save_col, _dl_col = st.columns([0.7, 0.3])
+    with _save_col:
         last_save = state.get("last_updated", "—")
         try:
             dt = datetime.fromisoformat(last_save.replace("Z", "+00:00"))
@@ -806,33 +798,28 @@ def _render_rater(rater_id: str) -> None:
             stale = secs_ago > 120
             klass = "save-stale" if stale else "save-fresh"
             label = (f"{int(secs_ago)}s ago — save!" if stale
-                     else f"saved {int(secs_ago)}s ago")
+                     else f"auto-saved {int(secs_ago)}s ago")
             st.markdown(
-                f"<small>Last saved: <span class='{klass}'>{label}</span></small>",
+                f"<small>Server backup: <span class='{klass}'>{label}</span> "
+                "· local Download → safety net if the server restarts.</small>",
                 unsafe_allow_html=True,
             )
         except Exception:
             st.caption("Last saved: —")
-    with _c3:
+    with _dl_col:
         st.download_button(
             "Download progress",
             data=json.dumps(state, indent=2),
             file_name=f"{rater_id}_progress_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
             mime="application/json",
-            help="Save a backup to your computer. Do this whenever you "
-                 "leave for a break — it's your safety net if the server "
-                 "restarts.",
+            help="Save a backup to your computer.",
             use_container_width=True,
         )
 
-    # ---- Compact heatmap card — visible by default, sleek + tight ----
-    # Side-by-side card: 50-col × 4-row strip on the left, big percent +
-    # count on the right. ~120px tall. Hover any cell for the NCT ID.
-    # Three intensity tiers (fresh/recent/older) give the visual texture.
-    st.markdown(_progress_grid_html(state, sample), unsafe_allow_html=True)
-
-    # ---- Session stats tile row (live pace + ETA) ----
-    st.markdown(_session_stats_html(state), unsafe_allow_html=True)
+    # (Session stats tiles previously rendered here are now folded into
+    # the heatmap card's right panel — % complete + N/200 — and into
+    # the bottom expander's median-pace + ETA. Kept the function for
+    # use inside the expander.)
 
     # ---- Milestone banner (informative + methodologically grounded) ----
     _durations_for_msg = [
@@ -860,43 +847,47 @@ def _render_rater(rater_id: str) -> None:
         return
 
     nct = trial["NCTId"]
-    st.divider()
     _format_trial_for_rater(trial)
-    st.divider()
-
-    st.markdown(f"#### Classify this trial across the six axes")
-    st.caption("Pipeline labels are deliberately hidden. If you can't make a "
-               "confident call, mark **Unsure** — that's data, not failure.")
 
     # Track time-on-trial — start the clock when this trial is first shown
     timer_key = f"timer_{nct}"
     if timer_key not in st.session_state:
         st.session_state[timer_key] = time.time()
 
-    # Two-column layout for the six axes (3 left, 3 right)
+    # Three-column axis layout (was two) — saves vertical space.
+    # The "Classify..." subtitle + Pipeline-labels-hidden caption from
+    # the previous draft are dropped: redundant once raters have done
+    # 1-2 trials. Onboarding text moves to a "How this works" expander
+    # at the bottom.
     axes = list(AXIS_OPTIONS.keys())
-    col_l, col_r = st.columns(2)
+    col_a, col_b, col_c = st.columns(3)
     user_labels: dict[str, str] = {}
-    with col_l:
-        for axis in axes[:3]:
-            user_labels[axis] = _render_axis_input(axis, sample, key=f"input_{nct}_{axis}")
-    with col_r:
-        for axis in axes[3:]:
-            user_labels[axis] = _render_axis_input(axis, sample, key=f"input_{nct}_{axis}")
+    for col, ax_pair in zip(
+        (col_a, col_b, col_c),
+        ([axes[0], axes[3]], [axes[1], axes[4]], [axes[2], axes[5]]),
+    ):
+        with col:
+            for axis in ax_pair:
+                user_labels[axis] = _render_axis_input(
+                    axis, sample, key=f"input_{nct}_{axis}",
+                )
 
-    notes = st.text_input(
-        "Notes (optional)",
-        key=f"notes_{nct}",
-        placeholder="Any rationale, ambiguity, or note for adjudication.",
-    )
-
-    # ---- Submit ----
-    _submit_c1, _submit_c2 = st.columns([0.7, 0.3])
-    with _submit_c1:
-        skip = st.button("Skip this trial (don't record)",
-                          key=f"skip_{nct}",
-                          help="Use sparingly — every skip reduces κ statistical power.")
-    with _submit_c2:
+    # Inline notes + submit row — was 2 separate rows, now 1
+    _n_col, _skip_col, _submit_col = st.columns([0.55, 0.18, 0.27])
+    with _n_col:
+        notes = st.text_input(
+            "Notes (optional)",
+            key=f"notes_{nct}",
+            placeholder="Rationale, ambiguity, adjudication notes…",
+            label_visibility="collapsed",
+        )
+    with _skip_col:
+        skip = st.button(
+            "Skip", key=f"skip_{nct}",
+            help="Use sparingly — every skip reduces κ power.",
+            use_container_width=True,
+        )
+    with _submit_col:
         submit = st.button(
             f"Submit + next ({n_done + 1}/{n_total}) →",
             key=f"submit_{nct}",
@@ -942,19 +933,24 @@ def _render_rater(rater_id: str) -> None:
             )
         st.rerun()
 
-    # ---- Footer: median time + email ----
-    _render_footer(state, rater_id)
+    # ---- Footer (collapsed by default to preserve single-page view) ----
+    with st.expander("More options · session pace · backup · resume", expanded=False):
+        _render_footer(state, rater_id)
 
 
 def _render_footer(state: dict, rater_id: str) -> None:
-    """Bottom-of-page utilities: median time, email backup, resume upload."""
+    """Bottom-of-page utilities: median time, email backup, resume upload.
+
+    Lives inside a collapsed expander so the rater session is single-page
+    by default. The above-the-fold view is purely the heatmap card +
+    trial card + classification widgets.
+    """
     durations = [r.get("duration_seconds", 0) for r in state["ratings"].values()
                  if not r.get("skipped")]
     if durations:
         med = sorted(durations)[len(durations) // 2]
         n_left = 200 - len(state["ratings"])
         eta_min = (med * n_left) / 60
-        st.divider()
         st.caption(
             f"Median time per trial so far: **{med}s**. "
             f"Estimated time remaining: **~{eta_min:.0f} min** "

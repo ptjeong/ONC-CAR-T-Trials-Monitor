@@ -1,0 +1,5 @@
+# Minimal deps for the standalone validation_study Streamlit app.
+# Installs cleanly on Streamlit Cloud's default Python 3.12 image.
+streamlit==1.56.0
+pandas==3.0.2
+numpy==2.4.4

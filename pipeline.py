@@ -1268,6 +1268,10 @@ def _git_sha_or_unknown() -> str:
         return "unknown"
 
 
+_BACKFILL_BATCH_SIZE = 100
+_BACKFILL_SLEEP_SEC = 0.25  # polite pause between batches
+
+
 def backfill_site_geo(df_sites: pd.DataFrame) -> pd.DataFrame:
     """Re-fetch site lat/lon from CT.gov for rows missing geo data.
 
@@ -1277,9 +1281,11 @@ def backfill_site_geo(df_sites: pd.DataFrame) -> pd.DataFrame:
 
     Returns a copy of df_sites with Latitude / Longitude filled where
     the CT.gov API now provides them. Rows the API can't enrich are
-    left as-is (no error). Hits CT.gov once per unique NCTId; gracefully
-    no-op when df_sites is empty or already has geo coverage.
+    left as-is (no error). Batches NCT IDs (100 per request) for
+    efficiency; gracefully no-op when df_sites is empty or already
+    has full geo coverage.
     """
+    import time as _time
     if df_sites.empty:
         return df_sites
     out = df_sites.copy()
@@ -1292,44 +1298,60 @@ def backfill_site_geo(df_sites: pd.DataFrame) -> pd.DataFrame:
     needs_fetch = (
         out["Latitude"].isna() | out["Longitude"].isna()
     )
-    nct_ids = out.loc[needs_fetch, "NCTId"].dropna().unique().tolist()
+    nct_ids = sorted(out.loc[needs_fetch, "NCTId"].dropna().unique().tolist())
     if not nct_ids:
         return out
 
-    fetched: dict[tuple[str, str], tuple[float, float]] = {}
-    for nct in nct_ids:
+    # Batched fetch: 100 NCTs per CT.gov call via filter.ids
+    fetched: dict[tuple[str, str, str], tuple[float, float]] = {}
+    for i in range(0, len(nct_ids), _BACKFILL_BATCH_SIZE):
+        chunk = nct_ids[i: i + _BACKFILL_BATCH_SIZE]
+        params = {
+            "filter.ids": ",".join(chunk),
+            "pageSize": _BACKFILL_BATCH_SIZE,
+            "format": "json",
+        }
         try:
-            url = f"{BASE_URL}/{nct}"
-            resp = requests.get(url, timeout=15)
+            resp = requests.get(BASE_URL, params=params, timeout=60)
             if resp.status_code != 200:
                 continue
-            data = resp.json()
-            locs = (data.get("protocolSection", {})
-                       .get("contactsLocationsModule", {})
-                       .get("locations") or [])
-            for loc in locs:
-                facility = loc.get("facility") or ""
-                city = loc.get("city") or ""
-                geo = loc.get("geoPoint") or {}
-                if "lat" in geo and "lon" in geo:
-                    fetched[(nct, facility)] = (geo["lat"], geo["lon"])
-                    fetched[(nct, city)] = (geo["lat"], geo["lon"])
+            for s in resp.json().get("studies", []):
+                ps = s.get("protocolSection", {})
+                nct = ps.get("identificationModule", {}).get("nctId")
+                if not nct:
+                    continue
+                locs = (ps.get("contactsLocationsModule", {})
+                          .get("locations") or [])
+                for loc in locs:
+                    gp = loc.get("geoPoint") or {}
+                    lat, lon = gp.get("lat"), gp.get("lon")
+                    if lat is None or lon is None:
+                        continue
+                    facility = loc.get("facility") or ""
+                    city = loc.get("city") or ""
+                    fetched[(nct, facility, city)] = (
+                        float(lat), float(lon),
+                    )
         except Exception:
             continue
+        _time.sleep(_BACKFILL_SLEEP_SEC)
 
     if not fetched:
         return out
 
-    # Apply the fetched coords back into the dataframe
-    for idx in out.index[needs_fetch]:
-        nct = out.at[idx, "NCTId"]
-        for key in (out.at[idx, "FacilityName"] if "FacilityName" in out.columns else None,
-                    out.at[idx, "City"] if "City" in out.columns else None):
-            coords = fetched.get((nct, key))
-            if coords:
-                out.at[idx, "Latitude"] = coords[0]
-                out.at[idx, "Longitude"] = coords[1]
-                break
+    def _lookup(row, idx_axis: int) -> float | None:
+        key = (
+            row.get("NCTId"),
+            row.get("FacilityName") or row.get("Facility") or "",
+            row.get("City") or "",
+        )
+        coords = fetched.get(key)
+        return coords[idx_axis] if coords else (
+            row["Latitude"] if idx_axis == 0 else row["Longitude"]
+        )
+
+    out["Latitude"] = out.apply(lambda r: _lookup(r, 0), axis=1)
+    out["Longitude"] = out.apply(lambda r: _lookup(r, 1), axis=1)
     return out
 
 

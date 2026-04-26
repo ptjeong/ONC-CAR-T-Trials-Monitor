@@ -55,6 +55,7 @@ from pipeline import (  # noqa: E402
 )
 from config import (  # noqa: E402
     HEME_CATEGORIES, SOLID_CATEGORIES,
+    HEME_TARGET_TERMS, SOLID_TARGET_TERMS, DUAL_TARGET_LABELS,
     BASKET_MULTI_LABEL, HEME_BASKET_LABEL, SOLID_BASKET_LABEL,
     UNCLASSIFIED_LABEL,
 )
@@ -95,6 +96,25 @@ ALLOWED_VALUES = {
         + [HEME_BASKET_LABEL, SOLID_BASKET_LABEL, BASKET_MULTI_LABEL,
            UNCLASSIFIED_LABEL]
     ),
+    # Closed antigen list — same logic as DiseaseCategory above.
+    # Free-text TargetCategory was inflating κ noise via formatting drift
+    # ('Glypican 3' vs 'GPC3' vs 'glypican-3' all referring to the same
+    # antigen). Lifting the same enum-lock that boosted DiseaseCategory
+    # agreement 24% → 70% (commit ebc17cd). Includes:
+    #   - 22 heme antigens + 28 solid antigens (HEME/SOLID_TARGET_TERMS keys)
+    #   - DUAL_TARGET_LABELS combo labels ("CD19/CD22 dual", etc.)
+    #   - CAR-NK / CAAR-T / CAR-Treg construct families
+    #   - Generic CAR-T_unspecified + Other_or_unknown escape hatches
+    "TargetCategory": (
+        sorted(set(HEME_TARGET_TERMS) | set(SOLID_TARGET_TERMS))
+        + [label for _, label in DUAL_TARGET_LABELS]
+        + [
+            "CAR-NK: CD19", "CAR-NK: CD22", "CAR-NK: BCMA",
+            "CAR-NK: HER2", "CAR-NK: GD2", "CAR-NK: other",
+            "CAAR-T", "CAR-Treg", "CAR-γδ T",
+            "CAR-T_unspecified", "Other_or_unknown",
+        ]
+    ),
 }
 
 PROMPT = """You are an independent reviewer of a CAR-T clinical-trial classifier.
@@ -104,14 +124,16 @@ markdown fences):
   branch:           EXACTLY one of: {branches}
   disease_category: EXACTLY one of: {categories}
                     (use the exact label spelling — do not invent variants)
-  target_category:  the antigen/construct, in the canonical short form
-                    used in the CAR-T literature. Use the protein name
-                    when that's canonical ("Mesothelin", "Claudin 18.2"),
-                    and the abbreviation when THAT'S canonical ("PSMA"
-                    not "Prostate Specific Membrane Antigen"; "GPC3"
-                    not "Glypican-3"; "CD19" not "Cluster of
-                    Differentiation 19"). Other examples: "BCMA", "B7-H3",
-                    "CD19/CD22 dual", "CAR-NK: CD19", "Other_or_unknown".
+  target_category:  EXACTLY one of: {targets}
+                    Spelling guidance: use the exact label as written
+                    above. Examples: "CD19" (not "cd19" or
+                    "Cluster of Differentiation 19"), "GPC3" (not
+                    "Glypican-3"), "Claudin 18.2" (not "CLDN18.2" or
+                    "claudin-18.2"), "Mesothelin" (not "MSLN").
+                    Use "Other_or_unknown" if the trial doesn't clearly
+                    target one of the listed antigens.
+                    Use "CAR-T_unspecified" only when the construct is
+                    described as "CAR-T" without antigen specification.
   product_type:     EXACTLY one of: {product_types}
 
 Be conservative — if the trial text doesn't clearly support a label, use
@@ -371,6 +393,7 @@ def main() -> int:
         prompt = PROMPT.format(
             branches=", ".join(ALLOWED_VALUES["Branch"]),
             categories=", ".join(ALLOWED_VALUES["DiseaseCategory"]),
+            targets=", ".join(ALLOWED_VALUES["TargetCategory"]),
             product_types=", ".join(ALLOWED_VALUES["ProductType"]),
             nct=nct,
             title=str(row.get("BriefTitle", ""))[:300],

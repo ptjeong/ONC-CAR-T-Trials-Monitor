@@ -114,146 +114,259 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Modern flat design system — confident, structured, single accent.
-       Inspired by Vercel / Linear (current) / Stripe Atlas.
-       - Single accent color: #1e40af (deep blue)
-       - Neutral text scale: #111827 / #1f2937 / #4b5563 / #6b7280
-       - Background neutrals: #ffffff (cards) / #f9fafb (subtle inset)
-       - Borders: solid 1px #e5e7eb (no gradients, no shadows)
-       - Typography: bolder weights on headers (600-700), generous hierarchy
-       - Soft rounded corners (8-10px), consistent across cards
-       - Hover states obvious but never animated past 200ms
-    */
-    .block-container { max-width: 1000px; padding-top: 1.8rem; }
-    .stRadio > div { gap: 0.4rem; }
+    /* ────────────────────────────────────────────────────────────────────
+       Zen design system — inspired by Linear, Things 3, Stripe Atlas,
+       Arc, Apple Mail. Five rules:
 
-    /* Section card — solid white, flat border, no shadow */
-    .v-card {
+         1. ONE thing has visual primacy at a time. Everything else is
+            peripheral.
+         2. Whitespace is the only divider. Cards/borders/shadows are
+            grudging — used only when content groups would otherwise
+            merge visually.
+         3. Typography carries hierarchy. Size + weight + tracking
+            replace borders.
+         4. ONE accent color (#1e40af), used sparingly. The accent
+            is precious — primary CTA + progress fill, nothing else.
+         5. Calm motion. 200-300ms cubic-bezier transitions, never
+            snappy or bouncy.
+
+       For the rater: the TRIAL is the page. Heatmap is a thin
+       progress strip at the top. Inputs feel inline, not boxed.
+       Submit lives where the eye lands after the last input.
+       ─────────────────────────────────────────────────────────────────── */
+
+    /* System font — matches Apple/Linear/Vercel native feel. */
+    html, body, [class*="st-"] {
+        font-family: -apple-system, BlinkMacSystemFont, "Inter",
+                     "SF Pro Text", "Segoe UI", Roboto,
+                     "Helvetica Neue", Arial, sans-serif !important;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    .block-container {
+        max-width: 760px;
+        padding-top: 0.6rem;
+        padding-bottom: 4rem;
+    }
+
+    /* Hide Streamlit's default header/footer chrome for editorial feel */
+    header[data-testid="stHeader"] { background: transparent; }
+    footer { display: none; }
+
+    /* ───── Top progress bar — sticky, peripheral, glanceable ───── */
+    .top-bar {
+        display: flex; align-items: center; gap: 16px;
+        padding: 10px 0 12px 0; margin: -8px 0 28px 0;
+        border-bottom: 1px solid #f0f0f0;
+        position: sticky; top: 0; z-index: 50;
         background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
-        padding: 16px 20px;
-        margin: 0 0 14px 0;
     }
-
-    /* Heatmap card with header row */
-    .heatmap-head {
-        display: flex; justify-content: space-between; align-items: baseline;
-        margin-bottom: 12px;
+    .top-bar .label {
+        font-size: 11px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.08em;
+        color: #737373; flex: 0 0 auto;
     }
-    .heatmap-head-title {
-        font-size: 13px; font-weight: 600; color: #111827;
-        letter-spacing: -0.01em;
+    .top-bar .progress-track {
+        flex: 1 1 auto;
+        height: 4px;
+        background: #f0f0f0;
+        border-radius: 2px;
+        overflow: hidden;
+        position: relative;
     }
-    .heatmap-head-stats {
-        font-size: 13px; color: #6b7280;
+    .top-bar .progress-fill {
+        height: 100%;
+        background: #1e40af;
+        border-radius: 2px;
+        transition: width 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .top-bar .stats {
+        flex: 0 0 auto; display: flex; align-items: baseline; gap: 8px;
         font-variant-numeric: tabular-nums;
     }
-    .heatmap-head-stats .pct {
-        color: #1e40af; font-weight: 700; font-size: 16px;
-        margin-left: 4px;
+    .top-bar .stats .pct {
+        font-size: 13px; font-weight: 600; color: #0a0a0a;
+        letter-spacing: -0.01em;
     }
-    .heatmap-head-stats .count {
-        color: #111827; font-weight: 600;
+    .top-bar .stats .count {
+        font-size: 11px; color: #737373;
     }
-    .heatmap-head-stats .save-stale {
-        color: #b91c1c; font-weight: 600; font-size: 11px;
-        background: #fef2f2; padding: 2px 8px; border-radius: 4px;
-        margin-left: 10px;
+    .top-bar .stats .stale {
+        color: #b91c1c; font-weight: 600; font-size: 10px;
+        background: #fef2f2; padding: 1px 6px; border-radius: 3px;
+        margin-left: 6px;
     }
 
-    /* Heatmap grid — flat solid colors, slightly larger gap for breathing */
+    /* ───── Heatmap (collapsed by default, expand-to-reveal) ───── */
+    /* When expanded — naked grid, no card */
     .pgrid {
         display: grid;
         grid-template-columns: repeat(50, 1fr);
         gap: 3px;
-        margin: 0;
+        margin: 8px 0 24px 0;
     }
     .pcell {
         width: 100%; aspect-ratio: 1 / 1;
-        border-radius: 3px;
-        transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+        border-radius: 2px;
+        transition: transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .pcell.empty  { background: #f3f4f6; }
-    .pcell.older  { background: #93b3e3; }
-    .pcell.recent { background: #3b6ad4; }
+    .pcell.empty  { background: #f4f4f5; }
+    .pcell.older  { background: #a6b8da; }
+    .pcell.recent { background: #2c5cc7; }
     .pcell.fresh  { background: #1e40af; }
     .pcell:hover {
-        transform: scale(2.5);
-        z-index: 2; position: relative;
+        transform: scale(2.6); z-index: 2; position: relative;
         cursor: default;
     }
 
-    /* Trial card — bolder title, structured metadata */
+    /* ───── Trial — page-as-content, no card frame ───── */
     .trial-title {
-        font-size: 18px; font-weight: 700; color: #111827;
-        line-height: 1.3; margin: 0 0 6px 0;
-        letter-spacing: -0.015em;
+        font-size: 24px; font-weight: 600; color: #0a0a0a;
+        line-height: 1.25; margin: 0 0 10px 0;
+        letter-spacing: -0.022em;
     }
     .trial-meta {
-        font-size: 12.5px; color: #6b7280;
-        margin-bottom: 12px; line-height: 1.5;
+        font-size: 13px; color: #737373;
+        margin-bottom: 24px; line-height: 1.6;
     }
     .trial-meta a {
-        color: #1e40af; text-decoration: none; font-weight: 600;
+        color: #1e40af; text-decoration: none; font-weight: 500;
+        border-bottom: 1px solid transparent;
+        transition: border-color 150ms ease;
+    }
+    .trial-meta a:hover {
+        border-bottom-color: #1e40af;
     }
     .trial-meta strong {
-        color: #1f2937; font-weight: 600;
+        color: #171717; font-weight: 600;
+    }
+    .trial-meta .sep {
+        color: #d4d4d8; margin: 0 6px;
+    }
+    .trial-evidence {
+        display: grid; grid-template-columns: 1fr 1fr;
+        gap: 24px; margin-bottom: 22px;
     }
     .trial-cond {
-        font-size: 13px; color: #1f2937; line-height: 1.5;
-        margin-bottom: 6px;
+        font-size: 13px; color: #171717; line-height: 1.55;
     }
     .trial-cond .lbl {
-        color: #6b7280; font-weight: 600;
+        display: block;
+        color: #737373; font-weight: 600;
         text-transform: uppercase; font-size: 10px;
-        letter-spacing: 0.06em; margin-right: 8px;
-        display: inline-block;
+        letter-spacing: 0.08em; margin-bottom: 6px;
     }
     .trial-summary {
-        background: #f9fafb;
-        border-left: 3px solid #1e40af;
-        padding: 10px 14px;
-        color: #374151; font-size: 13px;
-        line-height: 1.55;
-        max-height: 110px; overflow-y: auto;
-        margin: 10px 0 0 0;
-        border-radius: 0 6px 6px 0;
+        font-size: 14.5px; color: #404040;
+        line-height: 1.65; font-style: italic;
+        padding: 0 12px 0 16px;
+        max-height: 124px; overflow-y: auto;
+        margin: 0 0 28px 0;
+        border-left: 1px solid #e5e5e5;
         white-space: pre-wrap;
     }
 
-    /* Streamlit element overrides — flatten + tighten */
-    /* Primary button: solid accent blue, bold, full-width feel */
-    .stButton > button[kind="primary"] {
-        background: #1e40af; border: 1px solid #1e40af;
-        color: #ffffff; font-weight: 600;
-        border-radius: 8px;
-        transition: background 150ms ease;
+    /* ───── Inputs — borderless, type-driven ───── */
+    /* Axis section divider line */
+    .axis-divider {
+        border: none;
+        border-top: 1px solid #f0f0f0;
+        margin: 0 0 18px 0;
     }
-    .stButton > button[kind="primary"]:hover {
-        background: #1e3a8a; border-color: #1e3a8a;
+    /* Override Streamlit's default selectbox/radio chrome to feel inline */
+    .stSelectbox > label, .stRadio > label, .stTextInput > label {
+        font-size: 10px !important; font-weight: 600 !important;
+        text-transform: uppercase !important; letter-spacing: 0.08em !important;
+        color: #737373 !important; margin-bottom: 4px !important;
     }
-    /* Secondary button: white with thin border */
-    .stButton > button[kind="secondary"] {
-        background: #ffffff; border: 1px solid #d1d5db;
-        color: #1f2937; font-weight: 500;
-        border-radius: 8px;
+    .stSelectbox > div > div {
+        border-radius: 6px !important;
+        border: 1px solid #e5e5e5 !important;
+        background: #ffffff !important;
+        min-height: 36px !important;
     }
-    .stButton > button[kind="secondary"]:hover {
-        background: #f9fafb; border-color: #9ca3af;
+    .stSelectbox > div > div:focus-within {
+        border-color: #1e40af !important;
+        box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.08) !important;
     }
-    /* Text input — flat solid */
     .stTextInput > div > div > input {
-        border-radius: 8px;
-        border: 1px solid #d1d5db;
+        border-radius: 6px !important;
+        border: 1px solid #e5e5e5 !important;
+        font-size: 13px !important;
+        padding: 8px 12px !important;
+        background: #ffffff !important;
     }
     .stTextInput > div > div > input:focus {
-        border-color: #1e40af;
-        box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+        border-color: #1e40af !important;
+        box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.08) !important;
     }
-    /* Selectbox — flat */
-    .stSelectbox > div > div {
-        border-radius: 8px;
+    /* Compact radio buttons (horizontal axes) */
+    .stRadio > div {
+        gap: 14px !important;
+    }
+    .stRadio label {
+        font-size: 13px !important;
+        color: #171717 !important;
+    }
+
+    /* ───── Buttons ───── */
+    /* Primary: the only solid accent on the page */
+    .stButton > button[kind="primary"] {
+        background: #1e40af !important;
+        border: 1px solid #1e40af !important;
+        color: #ffffff !important; font-weight: 600 !important;
+        border-radius: 6px !important;
+        font-size: 13px !important;
+        padding: 8px 18px !important;
+        transition: background 200ms ease !important;
+        letter-spacing: -0.005em !important;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: #1e3a8a !important;
+        border-color: #1e3a8a !important;
+    }
+    /* Secondary: text-button, no background until hover */
+    .stButton > button[kind="secondary"] {
+        background: transparent !important;
+        border: 1px solid transparent !important;
+        color: #737373 !important; font-weight: 500 !important;
+        border-radius: 6px !important;
+        font-size: 13px !important;
+        padding: 8px 14px !important;
+    }
+    .stButton > button[kind="secondary"]:hover {
+        background: #f4f4f5 !important;
+        color: #171717 !important;
+    }
+
+    /* ───── Tabs (used in More-context expander) ───── */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px; border-bottom: 1px solid #f0f0f0;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-size: 12px !important;
+        color: #737373 !important;
+        padding: 6px 10px !important;
+    }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        color: #0a0a0a !important;
+        font-weight: 600 !important;
+    }
+
+    /* ───── Footer keyboard hints ───── */
+    .kbd-hints {
+        font-size: 11px; color: #a3a3a3;
+        margin-top: 32px; text-align: center;
+        letter-spacing: 0.02em;
+    }
+    .kbd-hints kbd {
+        background: #f4f4f5; border: 1px solid #e5e5e5;
+        border-bottom-width: 2px;
+        border-radius: 4px; padding: 1px 5px;
+        font-family: ui-monospace, SFMono-Regular, monospace;
+        font-size: 10px; color: #404040;
+        margin: 0 2px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -392,24 +505,40 @@ def _persist(state: dict) -> None:
 # Garden gamification
 # ---------------------------------------------------------------------------
 
-def _progress_grid_html(state: dict, sample: dict,
-                          *, save_meta_html: str = "") -> str:
-    """Render the minimalist progress heatmap.
+def _top_progress_bar_html(state: dict, sample: dict,
+                              *, save_meta_html: str = "") -> str:
+    """Sticky top progress bar — always visible, never demanding.
 
-    Just the grid cells + a single right-aligned meta line under it
-    (count + percentage + optional stale-save warning). No card frame,
-    no background, no shadow — whitespace separates from the next block.
-
-    Three intensity bands give visual texture as the grid fills:
-      - fresh  = 5 most-recently-rated trials
-      - recent = next 25 rated
-      - older  = everything else rated
-      - empty  = pending
+    Layout: thin 4px progress fill on the left + percentage + count
+    on the right. Total height ~30px including the bottom divider.
+    The full 200-cell heatmap lives in a click-to-expand below.
     """
     n_total = len(sample["trials"])
-    ratings = state.get("ratings", {})
-    n_done = len(ratings)
+    n_done = len(state.get("ratings", {}))
+    pct = (n_done / n_total * 100) if n_total else 0
+    return (
+        f'<div class="top-bar">'
+        f'  <div class="label">Validation</div>'
+        f'  <div class="progress-track">'
+        f'    <div class="progress-fill" style="width:{pct:.1f}%"></div>'
+        f'  </div>'
+        f'  <div class="stats">'
+        f'    <span class="pct">{pct:.0f}%</span>'
+        f'    <span class="count">{n_done} / {n_total}</span>'
+        f'    {save_meta_html}'
+        f'  </div>'
+        f'</div>'
+    )
 
+
+def _progress_grid_html(state: dict, sample: dict) -> str:
+    """The full 200-cell heatmap, shown only inside the click-to-expand
+    section. Pure cell grid, no card frame.
+
+    Three intensity tiers (fresh/recent/older) give visual texture as
+    the grid fills.
+    """
+    ratings = state.get("ratings", {})
     rated_with_ts = sorted(
         [(nct, r.get("timestamp", "")) for nct, r in ratings.items()],
         key=lambda t: t[1] or "",
@@ -431,20 +560,7 @@ def _progress_grid_html(state: dict, sample: dict,
             cls = "empty"
         cells.append(f'<div class="pcell {cls}" title="{nct}"></div>')
 
-    pct = (n_done / n_total * 100) if n_total else 0
-    return (
-        f'<div class="v-card">'
-        f'  <div class="heatmap-head">'
-        f'    <div class="heatmap-head-title">Rating progress</div>'
-        f'    <div class="heatmap-head-stats">'
-        f'      <span class="count">{n_done}</span> of {n_total} rated'
-        f'      <span class="pct">{pct:.0f}%</span>'
-        f'      {save_meta_html}'
-        f'    </div>'
-        f'  </div>'
-        f'  <div class="pgrid">{"".join(cells)}</div>'
-        f'</div>'
-    )
+    return f'<div class="pgrid">{"".join(cells)}</div>'
 
 
 def _stat_tiles_html(stats: list[tuple[str, str]]) -> str:
@@ -607,13 +723,16 @@ def _format_trial_for_rater(trial: dict) -> None:
     nct = trial["NCTId"]
     title = trial.get("BriefTitle") or "(no title)"
 
-    # Title — single line, large but not heading-large
+    # Title — 24px / 600 weight / -0.022em tracking. Reads like a
+    # New Yorker article header. The page IS the trial; this is the
+    # thing the eye lands on first.
     st.markdown(
         f'<div class="trial-title">{_html_escape(title)}</div>',
         unsafe_allow_html=True,
     )
 
-    # Metadata — pipe-separated muted gray. NCT links to CT.gov.
+    # Metadata — pipe-separated muted gray, with explicit · separators
+    # styled in even-fainter gray for typographic rhythm.
     sponsor_str = trial.get("LeadSponsor") or "—"
     if trial.get("LeadSponsorClass"):
         sponsor_str = f"{sponsor_str} ({trial['LeadSponsorClass']})"
@@ -621,40 +740,39 @@ def _format_trial_for_rater(trial: dict) -> None:
         f'<a href="https://clinicaltrials.gov/study/{nct}" target="_blank">{nct}</a>',
         f"<strong>{trial.get('Phase') or '—'}</strong>",
         trial.get('OverallStatus') or "—",
-        sponsor_str,
-        trial.get('TrialDesign') or "—",
+        _html_escape(sponsor_str),
+        _html_escape(trial.get('TrialDesign') or "—"),
     ]
     if trial.get("EnrollmentCount"):
         _meta_bits.append(f"n = {trial['EnrollmentCount']}")
     if trial.get("Countries"):
         _meta_bits.append(_html_escape(trial['Countries']))
+    _sep = '<span class="sep">·</span>'
     st.markdown(
-        f'<div class="trial-meta">{" · ".join(_meta_bits)}</div>',
+        f'<div class="trial-meta">{_sep.join(_meta_bits)}</div>',
         unsafe_allow_html=True,
     )
 
-    # Conditions + Interventions side-by-side — tiny uppercase labels
-    _ec1, _ec2 = st.columns(2)
-    with _ec1:
-        if trial.get("Conditions"):
-            st.markdown(
-                f'<div class="trial-cond">'
-                f'<span class="lbl">Conditions</span>'
-                f'{_html_escape(trial["Conditions"])}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-    with _ec2:
-        if trial.get("Interventions"):
-            st.markdown(
-                f'<div class="trial-cond">'
-                f'<span class="lbl">Interventions</span>'
-                f'{_html_escape(trial["Interventions"])}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+    # Evidence row — Conditions + Interventions side-by-side, no boxes,
+    # type-driven. CSS Grid handles the 2-col layout (st.columns adds
+    # extra margin chrome that breaks the rhythm).
+    cond = _html_escape(trial.get("Conditions") or "—")
+    interv = _html_escape(trial.get("Interventions") or "—")
+    st.markdown(
+        f'<div class="trial-evidence">'
+        f'  <div class="trial-cond">'
+        f'    <span class="lbl">Conditions</span>{cond}'
+        f'  </div>'
+        f'  <div class="trial-cond">'
+        f'    <span class="lbl">Interventions</span>{interv}'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-    # Brief summary — naked left-bar quote, no card
+    # Brief summary — italic body, indented, single thin left border.
+    # Reads as text, not data. Generous 1.65 line-height invites
+    # reading rather than scanning.
     if trial.get("BriefSummary"):
         st.markdown(
             f'<div class="trial-summary">{_html_escape(trial["BriefSummary"])}</div>',
@@ -815,11 +933,11 @@ def _render_rater(rater_id: str) -> None:
     n_done = len(state["ratings"])
     n_total = len(sample["trials"])
 
-    # ---- Top header: progress + save status + always-on manual save ----
-    # ---- Heatmap (first + only thing at the top) ----
-    # Naked grid + single right-aligned meta line. Save-stale warning
-    # appears INLINE in the meta line ONLY when stale (>2 min) — no
-    # always-on save row. Backup download lives in the bottom expander.
+    # ---- Sticky top progress bar — always visible, never demanding ----
+    # Thin 4px progress fill + percentage + count. Save-stale warning
+    # appears INLINE only when stale (>2 min). The full 200-cell heatmap
+    # lives below in a click-to-expand "Progress detail" disclosure so
+    # the rater's primary attention stays on the trial itself.
     _save_meta = ""
     last_save = state.get("last_updated", "")
     try:
@@ -827,21 +945,16 @@ def _render_rater(rater_id: str) -> None:
         secs_ago = (datetime.now(timezone.utc) - dt).total_seconds()
         if secs_ago > 120:
             _save_meta = (
-                f' · <span class="save-stale">'
-                f'unsaved for {int(secs_ago)}s — open Settings to back up'
+                f'<span class="stale">'
+                f'unsaved {int(secs_ago)}s'
                 f'</span>'
             )
     except Exception:
         pass
     st.markdown(
-        _progress_grid_html(state, sample, save_meta_html=_save_meta),
+        _top_progress_bar_html(state, sample, save_meta_html=_save_meta),
         unsafe_allow_html=True,
     )
-
-    # (Session stats tiles previously rendered here are now folded into
-    # the heatmap card's right panel — % complete + N/200 — and into
-    # the bottom expander's median-pace + ETA. Kept the function for
-    # use inside the expander.)
 
     # ---- Milestone banner (informative + methodologically grounded) ----
     _durations_for_msg = [
@@ -955,8 +1068,27 @@ def _render_rater(rater_id: str) -> None:
             )
         st.rerun()
 
+    # ---- Keyboard hints — quiet bottom line ----
+    st.markdown(
+        '<div class="kbd-hints">'
+        'Tip · pick <kbd>Unsure</kbd> if the trial text doesn\'t support a '
+        'confident call · skip sparingly (every skip lowers κ power)'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- Click-to-expand: full progress heatmap ----
+    # The 200-cell grid lives here, OUT of the primary attention zone.
+    # The thin top progress bar is sufficient for glanceable feedback;
+    # the full heatmap is for the moments the rater wants to step
+    # back and see their session arc.
+    with st.expander("Progress detail", expanded=False):
+        st.markdown(_progress_grid_html(state, sample),
+                    unsafe_allow_html=True)
+
     # ---- Footer (collapsed by default to preserve single-page view) ----
-    with st.expander("More options · session pace · backup · resume", expanded=False):
+    with st.expander("Settings · session pace · backup · resume",
+                      expanded=False):
         _render_footer(state, rater_id)
 
 

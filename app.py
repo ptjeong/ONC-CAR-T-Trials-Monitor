@@ -5676,6 +5676,130 @@ with tab_pub:
             "fig10_solid_antigen_frontier.csv", "text/csv",
         )
 
+    # ---------------------------------------------------------------------------
+    # FIG 12 — Sponsor crowding by antigen
+    # ---------------------------------------------------------------------------
+    # For each top-15 antigen, count distinct industry sponsors. Reveals where
+    # the field is racing (15+ sponsors on CD19) vs lonely (3 on B7-H3).
+    # The competitive-landscape chart for industry readers.
+    #
+    # Pipeline-unique because it requires the closed-vocab antigen list ×
+    # the SponsorType classifier (Industry/Academic/Government/Other).
+
+    _pub_header(
+        "12", "Industry sponsor crowding by antigen",
+        "Count of distinct industry-classified lead sponsors per top-15 "
+        "antigen in the current filter. Top sponsor per antigen annotated "
+        "where one player runs ≥3 trials. Identifies where the field is "
+        "racing (multi-sponsor) vs lonely (single-sponsor early-stage).",
+    )
+
+    _sc_df = df_filt[df_filt["SponsorType"] == "Industry"].copy()
+    _sc_df = _sc_df[~_sc_df["TargetCategory"].isin(_PLATFORM_LABELS)]
+    _sc_df = _sc_df[~_sc_df["TargetCategory"].isin(
+        ["CAR-T_unspecified", "Other_or_unknown"]
+    )]
+    _sc_df = _sc_df.dropna(subset=["LeadSponsor"])
+
+    if _sc_df.empty:
+        st.info("Insufficient industry-sponsor data for crowding view.")
+    else:
+        # Top-15 antigens by total industry trial count
+        _top_sc_targets = (
+            _sc_df["TargetCategory"].value_counts().head(15).index.tolist()
+        )
+        _sc_df = _sc_df[_sc_df["TargetCategory"].isin(_top_sc_targets)]
+
+        # For each antigen: distinct sponsor count + top sponsor name
+        _crowding = []
+        for tgt in _top_sc_targets:
+            tgt_df = _sc_df[_sc_df["TargetCategory"] == tgt]
+            sponsor_counts = tgt_df["LeadSponsor"].value_counts()
+            n_sponsors = len(sponsor_counts)
+            top_sponsor = sponsor_counts.index[0] if not sponsor_counts.empty else "—"
+            top_sponsor_n = int(sponsor_counts.iloc[0]) if not sponsor_counts.empty else 0
+            _crowding.append({
+                "Antigen": tgt,
+                "DistinctSponsors": n_sponsors,
+                "TopSponsor": top_sponsor,
+                "TopSponsorTrials": top_sponsor_n,
+                "TotalTrials": len(tgt_df),
+            })
+        _crowd_df = pd.DataFrame(_crowding).sort_values(
+            "DistinctSponsors", ascending=True,  # Plotly h-bar reads bottom-up
+        )
+
+        # Build hover + bar text — show top sponsor where they own ≥3 trials
+        _bar_text = []
+        for _, row in _crowd_df.iterrows():
+            n = int(row["DistinctSponsors"])
+            label = f"{n}"
+            if row["TopSponsorTrials"] >= 3:
+                label += f"  · top: {row['TopSponsor']} ({row['TopSponsorTrials']})"
+            _bar_text.append(label)
+
+        fig12 = go.Figure(go.Bar(
+            x=_crowd_df["DistinctSponsors"].values,
+            y=_crowd_df["Antigen"].values,
+            orientation="h",
+            marker=dict(color=HEME_COLOR, line=dict(width=0)),
+            text=_bar_text,
+            textposition="outside",
+            textfont=dict(size=10, color=_AX_COLOR),
+            cliponaxis=False,
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Distinct industry sponsors: %{x}<br>"
+                "<extra></extra>"
+            ),
+        ))
+        fig12.update_layout(
+            **PUB_BASE,
+            height=max(360, len(_crowd_df) * 28 + 80),
+            margin=dict(l=140, r=200, t=40, b=56),
+            xaxis=dict(
+                title=dict(text="Distinct industry sponsors",
+                           font=dict(size=_LAB_SZ, color=_AX_COLOR)),
+                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                showgrid=True, gridcolor=_GRID_CLR, zeroline=False,
+            ),
+            yaxis=dict(
+                title=None,
+                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                showgrid=False,
+            ),
+            showlegend=False,
+        )
+        st.plotly_chart(fig12, width="stretch", config=PUB_EXPORT)
+
+        # Summary callout — racing vs lonely
+        _racing = _crowd_df[_crowd_df["DistinctSponsors"] >= 5]["Antigen"].tolist()
+        _lonely = _crowd_df[_crowd_df["DistinctSponsors"] <= 2]["Antigen"].tolist()
+        st.markdown(
+            '<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
+            f'Industry-crowded antigens (≥5 distinct sponsors): '
+            f'<b>{", ".join(_racing) or "—"}</b>. '
+            f'Single- or two-sponsor antigens (potential strategic '
+            f'opportunities or early-stage frontiers): '
+            f'<b>{", ".join(_lonely) or "—"}</b>. '
+            'Top-sponsor annotations shown where one player runs ≥3 '
+            'industry trials on that antigen.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _pub_caption(len(_sc_df))
+
+        # CSV export
+        _fig12_csv = _crowd_df.copy()
+        st.download_button(
+            "Fig 12 data (CSV)",
+            _csv_with_provenance(
+                _fig12_csv,
+                "Fig 12 — Industry sponsor crowding by antigen",
+            ),
+            "fig12_sponsor_crowding.csv", "text/csv",
+        )
+
 
 # ---------------------------------------------------------------------------
 # TAB: Methods & Appendix

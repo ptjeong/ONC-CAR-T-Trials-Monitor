@@ -394,18 +394,38 @@ def _detect_targets(text: str) -> list[str]:
 
 
 def _assign_target(row: dict) -> str:
+    """Backward-compat wrapper — returns just the label string. New
+    callers should use `_assign_target_with_source` to get the
+    source tag too (used by the drilldown's inline `*(via Source)*`
+    annotation per UI_DRILLDOWN_SPEC v1.0)."""
+    return _assign_target_with_source(row)[0]
+
+
+def _assign_target_with_source(row: dict) -> tuple[str, str]:
+    """Return (target_label, source_tag) for a row.
+
+    source_tag is one of:
+      - "llm_override"      — entry in llm_overrides.json
+      - "named_product"     — matched a registered product name (e.g. axi-cel)
+      - "dual_combo"        — two antigens both detected
+      - "platform_only"     — CAR-NK / CAAR-T / CAR-Treg / CAR-γδ T detected
+                              with no specific antigen
+      - "antigen_match"     — one or more antigens detected via term match
+      - "car_unspecified"   — CAR-T core terms detected, no antigen
+      - "fallback"          — nothing matched, defaulted to Other_or_unknown
+    """
     nct = _safe_text(row.get("NCTId")).strip()
     if nct in _LLM_OVERRIDES:
         t = _LLM_OVERRIDES[nct].get("target_category")
         if t:
-            return t
+            return t, "llm_override"
 
     text = _row_text(row)
 
     # Named-product short-circuit.
     named = _lookup_named_product(text, NAMED_PRODUCT_TARGETS)
     if named:
-        return named
+        return named, "named_product"
 
     # Platform detection.
     has_car_nk = _contains_any(text, CAR_NK_TERMS)
@@ -420,32 +440,32 @@ def _assign_target(row: dict) -> str:
     for (a, b), label in DUAL_TARGET_LABELS:
         if a in targets_set and b in targets_set:
             if has_car_nk:
-                return f"CAR-NK: {label}"
-            return label
+                return f"CAR-NK: {label}", "dual_combo"
+            return label, "dual_combo"
 
     # Platform with no antigen.
     if has_car_nk and not targets_found:
-        return "CAR-NK"
+        return "CAR-NK", "platform_only"
     if has_caar_t and not targets_found:
-        return "CAAR-T"
+        return "CAAR-T", "platform_only"
     if has_car_treg and not targets_found:
-        return "CAR-Treg"
+        return "CAR-Treg", "platform_only"
     if has_car_gd and not targets_found:
-        return "CAR-γδ T"
+        return "CAR-γδ T", "platform_only"
 
     if len(targets_found) == 1:
         label = targets_found[0]
         if has_car_nk:
-            return f"CAR-NK: {label}"
-        return label
+            return f"CAR-NK: {label}", "antigen_match"
+        return label, "antigen_match"
     if targets_found:
         if has_car_nk:
-            return f"CAR-NK: {targets_found[0]}"
-        return targets_found[0]
+            return f"CAR-NK: {targets_found[0]}", "antigen_match"
+        return targets_found[0], "antigen_match"
 
     if _contains_any(text, CAR_CORE_TERMS):
-        return "CAR-T_unspecified"
-    return "Other_or_unknown"
+        return "CAR-T_unspecified", "car_unspecified"
+    return "Other_or_unknown", "fallback"
 
 
 def _assign_product_type(row: dict) -> tuple[str, str]:
@@ -1074,7 +1094,11 @@ def _process_trials_from_studies(studies: list[dict]) -> tuple[pd.DataFrame, dic
     df = df_after_hard[~indication_mask].copy()
     n_included = len(df)
 
-    df["TargetCategory"] = df.apply(lambda r: _assign_target(r.to_dict()), axis=1)
+    target_results = df.apply(
+        lambda r: _assign_target_with_source(r.to_dict()), axis=1
+    )
+    df["TargetCategory"] = target_results.apply(lambda t: t[0])
+    df["TargetSource"] = target_results.apply(lambda t: t[1])
     product_results = df.apply(lambda r: _assign_product_type(r.to_dict()), axis=1)
     df["ProductType"] = product_results.apply(lambda t: t[0])
     df["ProductTypeSource"] = product_results.apply(lambda t: t[1])

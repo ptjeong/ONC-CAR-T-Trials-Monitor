@@ -322,104 +322,145 @@ def _mini_count_cols(label: str) -> dict:
 
 
 def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
-    """Render the per-trial detail card used everywhere a single trial is
-    selected (Data tab, Geography city table, Deep Dive sub-tabs).
+    """Render the per-trial detail card.
+
+    Conforms to UI_DRILLDOWN_SPEC v1.0
+    (`docs/internal/UI_DRILLDOWN_SPEC.md`). Used by the Data tab,
+    Geography city-trials table, and every Deep Dive sub-tab. The
+    rheum sister app implements the same spec for cross-app UI parity.
+
+    Layout (top → bottom):
+      1. Flag banner          (_render_flag_banner)
+      2. CT.gov external link (placed BEFORE metadata so a rater can
+                                verify against the live record without
+                                scrolling)
+      3. 3-column metadata grid (Disease / Product / Sponsor)
+         with inline `*(via Source)*` tags on Target + ProductType
+      4. Free-text payload (Endpoints, Conditions, Interventions,
+                            BriefSummary in block-quote)
+      5. "How was this classified?" expander
+         (_render_classification_rationale)
+      6. "Suggest a classification correction" expander
+         (_render_suggest_correction)
 
     Parameters
     ----------
     record : pd.Series or dict-like
         A single trial row. Accessed via .get(); missing fields render as "—".
     key_suffix : str
-        Disambiguator for any session_state-keyed widgets inside the card
-        (e.g. the Suggest-correction form). Required when multiple
-        drilldowns might appear on the same page or tab.
-
-    The card has three layers:
-      1. Two-column metadata table (disease/clinical + product/sponsor)
-      2. External link + free-text fields (conditions, interventions,
-         endpoints, countries, brief summary)
-      3. Suggest-correction expander — opens a pre-filled GitHub issue
-         link so any reader can flag a misclassification.
-
-    The drilldown is wrapped in a `st.expander(expanded=True)` so the
-    caller doesn't manage layout. Pass a record matching the
-    DataFrame schema; missing optional fields are tolerated.
+        Disambiguator for any session_state-keyed widgets inside the card.
+        Required when multiple drilldowns appear on the same page.
     """
     _sel_nct = record.get("NCTId", "")
     _title = record.get("BriefTitle", "")
     with st.expander(f"**{_sel_nct}** — {_title}", expanded=True):
-        # Flag banner first — surfaces consensus-reached / open-flag state
-        # before the user reads the (possibly-incorrect) classification below.
-        # Wrapped in try/except NameError to keep the drilldown rendering
-        # even if the flag subsystem fails to load (same defensive pattern as
-        # _render_suggest_correction at the bottom of this card).
+        # ---- 1. Flag banner ----
         try:
             _render_flag_banner(record)
         except NameError:
             pass
 
-        d1, d2 = st.columns([1, 1])
+        # ---- 2. External link (spec v1.0: placed before metadata) ----
+        _link = (
+            record.get("NCTLink")
+            or (f"https://clinicaltrials.gov/study/{_sel_nct}"
+                if _sel_nct else None)
+        )
+        if _link:
+            st.markdown(f"📎 **[Open on ClinicalTrials.gov ↗]({_link})**")
+
+        # ---- 3. Three-column metadata grid (spec v1.0) ----
+        d1, d2, d3 = st.columns(3)
         with d1:
+            # DISEASE column
             _start_year = record.get("StartYear")
             _start_disp = (
                 int(_start_year) if pd.notna(_start_year) else "—"
             )
+            _all_ents = record.get("DiseaseEntities") or record.get("DiseaseEntity") or "—"
+            _all_ents = str(_all_ents).replace("|", ", ")
             st.markdown(
-                f"""
-**Branch**: {record.get('Branch', '—')}  ·  **Category**: {record.get('DiseaseCategory', '—')}
-**Entity**: {record.get('DiseaseEntity', '—')}
-**All entities matched**: {record.get('DiseaseEntities', '—') or '—'}
-**Trial design**: {record.get('TrialDesign', '—')}
-**Phase**: {record.get('Phase', '—')}  ·  **Status**: {record.get('OverallStatus', '—')}
-**Start year**: {_start_disp}
-                """
+                f"**Branch:** {record.get('Branch', '—')}  \n"
+                f"**Category:** {record.get('DiseaseCategory', '—')}  \n"
+                f"**Entity:** {record.get('DiseaseEntity', '—')}  \n"
+                f"**All entities:** {_all_ents}  \n"
+                f"**Trial design:** {record.get('TrialDesign', '—')}  \n"
+                f"**Phase:** {record.get('Phase', '—')}  \n"
+                f"**Status:** {record.get('OverallStatus', '—')}  \n"
+                f"**Start year:** {_start_disp}"
             )
         with d2:
+            # PRODUCT column with inline source tags
+            _target = record.get("TargetCategory", "—")
+            _target_src = record.get("TargetSource", "")
+            _target_str = (
+                f"**Target:** {_target}  *(via `{_target_src}`)*"
+                if _target_src else f"**Target:** {_target}"
+            )
+            _ptype = record.get("ProductType", "—")
+            _ptype_src = record.get("ProductTypeSource", "")
+            _ptype_str = (
+                f"**Product type:** {_ptype}  *(via `{_ptype_src}`)*"
+                if _ptype_src else f"**Product type:** {_ptype}"
+            )
+            _named = record.get("ProductName")
+            _named_str = f"**Named product:** {_named}  \n" if _named else ""
+            _llm_str = (
+                "**LLM override applied**  \n"
+                if bool(record.get("LLMOverride", False)) else ""
+            )
+            st.markdown(
+                f"{_target_str}  \n"
+                f"{_ptype_str}  \n"
+                f"**Modality:** {record.get('Modality', '—')}  \n"
+                f"{_named_str}"
+                f"{_llm_str}"
+                f"**Confidence:** {record.get('ClassificationConfidence', '—')}"
+            )
+        with d3:
+            # SPONSOR column
             _enroll_raw = record.get("EnrollmentCount")
             _enroll_display = (
                 int(_enroll_raw) if pd.notna(_enroll_raw) else "—"
             )
             st.markdown(
-                f"""
-**Target**: {record.get('TargetCategory', '—')}
-**Product type**: {record.get('ProductType', '—')}  ·  **Named product**: {record.get('ProductName', '—') or '—'}
-**Modality**: {record.get('Modality', '—')}
-**Age group**: {record.get('AgeGroup', '—')}  ·  **Sponsor type**: {record.get('SponsorType', '—')}
-**Lead sponsor**: {record.get('LeadSponsor', '—')}
-**Enrollment**: {_enroll_display}
-**Classification confidence**: {record.get('ClassificationConfidence', '—')}
-                """
+                f"**Lead sponsor:** {record.get('LeadSponsor', '—')}  \n"
+                f"**Sponsor type:** {record.get('SponsorType', '—')}  \n"
+                f"**Enrollment:** {_enroll_display}  \n"
+                f"**Countries:** {record.get('Countries', '') or '—'}  \n"
+                f"**Age group:** {record.get('AgeGroup', '—')}"
             )
-        # External link + free-text payload
-        if record.get("NCTLink"):
-            st.markdown(f"[Open on ClinicalTrials.gov ↗]({record['NCTLink']})")
-        if record.get("Conditions"):
-            st.markdown(f"**Conditions**: {record['Conditions']}")
-        if record.get("Interventions"):
-            st.markdown(f"**Interventions**: {record['Interventions']}")
+
+        # ---- 4. Free-text payload ----
+        # Pipe → comma substitution for human readability on multi-valued
+        # fields; block-quote for BriefSummary so it visually separates
+        # from the metadata above.
         if record.get("PrimaryEndpoints"):
-            st.markdown(f"**Primary endpoints**: {record['PrimaryEndpoints']}")
-        if record.get("Countries"):
-            st.markdown(f"**Countries**: {record['Countries']}")
+            st.markdown(
+                f"**Primary endpoints:** "
+                f"{str(record['PrimaryEndpoints']).replace('|', '; ')}"
+            )
+        if record.get("Conditions"):
+            st.markdown(
+                f"**Conditions:** "
+                f"{str(record['Conditions']).replace('|', ', ')}"
+            )
+        if record.get("Interventions"):
+            st.markdown(
+                f"**Interventions:** "
+                f"{str(record['Interventions']).replace('|', ', ')}"
+            )
         if record.get("BriefSummary"):
             st.markdown("**Brief summary**")
             st.markdown(f"> {record['BriefSummary']}")
 
-        # "How was this classified?" expander — re-runs the classifier
-        # on this row with rationale-tracking turned on, surfaces matched
-        # terms and source-tag explanation per axis. Aligns with the
-        # rheum app's per-trial rationale UI (REVIEW.md Phase 3 item 19).
-        # Wrapped in try/except — never block the drilldown if the
-        # rationale helper fails (e.g. on a malformed legacy snapshot row).
+        # ---- 5. "How was this classified?" ----
         try:
             _render_classification_rationale(record, key_suffix=key_suffix)
         except Exception as _e:  # noqa: BLE001
             st.caption(f"_(classification rationale unavailable: {_e})_")
 
-        # Suggest-correction affordance — populated by _render_suggest_correction
-        # below. Wrapped in try/except NameError as a defence against the helper
-        # being trimmed out of a future revision; keeps the drilldown rendering
-        # even if the suggest-correction subsystem fails to import.
+        # ---- 6. Suggest-correction ----
         try:
             _render_suggest_correction(record, key_suffix=key_suffix)
         except NameError:

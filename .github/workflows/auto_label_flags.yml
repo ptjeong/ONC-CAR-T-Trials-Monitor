@@ -1,0 +1,149 @@
+name: Auto-label classification-flag issues
+
+# Self-healing label workflow. The dashboard's "Suggest a classification
+# correction" button generates a github.com/.../issues/new URL with
+# `?labels=classification-flag,needs-review,axis-…` query params. GitHub
+# silently DROPS any label in that URL that doesn't already exist in the
+# repo, so the issue gets filed with no labels — and the consensus
+# workflow + dashboard badge both gate on the `classification-flag`
+# label, so the flag is invisible.
+#
+# This workflow fixes that retroactively for every new issue: if the
+# body contains a `BEGIN_FLAG_DATA` block (the canonical marker that
+# the issue is a classification flag), we
+#   1. Ensure the required labels exist in the repo (create with a
+#      sensible default color if missing — idempotent).
+#   2. Apply `classification-flag` + `needs-review` + per-axis labels
+#      derived from the YAML block.
+#
+# Runs on every issue opened/edited so backfilled YAML in an existing
+# issue also gets labels. Safe to run repeatedly (label creation is
+# idempotent, label application is too).
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  auto-label:
+    # Only run when the body actually contains a flag block. Saves CI
+    # minutes on every other issue type.
+    if: contains(github.event.issue.body, 'BEGIN_FLAG_DATA')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml requests
+
+      - name: Ensure labels exist + apply to issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO_SLUG: ${{ github.repository }}
+        run: |
+          python <<'PYEOF'
+          import os, re, sys, requests, yaml
+
+          GH = "https://api.github.com"
+          token = os.environ["GH_TOKEN"]
+          issue_num = os.environ["ISSUE_NUMBER"]
+          repo = os.environ["REPO_SLUG"]
+
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          # ---- 1. Fetch the issue ----
+          r = requests.get(f"{GH}/repos/{repo}/issues/{issue_num}",
+                           headers=headers, timeout=15)
+          r.raise_for_status()
+          issue = r.json()
+          body = issue.get("body", "") or ""
+
+          # ---- 2. Parse axes from BEGIN_FLAG_DATA blocks ----
+          axes = set()
+          block_re = re.compile(
+              r"<!--\s*BEGIN_FLAG_DATA\s*\n(.*?)END_FLAG_DATA\s*-->",
+              re.DOTALL,
+          )
+          for m in block_re.finditer(body):
+              try:
+                  data = yaml.safe_load(m.group(1))
+              except yaml.YAMLError:
+                  continue
+              if isinstance(data, dict):
+                  for ax in (data.get("flagged_axes") or []):
+                      if isinstance(ax, dict) and ax.get("axis"):
+                          axes.add(str(ax["axis"]).strip())
+
+          # ---- 3. Build required label set ----
+          required = {
+              "classification-flag": "d93f0b",  # orange — entry point
+              "needs-review":        "fbca04",  # yellow — awaiting input
+          }
+          for ax in axes:
+              required[f"axis-{ax}"] = "c5def5"  # light blue facets
+          # Also pre-create the consensus + moderator labels so the
+          # downstream flag_consensus workflow doesn't hit the same
+          # silent-drop trap when it tries to apply consensus-reached.
+          required["consensus-reached"] = "0e8a16"  # green
+          required["moderator-approved"] = "5319e7"  # purple
+
+          # ---- 4. Ensure each required label exists ----
+          existing = set()
+          page = 1
+          while True:
+              lr = requests.get(
+                  f"{GH}/repos/{repo}/labels?per_page=100&page={page}",
+                  headers=headers, timeout=15,
+              )
+              lr.raise_for_status()
+              batch = lr.json()
+              if not batch:
+                  break
+              existing.update(l["name"] for l in batch)
+              page += 1
+
+          for name, color in required.items():
+              if name in existing:
+                  continue
+              cr = requests.post(
+                  f"{GH}/repos/{repo}/labels",
+                  headers=headers, timeout=15,
+                  json={"name": name, "color": color,
+                        "description": "Auto-created by auto_label_flags workflow"},
+              )
+              if cr.status_code in (200, 201):
+                  print(f"  created label: {name}")
+              elif cr.status_code == 422:
+                  # Race with another workflow run — already created
+                  print(f"  label already existed: {name}")
+              else:
+                  print(f"  WARN: label create failed {name}: {cr.status_code} {cr.text}",
+                        file=sys.stderr)
+
+          # ---- 5. Apply the labels to the issue ----
+          # POST to /labels appends; GitHub dedupes server-side so this
+          # is safe to re-run without producing duplicates.
+          ar = requests.post(
+              f"{GH}/repos/{repo}/issues/{issue_num}/labels",
+              headers=headers, timeout=15,
+              json={"labels": list(required.keys() - {"consensus-reached", "moderator-approved"})},
+              # consensus-reached + moderator-approved are gated by the
+              # downstream workflows and should NOT be applied at intake.
+          )
+          ar.raise_for_status()
+          print(f"Issue #{issue_num} labels: {[l['name'] for l in ar.json()]}")
+          PYEOF

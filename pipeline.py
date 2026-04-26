@@ -1092,6 +1092,11 @@ def _process_trials_from_studies(studies: list[dict]) -> tuple[pd.DataFrame, dic
     # behind each row's Branch/Category/Entity/Target/Product labels. Surfaced
     # in the Data tab and data-quality expander so users know which rows to
     # trust at face value vs investigate.
+    #
+    # Legacy 3-bucket (high/medium/low) preserved bit-for-bit so snapshot
+    # diffs remain comparable. Multi-factor model with per-axis sub-scores
+    # is exposed via `compute_confidence_factors(row)` and consumed by the
+    # drilldown UI. See `compute_confidence_factors` for the full taxonomy.
     def _confidence(row) -> str:
         if row["LLMOverride"]:
             return "high"
@@ -1266,6 +1271,156 @@ def _git_sha_or_unknown() -> str:
         return out.strip()
     except Exception:
         return "unknown"
+
+
+def compute_confidence_factors(row: dict) -> dict:
+    """Multi-factor confidence model returning per-axis sub-scores.
+
+    Returns:
+        {
+          "score":   <composite 0..1>,        # unweighted mean of factor sub-scores
+          "level":   <"high" | "medium" | "low">,  # bucket aligned with legacy
+          "factors": {
+              "Branch":          {"score": float, "driver": str},
+              "DiseaseCategory": {"score": float, "driver": str},
+              "DiseaseEntity":   {"score": float, "driver": str},
+              "TargetCategory":  {"score": float, "driver": str},
+              "ProductType":     {"score": float, "driver": str},
+              # SponsorType deliberately excluded — it's classifier-derived
+              # but not a label we treat as confidence-bearing for the
+              # paper's per-axis F1 (which doesn't include sponsor type
+              # as a primary outcome).
+          },
+          "drivers": <list of (axis, driver) tuples for the lowest-scoring axes>,
+        }
+
+    Each axis sub-score lives in [0, 1]. The mapping is calibrated to
+    preserve the legacy 3-bucket binning when collapsed:
+      composite ≥ 0.85  → "high"
+      composite ≥ 0.55  → "medium"
+      composite <  0.55 → "low"
+
+    The `driver` field per axis is a one-line plain-English explanation
+    of WHY that score was assigned — surfaces directly in the
+    drilldown's confidence panel.
+
+    Aligns with the rheum app's `compute_confidence_factors()`
+    (REVIEW.md Phase 3 item 20). Onc has more axes than rheum (DiseaseEntity
+    sub-tier in addition to Category), so the per-axis breakdown is
+    proportionally more informative here.
+    """
+    is_llm_override = row.get("LLMOverride") or (
+        _safe_text(row.get("NCTId")).strip() in _LLM_OVERRIDES
+    )
+
+    factors: dict[str, dict] = {}
+
+    # ---- Branch sub-score ----
+    branch = row.get("Branch", "")
+    if is_llm_override:
+        factors["Branch"] = {"score": 1.0, "driver": "LLM-validated override"}
+    elif branch == "Unknown":
+        factors["Branch"] = {"score": 0.10,
+                              "driver": "Branch could not be inferred"}
+    elif branch == "Mixed":
+        factors["Branch"] = {"score": 0.75,
+                              "driver": "Cross-branch trial — Mixed is the correct call but lower-confidence than a clean single-branch hit"}
+    else:  # Heme-onc / Solid-onc
+        factors["Branch"] = {"score": 1.0,
+                              "driver": "Clean single-branch classification"}
+
+    # ---- DiseaseCategory sub-score ----
+    cat = row.get("DiseaseCategory", "")
+    if is_llm_override:
+        factors["DiseaseCategory"] = {"score": 1.0, "driver": "LLM-validated"}
+    elif cat == UNCLASSIFIED_LABEL:
+        factors["DiseaseCategory"] = {"score": 0.10,
+                                       "driver": "No category match"}
+    elif cat in (BASKET_MULTI_LABEL, HEME_BASKET_LABEL, SOLID_BASKET_LABEL):
+        factors["DiseaseCategory"] = {"score": 0.70,
+                                       "driver": f"Basket-level category ({cat}) — accurate but coarser than a leaf"}
+    else:
+        factors["DiseaseCategory"] = {"score": 1.0,
+                                       "driver": "Specific category match"}
+
+    # ---- DiseaseEntity sub-score ----
+    ent = row.get("DiseaseEntity", "")
+    if is_llm_override:
+        factors["DiseaseEntity"] = {"score": 1.0, "driver": "LLM-validated"}
+    elif ent in (UNCLASSIFIED_LABEL, "", None):
+        factors["DiseaseEntity"] = {"score": 0.10,
+                                     "driver": "No entity-level leaf"}
+    elif ent in (BASKET_MULTI_LABEL, HEME_BASKET_LABEL, SOLID_BASKET_LABEL):
+        factors["DiseaseEntity"] = {"score": 0.55,
+                                     "driver": "Basket-level fallback (no leaf)"}
+    else:
+        factors["DiseaseEntity"] = {"score": 1.0,
+                                     "driver": "Specific entity leaf"}
+
+    # ---- TargetCategory sub-score ----
+    target = row.get("TargetCategory", "")
+    if is_llm_override:
+        factors["TargetCategory"] = {"score": 1.0, "driver": "LLM-validated"}
+    elif target == "Other_or_unknown":
+        factors["TargetCategory"] = {"score": 0.10,
+                                      "driver": "No antigen detected"}
+    elif target == "CAR-T_unspecified":
+        factors["TargetCategory"] = {"score": 0.30,
+                                      "driver": "CAR-T mentioned but no antigen specified"}
+    elif "/" in str(target) and "dual" in str(target).lower():
+        factors["TargetCategory"] = {"score": 0.95,
+                                      "driver": "Dual-target combo identified"}
+    else:
+        factors["TargetCategory"] = {"score": 1.0,
+                                      "driver": f"Antigen identified: {target}"}
+
+    # ---- ProductType sub-score ----
+    ptype = row.get("ProductType", "")
+    psource = row.get("ProductTypeSource", "")
+    if is_llm_override:
+        factors["ProductType"] = {"score": 1.0, "driver": "LLM-validated"}
+    elif ptype == "Unclear":
+        factors["ProductType"] = {"score": 0.20,
+                                   "driver": "Product type could not be inferred"}
+    elif psource in ("explicit_allogeneic", "explicit_autologous",
+                       "explicit_in_vivo"):
+        factors["ProductType"] = {"score": 1.0,
+                                   "driver": f"Explicit marker: {psource}"}
+    elif psource == "default_autologous_no_allo_markers":
+        factors["ProductType"] = {"score": 0.50,
+                                   "driver": "Defaulted to autologous (no allogeneic markers)"}
+    elif psource in ("weak_autologous_marker", "weak_allogeneic_marker"):
+        factors["ProductType"] = {"score": 0.55,
+                                   "driver": f"Weak signal: {psource}"}
+    else:
+        factors["ProductType"] = {"score": 0.80,
+                                   "driver": f"Source: {psource or 'unknown'}"}
+
+    # ---- Composite score ----
+    sub_scores = [f["score"] for f in factors.values()]
+    composite = sum(sub_scores) / len(sub_scores)
+
+    # Bucket
+    if composite >= 0.85:
+        level = "high"
+    elif composite >= 0.55:
+        level = "medium"
+    else:
+        level = "low"
+
+    # Drivers — the worst-scoring axes (lower = more interesting to surface)
+    drivers = sorted(
+        ((axis, info["driver"], info["score"])
+         for axis, info in factors.items()),
+        key=lambda t: t[2],
+    )[:3]
+
+    return {
+        "score": composite,
+        "level": level,
+        "factors": factors,
+        "drivers": [(axis, drv) for axis, drv, _ in drivers],
+    }
 
 
 def compute_classification_rationale(row: dict) -> dict:

@@ -19,6 +19,7 @@ from pipeline import (
     _LLM_OVERRIDES,
     _LLM_EXCLUDED_NCT_IDS,
     compute_classification_rationale,
+    compute_confidence_factors,
 )
 from config import (
     ONTOLOGY,
@@ -579,6 +580,40 @@ def _render_classification_rationale(record, *, key_suffix: str = "") -> None:
             "label before flagging it. If you disagree, scroll down to "
             "*Suggest a classification correction*."
         )
+
+        # Multi-factor confidence panel — composite + per-axis sub-scores
+        # via st.metric tiles. Lets a reviewer see at-a-glance which axis
+        # drove a "low" confidence rather than guessing from the legacy
+        # 3-bucket label alone.
+        try:
+            cf = compute_confidence_factors(row)
+            _level_color = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+            st.markdown(
+                f"#### Composite confidence: "
+                f"{_level_color[cf['level']]} **{cf['level']}** "
+                f"({cf['score']*100:.0f}%)"
+            )
+            _cols = st.columns(len(cf["factors"]))
+            for col, (axis, info) in zip(_cols, cf["factors"].items()):
+                with col:
+                    st.metric(
+                        axis,
+                        f"{info['score']*100:.0f}%",
+                        help=info["driver"],
+                    )
+            # Drivers — surface the lowest-scoring axes' explanations
+            if cf["drivers"]:
+                drv_lines = [f"- **{a}**: {d}" for a, d in cf["drivers"]
+                              if d]
+                if drv_lines:
+                    st.caption(
+                        "**What's holding the score down:**\n"
+                        + "\n".join(drv_lines)
+                    )
+            st.divider()
+        except Exception as _e:  # noqa: BLE001
+            st.caption(f"_(confidence panel unavailable: {_e})_")
+
         try:
             rationale = compute_classification_rationale(row)
         except Exception as e:

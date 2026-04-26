@@ -2913,7 +2913,7 @@ with tab_data:
         _country_options.index(_prev_zoom) if _prev_zoom in _country_options else 0
     )
 
-    _c_search, _c_country, _c_flag = st.columns([0.55, 0.30, 0.15])
+    _c_search, _c_country, _c_refresh = st.columns([0.62, 0.30, 0.08])
     with _c_search:
         search_q = st.text_input(
             "Search",
@@ -2930,23 +2930,23 @@ with tab_data:
             key="data_country_zoom",
             label_visibility="collapsed",
         )
-    with _c_flag:
-        # Counts the actual flagged trials in the current view, before
-        # text-search filtering. The label always shows the live count so
-        # the user knows whether the filter would do anything.
-        _active_flags_for_filter = _load_active_flags()
-        _n_flagged_in_view = (
-            table_df["NCTId"].isin(_active_flags_for_filter.keys()).sum()
-            if _active_flags_for_filter else 0
-        )
-        _flagged_only = st.checkbox(
-            f"🚩 Flagged only ({_n_flagged_in_view})",
-            key="data_flagged_only",
-            value=st.session_state.get("data_flagged_only", False),
-            help="Show only trials with one or more open community "
-                 "classification-flag GitHub issues.",
-            disabled=_n_flagged_in_view == 0,
-        )
+    with _c_refresh:
+        # Public refresh of the GitHub flag cache. The fetch is otherwise
+        # cached 5 min (60 req/hr unauthenticated rate limit), but a user
+        # who just filed a flag wants to see the 🚩 immediately, not 5 min
+        # from now. `.clear()` busts BOTH the open-flags fetch and the
+        # per-issue detail fetch so the drilldown banner also reflects
+        # the latest issue body.
+        if st.button(
+            "🔄",
+            key="data_refresh_flags",
+            help="Refresh community flags from GitHub. Use this right "
+                 "after filing a flag to see the 🚩 indicator appear "
+                 "immediately (otherwise the cache lags up to 5 min).",
+        ):
+            _load_active_flags.clear()
+            _load_flag_issue_details.clear()
+            st.rerun()
     _zoom_active = _zoom_country != _ALL_COUNTRIES_LABEL
 
     # Apply text search across the columns users actually scan
@@ -2958,12 +2958,6 @@ with tab_data:
         for _c in _search_cols:
             mask = mask | table_df[_c].astype(str).str.lower().str.contains(q, na=False)
         table_df = table_df[mask].copy()
-
-    # Apply flagged-only filter
-    if _flagged_only and _active_flags_for_filter:
-        table_df = table_df[
-            table_df["NCTId"].isin(_active_flags_for_filter.keys())
-        ].copy()
 
     # Apply country zoom — swap Countries for Cities + SiteStatuses
     if _zoom_active:

@@ -17,9 +17,13 @@ of minor UI / figure tweaks.
   consensus-reached, `st.warning` for open flags — that lists the
   proposed corrections inline (axis | current | proposed) with direct
   GitHub-issue links.
-- **Data tab gets a "🚩 Flagged only (N)" filter checkbox.** Live count;
-  disabled when N=0. Lets the moderator subset to just the trials with
-  open flags without scrolling the table.
+- **Data tab gets a public 🔄 refresh-flags button.** Replaces the
+  original "Flagged only" filter checkbox (which had no real use case
+  — proper triage happens in the Moderation tab; the 🚩 prefix already
+  makes flagged trials visually distinctive). Clicking the button
+  busts both the open-flags fetch cache and the per-issue detail
+  fetch cache, so the next render reflects the latest GitHub state
+  immediately rather than waiting up to 5 min for the TTL.
 - New cached helper `_load_flag_issue_details(issue_url)` (5-min TTL)
   fetches each flag issue's body and parses out the `BEGIN_FLAG_DATA`
   YAML blocks so the drilldown banner shows the actual proposed

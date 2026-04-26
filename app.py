@@ -420,8 +420,13 @@ def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
 #   - Public flags submitted via GitHub Issues API
 #   - Auth handled by GitHub (link-out to a pre-filled issue) — zero auth
 #     code on our side, no tokens stored, GitHub username = identity
-#   - Three-reviewer consensus (configurable) before promotion to llm_overrides
-#   - Moderator-approval gate on top of consensus (Peter only, for now)
+#   - Configurable N-reviewer consensus before promotion to llm_overrides.
+#     Default N=1 at current low community volume (single-reviewer surfaces
+#     to moderator); raisable to 2 or 3 once enough independent reviewers
+#     exist that crowd-vetting actually filters noise.
+#   - Moderator-approval gate on top of consensus (Peter only, for now) —
+#     this is the real quality bar; consensus just decides what reaches
+#     the moderator's queue.
 #   - Helper (this function) runs INSIDE _render_trial_drilldown so the
 #     affordance appears on every trial card across the app
 # ---------------------------------------------------------------------------
@@ -502,11 +507,14 @@ def _build_flag_issue_url(record, *, axes: list[str], corrections: dict[str, str
 - **GitHub identity**: this issue was created by your GitHub login (visible above)
 
 ### Moderator workflow
-1. Reviewers add their own assessment as a comment using the same axis schema.
-2. Once 3 independent reviewers agree on the same proposed correction, the
-   issue gets the `consensus-reached` label automatically.
-3. The moderator (@ptjeong) approves the consensus, which promotes the
-   correction to `llm_overrides.json` via `scripts/promote_consensus_flags.py`.
+1. Reviewers can add their own assessment as a comment using the same axis schema.
+2. The issue is auto-labelled `consensus-reached` once at least
+   `CONSENSUS_THRESHOLD` reviewers agree (currently 1 — single-reviewer
+   suffices to surface to the moderator at the dashboard's current
+   community volume; raisable as the reviewer pool grows).
+3. The moderator (@ptjeong) reviews the consensus in the dashboard's
+   Moderation tab. Approve → promotes the correction to
+   `llm_overrides.json` via `scripts/promote_consensus_flags.py`.
 
 ---
 
@@ -551,9 +559,9 @@ def _render_suggest_correction(record, *, key_suffix: str = "") -> None:
         st.caption(
             "If you think the classifier got an axis wrong, propose a correction "
             "below. Submission opens a pre-filled GitHub issue — you'll log in "
-            "(or sign up) on GitHub and click Submit there. Three independent "
-            "reviewers agreeing on the same correction promotes it to the "
-            "moderator-approval queue."
+            "(or sign up) on GitHub and click Submit there. The flag is then "
+            "queued for moderator review and, if approved, promoted to "
+            "`llm_overrides.json` so the next pipeline reload reflects the fix."
         )
 
         # Axis multiselect — only enumerable axes; free-text fallback for
@@ -807,15 +815,16 @@ def _render_flag_banner(record) -> None:
 
     if is_consensus:
         st.error(
-            f"{_FLAG_EMOJI} **Community consensus reached** — ≥3 reviewers "
-            "agree this trial's classification needs correction. Awaiting "
-            "moderator approval."
+            f"{_FLAG_EMOJI} **Awaiting moderator review** — the community "
+            "has reached the consensus threshold on this trial's "
+            "classification. Moderator decision pending."
         )
     else:
         plural = "s" if n > 1 else ""
         st.warning(
             f"{_FLAG_EMOJI} **{n} open classification flag{plural}** — "
-            "community has suggested a correction to this trial's labels."
+            "community has suggested a correction to this trial's labels. "
+            "Awaiting consensus before moderator review."
         )
 
     # Pull proposals from each linked issue and show them inline so the

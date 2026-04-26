@@ -36,15 +36,18 @@ assignees: ''
 - **GitHub identity**: visible above (issue author).
 
 ### Moderator workflow
-1. **Other reviewers** add their own assessment as a *comment* using the
-   same axis schema below. Use one comment per reviewer; the
+1. **Other reviewers** can add their own assessment as a *comment* using
+   the same axis schema below. Use one comment per reviewer; the
    consensus-detection workflow parses every comment with a `BEGIN_FLAG_DATA`
    block.
-2. Once **3 independent reviewers agree** on the same proposed
-   correction for an axis, the issue gets the `consensus-reached`
-   label automatically.
-3. The moderator (@ptjeong) approves the consensus, which promotes
-   the correction to `llm_overrides.json` via
+2. The issue is automatically labelled `consensus-reached` when at
+   least `CONSENSUS_THRESHOLD` distinct human reviewers agree on the
+   same correction. **Currently the threshold is 1** (single-reviewer
+   suffices to surface to the moderator), configurable via the
+   workflow env var. Will be raised as the community grows.
+3. The moderator (@ptjeong) reviews the consensus in the dashboard's
+   Moderation tab. Approve → records to `moderator_validations.json` and
+   queues for promotion to `llm_overrides.json` via
    `scripts/promote_consensus_flags.py`.
 
 ---

@@ -120,7 +120,7 @@ def _consensus_proposals_for_issue(
     issue: dict,
     token: str,
     repo: str,
-    threshold: int = 3,
+    threshold: int = 1,
 ) -> dict[tuple[str, str], set[str]]:
     """Aggregate (axis, proposed_correction) → distinct authors across body+comments."""
     agreement: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -254,9 +254,12 @@ def main() -> int:
              "promoted issue. Requires PAT with `repo` scope.",
     )
     parser.add_argument(
-        "--threshold", type=int, default=3,
-        help="Distinct authors required for consensus (default: 3, matches "
-             "the C8b workflow's CONSENSUS_THRESHOLD).",
+        "--threshold", type=int, default=1,
+        help="Distinct authors required for consensus (default: 1, matches "
+             "the C8b workflow's CONSENSUS_THRESHOLD env var). Single-reviewer "
+             "is the realistic mode at low community volume — bump to 2 or 3 "
+             "once enough independent reviewers exist that crowd-vetting "
+             "actually filters noise.",
     )
     parser.add_argument(
         "--require-moderator-approval", action="store_true",

@@ -50,5 +50,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO_SLUG: ${{ github.repository }}
-          CONSENSUS_THRESHOLD: "3"
+          # Distinct human authors required to apply `consensus-reached`.
+          # Default 1 — at current low community volume the bottleneck is
+          # moderator throughput, not crowd vetting; gating to 3 means
+          # nothing ever reaches the moderator. Raise to 2 or 3 once the
+          # repo has enough independent reviewers that crowd-vetting
+          # actually filters noise.
+          CONSENSUS_THRESHOLD: "1"
         run: python scripts/detect_flag_consensus.py

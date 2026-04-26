@@ -14,7 +14,11 @@ Environment:
     GH_TOKEN              — GitHub Actions token (auto-provided)
     ISSUE_NUMBER          — issue number to inspect
     REPO_SLUG             — owner/name (e.g. ptjeong/ONC-CAR-T-Trials-Monitor)
-    CONSENSUS_THRESHOLD   — distinct agreeing authors required (default 3)
+    CONSENSUS_THRESHOLD   — distinct agreeing authors required (default 1).
+                            Default 1 = single-reviewer suffices to reach
+                            consensus → moderator review. Raise to 2 or 3
+                            once enough independent reviewers exist that
+                            crowd-vetting actually filters noise.
 
 Comment authors include the issue opener (their proposal counts as one
 vote). The bot itself (`github-actions[bot]`) is excluded.
@@ -121,7 +125,7 @@ def main() -> int:
     token = os.environ.get("GH_TOKEN")
     issue_number = os.environ.get("ISSUE_NUMBER")
     repo_slug = os.environ.get("REPO_SLUG")
-    threshold = int(os.environ.get("CONSENSUS_THRESHOLD", "3"))
+    threshold = int(os.environ.get("CONSENSUS_THRESHOLD", "1"))
 
     if not (token and issue_number and repo_slug):
         print("Missing GH_TOKEN / ISSUE_NUMBER / REPO_SLUG; bailing.", file=sys.stderr)

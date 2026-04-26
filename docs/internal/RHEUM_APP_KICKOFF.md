@@ -25,7 +25,15 @@ be ported as-is, with only the rheum-specific column lists changing.
 | 3 | Deep Dive by-disease + by-product drilldowns     | 421fdd8                    | +110 / -0     |
 | 4 | Deep Dive by-sponsor: search + scrollable + pick | d164813                    | +95 / -10     |
 | 5 | NEW Deep Dive sub-tab — By target                | 5e6553b                    | +250 / -0     |
-| 6 | Community flagging system (full loop)            | b4402d1, 8ed8787, 76bdfc4, 816dcef, f006d8e | +1,500 / -10 |
+| 6 | Community flagging system (full loop)            | b4402d1, 8ed8787, 76bdfc4, 816dcef, f006d8e, **c3e2388**, **5c201db** | +1,800 / -50 |
+
+> **Note on commit 6:** the originally-shipped version had a dedicated
+> `_Flag` column in every trial table. After UX feedback the column
+> was replaced with an inline 🚩 prefix on `BriefTitle` + a banner at
+> the top of the drilldown card showing the proposed corrections
+> inline. **Implement the final version (commits c3e2388 + 5c201db),
+> not the original column UX (commit 8ed8787).** See section 6b below
+> for the full rationale and code.
 
 Total: ~5 commits' worth of porting work, mostly mechanical.
 
@@ -290,10 +298,15 @@ Add a manual-fallback issue template at
 `.github/ISSUE_TEMPLATE/classification_flag.md` documenting the same
 YAML block format other reviewers must follow.
 
-### 6b. Flag-badge column on every trial table
+### 6b. Inline 🚩 prefix + drilldown banner + flagged-only filter
 
-Cached fetch from the GitHub public issues API + a tiny badge string
-helper:
+**The original 8ed8787 commit added a dedicated `_Flag` column. That
+was reverted in commit `c3e2388` after UX feedback** — the column
+reserved ~5% of every trial table's width for an empty cell 99% of
+the time. The current pattern has four pieces:
+
+**1. Cached fetch of the open-issue list** (shared between the prefix
+logic and the drilldown banner):
 
 ```python
 @st.cache_data(ttl=60 * 5, show_spinner=False)
@@ -301,25 +314,125 @@ def _load_active_flags() -> dict:
     """Returns {nct_id: {"count": int, "consensus": bool, "issue_urls": [...]}}.
     5-min cache → 1 API call per page render → well under the 60 req/hr
     unauthenticated ceiling."""
-    # … [exact body in onc app.py at line ~620 — copy verbatim]
-
-def _flag_badge(flag_entry: dict | None) -> str:
-    if not flag_entry: return ""
-    n = flag_entry.get("count", 0)
-    if n == 0: return ""
-    if flag_entry.get("consensus"): return f"⚑ consensus ({n})"
-    return f"⚑ {n}"
-
-def _attach_flag_column(df, show_cols):
-    flags = _load_active_flags()
-    out = df.copy()
-    out["_Flag"] = out["NCTId"].map(lambda n: _flag_badge(flags.get(n)))
-    return out, ["_Flag"] + [c for c in show_cols if c != "_Flag"]
+    # … [exact body in onc app.py — copy verbatim]
 ```
 
-Wire the helper into every trial table (Data tab, Geography city
-table, all Deep Dive sub-tab trial tables). Failure mode is silent —
-any exception in the fetch returns `{}` and the column renders blank.
+**2. Inline 🚩 prefix on flagged BriefTitle** (no width reserved):
+
+```python
+_FLAG_EMOJI = "🚩"
+
+def _attach_flag_column(df, show_cols):
+    """DESPITE THE NAME, no longer adds a column. Modifies BriefTitle
+    in place to prepend 🚩 for flagged trials. Idempotent. Returns
+    (df, show_cols) tuple so the 5+ call sites don't need to change."""
+    flags = _load_active_flags()
+    out = df.copy()
+    if not flags or "NCTId" not in out.columns or "BriefTitle" not in out.columns:
+        return out, show_cols
+
+    def _prefix(row):
+        nct = row.get("NCTId", "")
+        title = str(row.get("BriefTitle", ""))
+        if title.startswith(f"{_FLAG_EMOJI} "):
+            return title  # idempotent
+        entry = flags.get(nct)
+        if entry and entry.get("count", 0) > 0:
+            return f"{_FLAG_EMOJI} {title}"
+        return title
+
+    out["BriefTitle"] = out.apply(_prefix, axis=1)
+    return out, show_cols
+```
+
+**3. Drilldown banner** — called from inside `_render_trial_drilldown`
+at the very TOP of the card (before the metadata columns). `st.error`
+for consensus-reached, `st.warning` for open flags. Shows an inline
+table of proposed corrections (Axis | Current | Proposed | Discussion
+link) parsed from each issue's BEGIN_FLAG_DATA YAML block:
+
+```python
+def _render_flag_banner(record) -> None:
+    nct = record.get("NCTId", "") if record is not None else ""
+    if not nct: return
+    flags = _load_active_flags()
+    entry = flags.get(nct)
+    if not entry or entry.get("count", 0) == 0: return
+
+    n, is_consensus = entry["count"], bool(entry.get("consensus"))
+    if is_consensus:
+        st.error(f"{_FLAG_EMOJI} **Community consensus reached** — ≥3 reviewers "
+                 "agree this trial's classification needs correction. "
+                 "Awaiting moderator approval.")
+    else:
+        plural = "s" if n > 1 else ""
+        st.warning(f"{_FLAG_EMOJI} **{n} open classification flag{plural}** — "
+                   "community has suggested a correction to this trial's labels.")
+
+    # Pull proposals from each linked issue's BEGIN_FLAG_DATA block
+    all_proposals = []
+    for url in entry.get("issue_urls", []):
+        details = _load_flag_issue_details(url)
+        for prop in details.get("proposals", []):
+            all_proposals.append({
+                "Axis": prop.get("axis", ""),
+                "Current label": prop.get("pipeline_label", ""),
+                "Proposed correction": prop.get("proposed_correction", ""),
+                "Discussion": url,
+            })
+    if all_proposals:
+        st.markdown("**Proposed corrections:**")
+        st.dataframe(pd.DataFrame(all_proposals), hide_index=True, width="stretch",
+                     column_config={"Discussion": st.column_config.LinkColumn(
+                         "Discussion", display_text="View ↗")})
+```
+
+**4. Issue-details fetcher** (cached 5 min, same pattern as
+`_load_active_flags`):
+
+```python
+@st.cache_data(ttl=60 * 5, show_spinner=False)
+def _load_flag_issue_details(issue_url: str) -> dict:
+    """Fetch a single issue's body, parse BEGIN_FLAG_DATA YAML blocks.
+    Tries pyyaml first, falls back to regex. Returns {} on failure."""
+    # … [exact body in onc app.py — copy verbatim]
+```
+
+**5. "🚩 Flagged only (N)" checkbox** on the Data tab (in a third
+column alongside the search box and country zoom). Live count;
+`disabled=True` when N=0:
+
+```python
+_c_search, _c_country, _c_flag = st.columns([0.55, 0.30, 0.15])
+# ...
+with _c_flag:
+    _active_flags_for_filter = _load_active_flags()
+    _n_flagged_in_view = (
+        table_df["NCTId"].isin(_active_flags_for_filter.keys()).sum()
+        if _active_flags_for_filter else 0
+    )
+    _flagged_only = st.checkbox(
+        f"🚩 Flagged only ({_n_flagged_in_view})",
+        key="data_flagged_only",
+        disabled=_n_flagged_in_view == 0,
+        help="Show only trials with one or more open community "
+             "classification-flag GitHub issues.",
+    )
+# ...later, after the search filter:
+if _flagged_only and _active_flags_for_filter:
+    table_df = table_df[
+        table_df["NCTId"].isin(_active_flags_for_filter.keys())
+    ].copy()
+```
+
+Add `pyyaml>=6.0` to requirements.txt for the issue-body parsing.
+6 unit tests for the prefix behaviour (idempotent, zero-count edge
+case, empty flags early-return) live in
+`tests/test_flag_inline_prefix.py` — copy verbatim.
+
+Failure mode for the whole subsystem is silent: any exception in the
+GitHub API fetch returns `{}` and nothing renders. The drilldown card
+keeps working even if the flag layer fails to import.
 
 ### 6c. GitHub Action for consensus detection
 

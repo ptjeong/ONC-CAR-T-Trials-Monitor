@@ -6207,69 +6207,74 @@ with tab_methods:
             <style>
                 .prisma-wrap {
                     background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
-                    border: 1px solid #e2e8f0; border-radius: 12px;
-                    padding: 28px 24px; margin: 8px 0 18px 0;
-                    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04),
-                                0 4px 12px rgba(15, 23, 42, 0.03);
+                    border: 1px solid #e2e8f0; border-radius: 10px;
+                    padding: 14px 16px 10px 16px; margin: 4px 0 12px 0;
+                    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03),
+                                0 2px 6px rgba(15, 23, 42, 0.025);
                 }
                 .prisma-row {
-                    display: grid; grid-template-columns: 1fr 24px 1fr;
-                    align-items: center; gap: 8px;
-                    margin-bottom: 14px;
+                    display: grid;
+                    grid-template-columns: minmax(0, 1.1fr) 18px minmax(0, 1fr);
+                    align-items: center; gap: 6px;
+                    margin-bottom: 4px;
                 }
                 .prisma-stage, .prisma-excl {
-                    border-radius: 8px; padding: 14px 18px;
+                    border-radius: 6px; padding: 7px 12px;
                     font-family: Arial, Helvetica, sans-serif;
-                    line-height: 1.3;
+                    line-height: 1.2;
+                    display: flex; align-items: center;
+                    justify-content: space-between; gap: 12px;
                 }
                 .prisma-stage {
                     background: #1e3a8a; color: #ffffff;
                     border: 1px solid #1e3a8a;
-                    box-shadow: 0 1px 2px rgba(30, 58, 138, 0.2);
                 }
                 .prisma-stage.endpoint {
                     background: #0b3d91; border-color: #0b3d91;
-                    box-shadow: 0 2px 6px rgba(11, 61, 145, 0.35);
+                    box-shadow: 0 1px 3px rgba(11, 61, 145, 0.3);
                 }
                 .prisma-excl {
                     background: #f1f5f9; color: #475569;
                     border: 1px solid #e2e8f0;
                 }
                 .prisma-num {
-                    font-size: 24px; font-weight: 700;
+                    font-size: 16px; font-weight: 700;
                     font-variant-numeric: tabular-nums;
                     letter-spacing: -0.01em; line-height: 1;
+                    flex: 0 0 auto;
                 }
                 .prisma-stage .prisma-num { color: #ffffff; }
                 .prisma-excl .prisma-num { color: #334155; }
                 .prisma-lbl {
-                    font-size: 11px; text-transform: uppercase;
-                    letter-spacing: 0.6px; font-weight: 600;
-                    margin-top: 4px; opacity: 0.85;
+                    font-size: 10px; text-transform: uppercase;
+                    letter-spacing: 0.5px; font-weight: 600;
+                    opacity: 0.88; line-height: 1.2;
+                    text-align: right; flex: 1 1 auto;
+                    min-width: 0;
                 }
-                .prisma-stage.endpoint .prisma-num { font-size: 28px; }
+                .prisma-stage.endpoint .prisma-num { font-size: 18px; }
                 .prisma-arrow {
-                    color: #cbd5e1; font-size: 20px; text-align: center;
+                    color: #cbd5e1; font-size: 14px; text-align: center;
                     line-height: 1; user-select: none;
                 }
                 .prisma-arrow-down {
                     grid-column: 1 / 2; text-align: center;
-                    color: #cbd5e1; font-size: 16px; font-weight: 700;
-                    margin: -8px 0 -4px 0; letter-spacing: 1px;
+                    color: #cbd5e1; font-size: 11px; font-weight: 700;
+                    margin: -1px 0; letter-spacing: 1px;
+                    line-height: 1;
                 }
             </style>
             """, unsafe_allow_html=True)
 
-            # Build the flowchart inline. Each row = one stage of the
+            # Compact PRISMA flowchart. Each row = one stage of the
             # main inclusion path on the left, optional exclusion on
-            # the right. Vertical arrows between rows show the "kept"
-            # count flowing downward.
+            # the right. Number + label inline horizontally for density.
             _rows_html = f"""
             <div class="prisma-wrap">
               <div class="prisma-row">
                 <div class="prisma-stage">
-                  <div class="prisma-num">{n_fetched_p:,}</div>
-                  <div class="prisma-lbl">Records identified · ClinicalTrials.gov v2 API</div>
+                  <span class="prisma-num">{n_fetched_p:,}</span>
+                  <span class="prisma-lbl">Records identified · CT.gov v2 API</span>
                 </div>
                 <div></div>
                 <div></div>
@@ -6277,44 +6282,44 @@ with tab_methods:
               <div class="prisma-arrow-down">↓</div>
               <div class="prisma-row">
                 <div class="prisma-stage">
-                  <div class="prisma-num">{n_dedup_p:,}</div>
-                  <div class="prisma-lbl">After de-duplication</div>
+                  <span class="prisma-num">{n_dedup_p:,}</span>
+                  <span class="prisma-lbl">After de-duplication</span>
                 </div>
                 <div class="prisma-arrow">→</div>
                 <div class="prisma-excl">
-                  <div class="prisma-num">{n_dups_p:,}</div>
-                  <div class="prisma-lbl">Duplicates removed (same NCT ID)</div>
+                  <span class="prisma-num">{n_dups_p:,}</span>
+                  <span class="prisma-lbl">Duplicates removed</span>
                 </div>
               </div>
               <div class="prisma-arrow-down">↓</div>
               <div class="prisma-row">
                 <div class="prisma-stage">
-                  <div class="prisma-num">{n_after_hard:,}</div>
-                  <div class="prisma-lbl">After curated hard-exclusion list</div>
+                  <span class="prisma-num">{n_after_hard:,}</span>
+                  <span class="prisma-lbl">After hard-exclusion list</span>
                 </div>
                 <div class="prisma-arrow">→</div>
                 <div class="prisma-excl">
-                  <div class="prisma-num">{n_hard_p:,}</div>
-                  <div class="prisma-lbl">Manually flagged off-scope NCTs</div>
+                  <span class="prisma-num">{n_hard_p:,}</span>
+                  <span class="prisma-lbl">Hard-excluded · curated</span>
                 </div>
               </div>
               <div class="prisma-arrow-down">↓</div>
               <div class="prisma-row">
                 <div class="prisma-stage">
-                  <div class="prisma-num">{n_after_indic:,}</div>
-                  <div class="prisma-lbl">After indication filter</div>
+                  <span class="prisma-num">{n_after_indic:,}</span>
+                  <span class="prisma-lbl">After indication filter</span>
                 </div>
                 <div class="prisma-arrow">→</div>
                 <div class="prisma-excl">
-                  <div class="prisma-num">{n_indic_p:,}</div>
-                  <div class="prisma-lbl">Autoimmune / rheumatology-only indications</div>
+                  <span class="prisma-num">{n_indic_p:,}</span>
+                  <span class="prisma-lbl">Autoimmune-only excluded</span>
                 </div>
               </div>
               <div class="prisma-arrow-down">↓</div>
               <div class="prisma-row">
                 <div class="prisma-stage endpoint">
-                  <div class="prisma-num">{n_inc_p:,}</div>
-                  <div class="prisma-lbl">Included in analysis</div>
+                  <span class="prisma-num">{n_inc_p:,}</span>
+                  <span class="prisma-lbl">Included in analysis</span>
                 </div>
                 <div></div>
                 <div></div>

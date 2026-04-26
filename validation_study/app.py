@@ -114,111 +114,86 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Tight typography for a long rater session — clean but with polish.
-       Inspired by Linear, Stripe, and the GitHub contributions heatmap:
-       sophisticated gamification through CSS, never through emoji. */
-    .block-container { max-width: 1100px; padding-top: 2rem; }
+    /* Minimalist palette — single accent (#1e40af), one neutral text
+       (#0f172a), one muted (#64748b). Whitespace separates content;
+       no card borders, no gradients, no shadows except on the
+       active submit button. Inspired by Things, Linear, Notion. */
+    .block-container { max-width: 980px; padding-top: 1.6rem; }
     .stRadio > div { gap: 0.4rem; }
 
-    /* Heatmap card — premium, COMPACT. Visible by default at the top of
-       every session. Side-by-side: thin grid strip on the left, summary
-       stats on the right. Total card height ~120px — gives visual reward
-       without eating real estate. */
-    .heatmap-card {
-        display: flex;
-        align-items: center;
-        gap: 22px;
-        background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin: 4px 0 14px 0;
-        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03),
-                    0 2px 8px rgba(15, 23, 42, 0.025);
-    }
-    .heatmap-grid-wrap {
-        flex: 1 1 auto; min-width: 0;
-    }
-    .heatmap-stats {
-        flex: 0 0 auto;
-        display: flex; flex-direction: column; align-items: flex-end;
-        gap: 2px; min-width: 130px;
-    }
-    .heatmap-pct {
-        font-size: 22px; font-weight: 700; color: #1e40af;
-        line-height: 1.0; font-variant-numeric: tabular-nums;
-        letter-spacing: -0.02em;
-    }
-    .heatmap-lbl {
-        font-size: 10px; color: #64748b;
-        text-transform: uppercase; letter-spacing: 0.6px;
-        font-weight: 600;
-    }
-    .heatmap-count {
-        font-size: 11px; color: #475569;
-        font-variant-numeric: tabular-nums;
-        margin-top: 2px;
-    }
-
-    /* Compact heatmap grid — 50 columns × 4 rows for 200 cells.
-       Each cell is a tiny pixel-precise square. Three intensity bands
-       so the grid has visual texture as it fills. */
+    /* Heatmap — naked grid, no card frame. Cells are the only visual
+       texture; whitespace below separates from the next block. */
     .pgrid {
         display: grid;
         grid-template-columns: repeat(50, 1fr);
         gap: 2px;
-        max-width: 100%;
+        margin: 0;
     }
     .pcell {
         width: 100%; aspect-ratio: 1 / 1;
         border-radius: 2px;
-        transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
-                    box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1),
-                    background-color 240ms ease;
+        transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .pcell.empty {
-        background: #eef2f7;
-        box-shadow: inset 0 0 0 0.5px rgba(203, 213, 225, 0.6);
-    }
-    .pcell.older {
-        background: #6688c8;
-    }
-    .pcell.recent {
-        background: #1e40af;
-        box-shadow: 0 0 0 0.5px rgba(30, 64, 175, 0.4);
-    }
-    .pcell.fresh {
-        background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
-        box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.4),
-                    0 1px 3px rgba(30, 64, 175, 0.4);
-    }
-    .pcell.empty:hover, .pcell.older:hover,
-    .pcell.recent:hover, .pcell.fresh:hover {
+    .pcell.empty  { background: #eef2f7; }
+    .pcell.older  { background: #94abda; }
+    .pcell.recent { background: #2c5cc7; }
+    .pcell.fresh  { background: #1e40af; }
+    .pcell:hover {
         transform: scale(2.2);
-        z-index: 2;
-        position: relative;
-        box-shadow: 0 4px 12px rgba(30, 64, 175, 0.45);
+        z-index: 2; position: relative;
         cursor: default;
     }
 
-    /* Stat tiles — clean numeric callouts in the session-stats panel.
-       Big number, small label — the same hierarchy Linear / Stripe use. */
-    .stat-tile { display: inline-block; padding: 12px 18px;
-                 margin-right: 8px; border-radius: 6px;
-                 background: #f8fafc; border: 1px solid #e2e8f0; }
-    .stat-tile .num { font-size: 22px; font-weight: 700;
-                       color: #0f172a; line-height: 1.0; }
-    .stat-tile .lbl { font-size: 11px; color: #64748b;
-                       text-transform: uppercase; letter-spacing: 0.5px;
-                       margin-top: 4px; }
+    /* Single-line meta under the heatmap — count + percentage,
+       right-aligned, muted gray. No border, no background. */
+    .heatmap-meta {
+        font-size: 12px; color: #64748b;
+        text-align: right; margin: 6px 0 18px 0;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.01em;
+    }
+    .heatmap-meta strong {
+        color: #0f172a; font-weight: 600;
+    }
+    .heatmap-meta .save-stale {
+        color: #b91c1c; font-weight: 500; margin-left: 10px;
+    }
 
-    /* Save-state indicator: text only, no animation, color-coded by age */
-    .save-stale { color: #b91c1c; font-weight: 600; }
-    .save-fresh { color: #166534; }
-
-    /* Subtle separator between trials so the page feels rhythmic */
-    hr.trial-sep { border: none; border-top: 1px solid #e2e8f0;
-                    margin: 24px 0 16px 0; }
+    /* Trial card — no frame. Title large, metadata muted small,
+       conditions/interventions inline subtle, summary as quote bar. */
+    .trial-title {
+        font-size: 18px; font-weight: 600; color: #0f172a;
+        line-height: 1.3; margin: 4px 0 4px 0;
+        letter-spacing: -0.01em;
+    }
+    .trial-meta {
+        font-size: 12px; color: #64748b;
+        margin-bottom: 10px; line-height: 1.5;
+    }
+    .trial-meta a {
+        color: #1e40af; text-decoration: none; font-weight: 500;
+    }
+    .trial-meta strong {
+        color: #334155; font-weight: 600;
+    }
+    .trial-cond {
+        font-size: 13px; color: #334155; line-height: 1.45;
+        margin-bottom: 4px;
+    }
+    .trial-cond .lbl {
+        color: #64748b; font-weight: 500;
+        text-transform: uppercase; font-size: 10px;
+        letter-spacing: 0.05em; margin-right: 6px;
+    }
+    .trial-summary {
+        border-left: 2px solid #cbd5e1;
+        padding: 4px 0 4px 12px;
+        color: #475569; font-size: 13px;
+        line-height: 1.45;
+        max-height: 96px; overflow-y: auto;
+        margin: 8px 0 14px 0;
+        white-space: pre-wrap;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -356,23 +331,24 @@ def _persist(state: dict) -> None:
 # Garden gamification
 # ---------------------------------------------------------------------------
 
-def _progress_grid_html(state: dict, sample: dict) -> str:
-    """Render the compact progress heatmap card — visible by default.
+def _progress_grid_html(state: dict, sample: dict,
+                          *, save_meta_html: str = "") -> str:
+    """Render the minimalist progress heatmap.
 
-    Three intensity bands give the grid visual texture as it fills:
-      - fresh   = the 5 most-recently-rated trials (gradient + glow)
-      - recent  = next 25 rated (saturated navy)
-      - older   = everything else rated (slightly desaturated navy)
-      - empty   = pending (subtle slate)
+    Just the grid cells + a single right-aligned meta line under it
+    (count + percentage + optional stale-save warning). No card frame,
+    no background, no shadow — whitespace separates from the next block.
 
-    Side-by-side card layout: thin grid strip on the left, summary
-    stats (percentage + count) on the right. Total height ~120px.
+    Three intensity bands give visual texture as the grid fills:
+      - fresh  = 5 most-recently-rated trials
+      - recent = next 25 rated
+      - older  = everything else rated
+      - empty  = pending
     """
     n_total = len(sample["trials"])
     ratings = state.get("ratings", {})
     n_done = len(ratings)
 
-    # Order rated NCTs by timestamp (most recent first) to assign tiers
     rated_with_ts = sorted(
         [(nct, r.get("timestamp", "")) for nct, r in ratings.items()],
         key=lambda t: t[1] or "",
@@ -385,32 +361,22 @@ def _progress_grid_html(state: dict, sample: dict) -> str:
     for trial in sample["trials"]:
         nct = trial["NCTId"]
         if nct in fresh_set:
-            cells.append(
-                f'<div class="pcell fresh" title="{nct} — just rated"></div>'
-            )
+            cls = "fresh"
         elif nct in recent_set:
-            cells.append(
-                f'<div class="pcell recent" title="{nct} — recent"></div>'
-            )
+            cls = "recent"
         elif nct in ratings:
-            cells.append(
-                f'<div class="pcell older" title="{nct} — rated"></div>'
-            )
+            cls = "older"
         else:
-            cells.append(
-                f'<div class="pcell empty" title="{nct} — pending"></div>'
-            )
+            cls = "empty"
+        cells.append(f'<div class="pcell {cls}" title="{nct}"></div>')
+
     pct = (n_done / n_total * 100) if n_total else 0
     return (
-        f'<div class="heatmap-card">'
-        f'  <div class="heatmap-grid-wrap">'
-        f'    <div class="pgrid">{"".join(cells)}</div>'
-        f'  </div>'
-        f'  <div class="heatmap-stats">'
-        f'    <div class="heatmap-pct">{pct:.0f}%</div>'
-        f'    <div class="heatmap-lbl">complete</div>'
-        f'    <div class="heatmap-count">{n_done} / {n_total} trials</div>'
-        f'  </div>'
+        f'<div class="pgrid">{"".join(cells)}</div>'
+        f'<div class="heatmap-meta">'
+        f'<strong>{n_done}</strong> of {n_total} rated · '
+        f'<strong>{pct:.0f}%</strong>'
+        f'{save_meta_html}'
         f'</div>'
     )
 
@@ -574,55 +540,58 @@ def _format_trial_for_rater(trial: dict) -> None:
     """
     nct = trial["NCTId"]
     title = trial.get("BriefTitle") or "(no title)"
-    # Tight title — h5 not h4
-    st.markdown(f"##### {title}")
 
-    # Single-line metadata chip row — pipe-separated, no wrap
+    # Title — single line, large but not heading-large
+    st.markdown(
+        f'<div class="trial-title">{_html_escape(title)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Metadata — pipe-separated muted gray. NCT links to CT.gov.
     sponsor_str = trial.get("LeadSponsor") or "—"
     if trial.get("LeadSponsorClass"):
         sponsor_str = f"{sponsor_str} ({trial['LeadSponsorClass']})"
     _meta_bits = [
-        f"[{nct}](https://clinicaltrials.gov/study/{nct})",
-        f"**Phase:** {trial.get('Phase') or '—'}",
-        f"**Status:** {trial.get('OverallStatus') or '—'}",
-        f"**Sponsor:** {sponsor_str}",
-        f"**Design:** {trial.get('TrialDesign') or '—'}",
+        f'<a href="https://clinicaltrials.gov/study/{nct}" target="_blank">{nct}</a>',
+        f"<strong>{trial.get('Phase') or '—'}</strong>",
+        trial.get('OverallStatus') or "—",
+        sponsor_str,
+        trial.get('TrialDesign') or "—",
     ]
     if trial.get("EnrollmentCount"):
-        _meta_bits.append(f"**N:** {trial['EnrollmentCount']}")
+        _meta_bits.append(f"n = {trial['EnrollmentCount']}")
     if trial.get("Countries"):
-        _meta_bits.append(f"**Countries:** {trial['Countries']}")
-    st.caption(" · ".join(_meta_bits))
+        _meta_bits.append(_html_escape(trial['Countries']))
+    st.markdown(
+        f'<div class="trial-meta">{" · ".join(_meta_bits)}</div>',
+        unsafe_allow_html=True,
+    )
 
-    # Conditions + Interventions side-by-side — single line each, truncated
+    # Conditions + Interventions side-by-side — tiny uppercase labels
     _ec1, _ec2 = st.columns(2)
     with _ec1:
         if trial.get("Conditions"):
             st.markdown(
-                f"<div style='font-size:0.85em'>"
-                f"<b>Conditions:</b> {_html_escape(trial['Conditions'])}"
-                f"</div>",
+                f'<div class="trial-cond">'
+                f'<span class="lbl">Conditions</span>'
+                f'{_html_escape(trial["Conditions"])}'
+                f'</div>',
                 unsafe_allow_html=True,
             )
     with _ec2:
         if trial.get("Interventions"):
             st.markdown(
-                f"<div style='font-size:0.85em'>"
-                f"<b>Interventions:</b> {_html_escape(trial['Interventions'])}"
-                f"</div>",
+                f'<div class="trial-cond">'
+                f'<span class="lbl">Interventions</span>'
+                f'{_html_escape(trial["Interventions"])}'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
-    # Compact brief summary — 100px max instead of 240px
+    # Brief summary — naked left-bar quote, no card
     if trial.get("BriefSummary"):
         st.markdown(
-            f"<div style='max-height:100px; overflow-y:auto; "
-            f"padding:6px 10px; background:#f8fafc; "
-            f"border-left:3px solid #cbd5e1; border-radius:4px; "
-            f"font-size:0.85em; line-height:1.35; "
-            f"white-space:pre-wrap; margin-top:4px;'>"
-            f"<b>Summary.</b> {_html_escape(trial['BriefSummary'])}"
-            f"</div>",
+            f'<div class="trial-summary">{_html_escape(trial["BriefSummary"])}</div>',
             unsafe_allow_html=True,
         )
 
@@ -781,40 +750,27 @@ def _render_rater(rater_id: str) -> None:
     n_total = len(sample["trials"])
 
     # ---- Top header: progress + save status + always-on manual save ----
-    # ---- Compact heatmap card (FIRST thing on the page) ----
-    # Side-by-side card: 50-col × 4-row grid on the left, big percent +
-    # count on the right. ~80px tall. Hover any cell for the NCT ID.
-    # Three intensity tiers (fresh/recent/older) give visual texture.
-    # The percentage replaces the old st.progress bar.
-    st.markdown(_progress_grid_html(state, sample), unsafe_allow_html=True)
-
-    # ---- Tiny utility row: save status + download (single line) ----
-    _save_col, _dl_col = st.columns([0.7, 0.3])
-    with _save_col:
-        last_save = state.get("last_updated", "—")
-        try:
-            dt = datetime.fromisoformat(last_save.replace("Z", "+00:00"))
-            secs_ago = (datetime.now(timezone.utc) - dt).total_seconds()
-            stale = secs_ago > 120
-            klass = "save-stale" if stale else "save-fresh"
-            label = (f"{int(secs_ago)}s ago — save!" if stale
-                     else f"auto-saved {int(secs_ago)}s ago")
-            st.markdown(
-                f"<small>Server backup: <span class='{klass}'>{label}</span> "
-                "· local Download → safety net if the server restarts.</small>",
-                unsafe_allow_html=True,
+    # ---- Heatmap (first + only thing at the top) ----
+    # Naked grid + single right-aligned meta line. Save-stale warning
+    # appears INLINE in the meta line ONLY when stale (>2 min) — no
+    # always-on save row. Backup download lives in the bottom expander.
+    _save_meta = ""
+    last_save = state.get("last_updated", "")
+    try:
+        dt = datetime.fromisoformat(last_save.replace("Z", "+00:00"))
+        secs_ago = (datetime.now(timezone.utc) - dt).total_seconds()
+        if secs_ago > 120:
+            _save_meta = (
+                f' · <span class="save-stale">'
+                f'unsaved for {int(secs_ago)}s — open Settings to back up'
+                f'</span>'
             )
-        except Exception:
-            st.caption("Last saved: —")
-    with _dl_col:
-        st.download_button(
-            "Download progress",
-            data=json.dumps(state, indent=2),
-            file_name=f"{rater_id}_progress_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
-            mime="application/json",
-            help="Save a backup to your computer.",
-            use_container_width=True,
-        )
+    except Exception:
+        pass
+    st.markdown(
+        _progress_grid_html(state, sample, save_meta_html=_save_meta),
+        unsafe_allow_html=True,
+    )
 
     # (Session stats tiles previously rendered here are now folded into
     # the heatmap card's right panel — % complete + N/200 — and into

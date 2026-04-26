@@ -6243,15 +6243,21 @@ with tab_methods:
                     letter-spacing: -0.01em; line-height: 1;
                     flex: 0 0 auto;
                 }
-                .prisma-stage .prisma-num { color: #ffffff; }
-                .prisma-excl .prisma-num { color: #334155; }
                 .prisma-lbl {
                     font-size: 10px; text-transform: uppercase;
                     letter-spacing: 0.5px; font-weight: 600;
-                    opacity: 0.88; line-height: 1.2;
+                    line-height: 1.2;
                     text-align: right; flex: 1 1 auto;
                     min-width: 0;
                 }
+                /* Explicit color rules per state — avoids inherited
+                   black showing through on navy bg in some browsers. */
+                .prisma-stage .prisma-num,
+                .prisma-stage .prisma-lbl,
+                .prisma-stage * { color: #ffffff !important; }
+                .prisma-excl .prisma-num,
+                .prisma-excl .prisma-lbl,
+                .prisma-excl * { color: #334155 !important; }
                 .prisma-stage.endpoint .prisma-num { font-size: 18px; }
                 .prisma-arrow {
                     color: #cbd5e1; font-size: 14px; text-align: center;

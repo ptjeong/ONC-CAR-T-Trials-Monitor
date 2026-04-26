@@ -880,6 +880,50 @@ def _sponsor_type(row: dict) -> str:
 # ClinicalTrials.gov fetch
 # ---------------------------------------------------------------------------
 
+_FETCH_BACKOFFS_SEC = (1.5, 3.0, 6.0)  # 4 attempts total: initial + 3 retries
+
+
+def _fetch_with_retry(params: dict, *, cumulative_n: int) -> dict:
+    """One paginated request with retry + exponential backoff.
+
+    On total failure (all attempts exhausted), the raised error message
+    includes `cumulative_n` so the operator immediately knows how much
+    of the fetch had already succeeded — preventing surprise when a
+    partial-fetch crash discards 90% of work.
+    """
+    import time as _time
+    last_exc: Exception | None = None
+    for attempt, sleep_secs in enumerate(
+        (0.0, *_FETCH_BACKOFFS_SEC), start=1,
+    ):
+        if sleep_secs:
+            _time.sleep(sleep_secs)
+        try:
+            resp = requests.get(BASE_URL, params=params, timeout=30)
+            if resp.status_code == 200:
+                return resp.json()
+            # Treat 5xx as retryable; 4xx as terminal (don't waste retries)
+            if 400 <= resp.status_code < 500:
+                raise requests.HTTPError(
+                    f"ClinicalTrials.gov API {resp.status_code} (terminal, "
+                    f"4xx): {resp.text[:300]} "
+                    f"[after {cumulative_n} cumulative studies fetched]"
+                )
+            last_exc = requests.HTTPError(
+                f"ClinicalTrials.gov API {resp.status_code} on attempt "
+                f"{attempt}/{1 + len(_FETCH_BACKOFFS_SEC)}: "
+                f"{resp.text[:300]}"
+            )
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exc = e
+    raise requests.HTTPError(
+        f"ClinicalTrials.gov fetch failed after "
+        f"{1 + len(_FETCH_BACKOFFS_SEC)} attempts (backoffs: "
+        f"{_FETCH_BACKOFFS_SEC}): {last_exc} "
+        f"[after {cumulative_n} cumulative studies fetched]"
+    )
+
+
 def fetch_raw_trials(max_records: int = 5000, statuses: list[str] | None = None) -> list[dict]:
     """Pull all CAR-based cell-therapy trials from ClinicalTrials.gov v2.
 
@@ -889,6 +933,11 @@ def fetch_raw_trials(max_records: int = 5000, statuses: list[str] | None = None)
     rheumatologic. This is more robust than trying to enumerate every onco
     condition term ClinicalTrials.gov might use (generic labels like "Neoplasms"
     or "Hematological Malignancies" were being missed before).
+
+    Resilience: each paginated request retries up to 3× with exponential
+    backoff (1.5/3/6 sec) on 5xx or transient network errors. On total
+    failure, the raised message includes the cumulative-studies count
+    so a partial-fetch blast radius is immediately visible.
     """
     term_query = (
         '"CAR T" OR "CAR-T" OR "chimeric antigen receptor" '
@@ -902,12 +951,7 @@ def fetch_raw_trials(max_records: int = 5000, statuses: list[str] | None = None)
 
     studies: list[dict] = []
     while True:
-        resp = requests.get(BASE_URL, params=params, timeout=30)
-        if resp.status_code != 200:
-            raise requests.HTTPError(
-                f"ClinicalTrials.gov API error {resp.status_code}: {resp.text}"
-            )
-        data = resp.json()
+        data = _fetch_with_retry(params, cumulative_n=len(studies))
         studies.extend(data.get("studies", []))
         if len(studies) >= max_records:
             break
@@ -1129,29 +1173,164 @@ def save_snapshot(
     prisma: dict,
     snapshot_dir: str = "snapshots",
     statuses: list[str] | None = None,
+    backfill_geo: bool = False,
 ) -> str:
+    """Persist a dated snapshot of trials + sites + PRISMA + metadata.
+
+    Byte-deterministic across input row order:
+      - trials.csv sorted by NCTId
+      - sites.csv sorted by (NCTId, FacilityName, City)
+      - JSON written with sort_keys=True + stable indent
+      - Wall-clock timestamp segregated to runinfo.json so the
+        deterministic outputs (trials/sites/prisma/metadata) hash
+        identically across re-runs of the same input
+
+    The deterministic bytes guarantee makes snapshot diffs across
+    pipeline-only changes attributable to real classifier changes (vs
+    incidental row-order shuffles); reviewers replicating an analysis
+    can confirm SHA-256 round-trip of the published artifacts.
+
+    Optional `backfill_geo=True` re-fetches site lat/lon from CT.gov
+    via `backfill_site_geo` so brand-new snapshots are geo-complete on
+    day one rather than needing a follow-up backfill pass.
+    """
     snapshot_date = datetime.utcnow().date().isoformat()
     out_dir = os.path.join(snapshot_dir, snapshot_date)
     os.makedirs(out_dir, exist_ok=True)
 
-    df.to_csv(os.path.join(out_dir, "trials.csv"), index=False)
-    df_sites.to_csv(os.path.join(out_dir, "sites.csv"), index=False)
+    # ---- Sort for determinism ----
+    df_sorted = (
+        df.sort_values("NCTId", kind="mergesort").reset_index(drop=True)
+        if "NCTId" in df.columns else df
+    )
+    if not df_sites.empty and "NCTId" in df_sites.columns:
+        site_sort_keys = [k for k in ["NCTId", "FacilityName", "City"]
+                          if k in df_sites.columns]
+        df_sites_sorted = (
+            df_sites.sort_values(site_sort_keys, kind="mergesort")
+            .reset_index(drop=True)
+        )
+    else:
+        df_sites_sorted = df_sites
+
+    # Optional geo backfill BEFORE write so the persisted sites.csv
+    # is geo-complete (no follow-up pass needed). On any failure we
+    # fall back to the un-backfilled sites — never block snapshot save.
+    if backfill_geo and not df_sites_sorted.empty:
+        try:
+            df_sites_sorted = backfill_site_geo(df_sites_sorted)
+        except Exception as _e:  # noqa: BLE001
+            print(f"  WARN: backfill_site_geo failed ({_e}); "
+                  f"saving snapshot without geo enrichment.")
+
+    df_sorted.to_csv(os.path.join(out_dir, "trials.csv"), index=False)
+    df_sites_sorted.to_csv(os.path.join(out_dir, "sites.csv"), index=False)
 
     with open(os.path.join(out_dir, "prisma.json"), "w") as f:
-        json.dump(prisma, f, indent=2)
+        json.dump(prisma, f, indent=2, sort_keys=True)
 
+    # Deterministic metadata: identical inputs → identical bytes
     metadata = {
         "snapshot_date": snapshot_date,
-        "created_utc": datetime.utcnow().isoformat(),
-        "statuses_filter": statuses or [],
-        "n_trials": len(df),
-        "n_sites": len(df_sites),
+        "statuses_filter": sorted(statuses or []),
+        "n_trials": len(df_sorted),
+        "n_sites": len(df_sites_sorted),
         "api_base_url": BASE_URL,
     }
     with open(os.path.join(out_dir, "metadata.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
+        json.dump(metadata, f, indent=2, sort_keys=True)
+
+    # Wall-clock + provenance segregated here — non-deterministic by
+    # nature; not part of the SHA-256 round-trip contract
+    runinfo = {
+        "created_utc": datetime.utcnow().isoformat(),
+        "pipeline_sha": _git_sha_or_unknown(),
+        "backfill_geo": backfill_geo,
+    }
+    with open(os.path.join(out_dir, "runinfo.json"), "w") as f:
+        json.dump(runinfo, f, indent=2, sort_keys=True)
 
     return snapshot_date
+
+
+def _git_sha_or_unknown() -> str:
+    """Best-effort short git SHA for runinfo. Returns 'unknown' if git
+    is unavailable or this is being run outside a checkout."""
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            text=True, stderr=subprocess.DEVNULL,
+        )
+        return out.strip()
+    except Exception:
+        return "unknown"
+
+
+def backfill_site_geo(df_sites: pd.DataFrame) -> pd.DataFrame:
+    """Re-fetch site lat/lon from CT.gov for rows missing geo data.
+
+    Canonical implementation lives in this module so both
+    `save_snapshot(backfill_geo=True)` and the standalone
+    `scripts/backfill_site_geo.py` CLI share the same code path.
+
+    Returns a copy of df_sites with Latitude / Longitude filled where
+    the CT.gov API now provides them. Rows the API can't enrich are
+    left as-is (no error). Hits CT.gov once per unique NCTId; gracefully
+    no-op when df_sites is empty or already has geo coverage.
+    """
+    if df_sites.empty:
+        return df_sites
+    out = df_sites.copy()
+    if "Latitude" not in out.columns:
+        out["Latitude"] = pd.NA
+    if "Longitude" not in out.columns:
+        out["Longitude"] = pd.NA
+
+    # Only fetch for NCTs that have at least one missing coord
+    needs_fetch = (
+        out["Latitude"].isna() | out["Longitude"].isna()
+    )
+    nct_ids = out.loc[needs_fetch, "NCTId"].dropna().unique().tolist()
+    if not nct_ids:
+        return out
+
+    fetched: dict[tuple[str, str], tuple[float, float]] = {}
+    for nct in nct_ids:
+        try:
+            url = f"{BASE_URL}/{nct}"
+            resp = requests.get(url, timeout=15)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            locs = (data.get("protocolSection", {})
+                       .get("contactsLocationsModule", {})
+                       .get("locations") or [])
+            for loc in locs:
+                facility = loc.get("facility") or ""
+                city = loc.get("city") or ""
+                geo = loc.get("geoPoint") or {}
+                if "lat" in geo and "lon" in geo:
+                    fetched[(nct, facility)] = (geo["lat"], geo["lon"])
+                    fetched[(nct, city)] = (geo["lat"], geo["lon"])
+        except Exception:
+            continue
+
+    if not fetched:
+        return out
+
+    # Apply the fetched coords back into the dataframe
+    for idx in out.index[needs_fetch]:
+        nct = out.at[idx, "NCTId"]
+        for key in (out.at[idx, "FacilityName"] if "FacilityName" in out.columns else None,
+                    out.at[idx, "City"] if "City" in out.columns else None):
+            coords = fetched.get((nct, key))
+            if coords:
+                out.at[idx, "Latitude"] = coords[0]
+                out.at[idx, "Longitude"] = coords[1]
+                break
+    return out
 
 
 def load_snapshot(

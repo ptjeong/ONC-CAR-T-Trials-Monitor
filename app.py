@@ -6213,149 +6213,144 @@ with tab_methods:
         n_inc_p = int(prisma_counts.get("n_included", n_inc) or n_inc)
 
         if n_fetched_p > 0:
-            # Custom HTML/CSS PRISMA flowchart — NEJM-style.
-            # Plotly Sankey labels are notoriously small + ugly; this
-            # gives us full typography control. Big legible numbers,
-            # clear inclusion vs exclusion path, sleek navy palette.
+            # PRISMA flowchart rendered as inline SVG — NEJM publication
+            # quality. Pixel-perfect arrow placement (CSS connectors had
+            # alignment issues at certain breakpoints + inconsistent
+            # unicode arrow rendering across browsers).
+            #
+            # Layout: 5 main "kept-flow" stages on the left in a
+            # vertical column, 3 "excluded" boxes branching right at
+            # stages 2-4. Connectors:
+            #   - Vertical (kept→kept): thin slate line with
+            #     arrowhead at the bottom
+            #   - Horizontal (kept→excluded): from the right edge of
+            #     the kept stage to the left edge of the excluded box
             n_after_hard = max(0, n_dedup_p - n_hard_p)
             n_after_indic = max(0, n_dedup_p - n_hard_p - n_indic_p)
 
-            st.markdown("""
-            <style>
-                .prisma-wrap {
-                    background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
-                    border: 1px solid #e2e8f0; border-radius: 10px;
-                    padding: 14px 16px 10px 16px; margin: 4px 0 12px 0;
-                    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03),
-                                0 2px 6px rgba(15, 23, 42, 0.025);
-                }
-                .prisma-row {
-                    display: grid;
-                    grid-template-columns: minmax(0, 1.1fr) 18px minmax(0, 1fr);
-                    align-items: center; gap: 6px;
-                    margin-bottom: 4px;
-                }
-                .prisma-stage, .prisma-excl {
-                    border-radius: 6px; padding: 7px 12px;
-                    font-family: Arial, Helvetica, sans-serif;
-                    line-height: 1.2;
-                    display: flex; align-items: center;
-                    justify-content: space-between; gap: 12px;
-                }
-                .prisma-stage {
-                    background: #1e3a8a; color: #ffffff;
-                    border: 1px solid #1e3a8a;
-                }
-                .prisma-stage.endpoint {
-                    background: #0b3d91; border-color: #0b3d91;
-                    box-shadow: 0 1px 3px rgba(11, 61, 145, 0.3);
-                }
-                .prisma-excl {
-                    background: #f1f5f9; color: #475569;
-                    border: 1px solid #e2e8f0;
-                }
-                .prisma-num {
-                    font-size: 16px; font-weight: 700;
-                    font-variant-numeric: tabular-nums;
-                    letter-spacing: -0.01em; line-height: 1;
-                    flex: 0 0 auto;
-                }
-                .prisma-lbl {
-                    font-size: 10px; text-transform: uppercase;
-                    letter-spacing: 0.5px; font-weight: 600;
-                    line-height: 1.2;
-                    text-align: right; flex: 1 1 auto;
-                    min-width: 0;
-                }
-                /* Explicit color rules per state — avoids inherited
-                   black showing through on navy bg in some browsers. */
-                .prisma-stage .prisma-num,
-                .prisma-stage .prisma-lbl,
-                .prisma-stage * { color: #ffffff !important; }
-                .prisma-excl .prisma-num,
-                .prisma-excl .prisma-lbl,
-                .prisma-excl * { color: #334155 !important; }
-                .prisma-stage.endpoint .prisma-num { font-size: 18px; }
-                .prisma-arrow {
-                    color: #cbd5e1; font-size: 14px; text-align: center;
-                    line-height: 1; user-select: none;
-                }
-                .prisma-arrow-down {
-                    grid-column: 1 / 2; text-align: center;
-                    color: #cbd5e1; font-size: 11px; font-weight: 700;
-                    margin: -1px 0; letter-spacing: 1px;
-                    line-height: 1;
-                }
-            </style>
-            """, unsafe_allow_html=True)
+            # ---- Layout constants (in SVG px) ----
+            # Total viewBox: 760 × 410. Streamlit's content area scales
+            # the SVG via width="100%"; preserveAspectRatio keeps the
+            # geometry constant.
+            VB_W, VB_H = 760, 410
+            STAGE_X, STAGE_W, STAGE_H = 30, 360, 56
+            EXCL_X, EXCL_W, EXCL_H = 480, 250, 44
+            ROW_GAP = 70                      # center-to-center
+            STAGE_CX = STAGE_X + STAGE_W // 2
+            EXCL_CY_OFFSET = (STAGE_H - EXCL_H) // 2  # vertical center
 
-            # Compact PRISMA flowchart. Each row = one stage of the
-            # main inclusion path on the left, optional exclusion on
-            # the right. Number + label inline horizontally for density.
-            _rows_html = f"""
-            <div class="prisma-wrap">
-              <div class="prisma-row">
-                <div class="prisma-stage">
-                  <span class="prisma-num">{n_fetched_p:,}</span>
-                  <span class="prisma-lbl">Records identified · CT.gov v2 API</span>
-                </div>
-                <div></div>
-                <div></div>
-              </div>
-              <div class="prisma-arrow-down">↓</div>
-              <div class="prisma-row">
-                <div class="prisma-stage">
-                  <span class="prisma-num">{n_dedup_p:,}</span>
-                  <span class="prisma-lbl">After de-duplication</span>
-                </div>
-                <div class="prisma-arrow">→</div>
-                <div class="prisma-excl">
-                  <span class="prisma-num">{n_dups_p:,}</span>
-                  <span class="prisma-lbl">Duplicates removed</span>
-                </div>
-              </div>
-              <div class="prisma-arrow-down">↓</div>
-              <div class="prisma-row">
-                <div class="prisma-stage">
-                  <span class="prisma-num">{n_after_hard:,}</span>
-                  <span class="prisma-lbl">After hard-exclusion list</span>
-                </div>
-                <div class="prisma-arrow">→</div>
-                <div class="prisma-excl">
-                  <span class="prisma-num">{n_hard_p:,}</span>
-                  <span class="prisma-lbl">Hard-excluded · curated</span>
-                </div>
-              </div>
-              <div class="prisma-arrow-down">↓</div>
-              <div class="prisma-row">
-                <div class="prisma-stage">
-                  <span class="prisma-num">{n_after_indic:,}</span>
-                  <span class="prisma-lbl">After indication filter</span>
-                </div>
-                <div class="prisma-arrow">→</div>
-                <div class="prisma-excl">
-                  <span class="prisma-num">{n_indic_p:,}</span>
-                  <span class="prisma-lbl">Autoimmune-only excluded</span>
-                </div>
-              </div>
-              <div class="prisma-arrow-down">↓</div>
-              <div class="prisma-row">
-                <div class="prisma-stage endpoint">
-                  <span class="prisma-num">{n_inc_p:,}</span>
-                  <span class="prisma-lbl">Included in analysis</span>
-                </div>
-                <div></div>
-                <div></div>
-              </div>
-            </div>
-            """
-            st.markdown(_rows_html, unsafe_allow_html=True)
+            # Stage data — y_top of each stage box
+            stages = [
+                # (label, num, y, is_endpoint)
+                ("RECORDS IDENTIFIED · CLINICALTRIALS.GOV v2 API",
+                 n_fetched_p, 20, False),
+                ("AFTER DE-DUPLICATION", n_dedup_p, 20 + ROW_GAP, False),
+                ("AFTER HARD-EXCLUSION LIST", n_after_hard, 20 + 2 * ROW_GAP, False),
+                ("AFTER INDICATION FILTER", n_after_indic, 20 + 3 * ROW_GAP, False),
+                ("INCLUDED IN ANALYSIS", n_inc_p, 20 + 4 * ROW_GAP, True),
+            ]
+            # Exclusions — index of the stage they branch FROM (the
+            # "after-X" stage) + label + count
+            exclusions = [
+                # (from_stage_idx, label, num)
+                (1, "DUPLICATES REMOVED", n_dups_p),
+                (2, "HARD-EXCLUDED · CURATED OFF-SCOPE", n_hard_p),
+                (3, "INDICATION-MISMATCH · AUTOIMMUNE-ONLY", n_indic_p),
+            ]
 
-            # Build a hidden Plotly Sankey for the PNG export toolbar
-            # (publication submissions sometimes require a Sankey-style
-            # figure file). Same data, same colors; not rendered inline.
-            # Skipped for now — the HTML chart prints cleanly via the
-            # browser's print-to-PDF for manuscript figures.
+            # ---- SVG generation ----
+            svg_parts: list[str] = [
+                f'<svg viewBox="0 0 {VB_W} {VB_H}" '
+                f'width="100%" preserveAspectRatio="xMidYMid meet" '
+                f'style="display:block; max-width:760px; margin:8px auto;" '
+                f'xmlns="http://www.w3.org/2000/svg" '
+                f'font-family="Arial, Helvetica, sans-serif">',
+                # Defs: arrow marker — single small triangle, slate-300
+                '<defs>'
+                '<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" '
+                'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+                '<path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>'
+                '</marker>'
+                '</defs>',
+            ]
+
+            # Vertical connectors between consecutive stages (4 total)
+            for i in range(len(stages) - 1):
+                _y_from = stages[i][2] + STAGE_H
+                _y_to = stages[i + 1][2] - 2  # leave 2px so arrow tip is visible
+                svg_parts.append(
+                    f'<line x1="{STAGE_CX}" y1="{_y_from}" '
+                    f'x2="{STAGE_CX}" y2="{_y_to}" '
+                    f'stroke="#94a3b8" stroke-width="1.5" '
+                    f'marker-end="url(#arr)"/>'
+                )
+
+            # Horizontal connectors from kept stage → exclusion box
+            for from_idx, _label, _num in exclusions:
+                _y_mid = stages[from_idx][2] + STAGE_H // 2
+                _x_from = STAGE_X + STAGE_W
+                _x_to = EXCL_X - 2
+                svg_parts.append(
+                    f'<line x1="{_x_from}" y1="{_y_mid}" '
+                    f'x2="{_x_to}" y2="{_y_mid}" '
+                    f'stroke="#94a3b8" stroke-width="1.5" '
+                    f'marker-end="url(#arr)"/>'
+                )
+
+            # Stage boxes (kept-flow, navy fill, white text)
+            for label, num, y, is_endpoint in stages:
+                fill = "#0b3d91" if is_endpoint else "#1e3a8a"
+                num_size = 22 if is_endpoint else 20
+                svg_parts.append(
+                    f'<g>'
+                    f'<rect x="{STAGE_X}" y="{y}" '
+                    f'width="{STAGE_W}" height="{STAGE_H}" rx="8" '
+                    f'fill="{fill}"/>'
+                    # Number — left-aligned inside the box
+                    f'<text x="{STAGE_X + 18}" y="{y + STAGE_H // 2 + 7}" '
+                    f'fill="#ffffff" font-size="{num_size}" '
+                    f'font-weight="700" '
+                    f'style="font-variant-numeric: tabular-nums; '
+                    f'letter-spacing: -0.02em;">'
+                    f'{num:,}</text>'
+                    # Label — right-aligned, small caps tracked
+                    f'<text x="{STAGE_X + STAGE_W - 18}" '
+                    f'y="{y + STAGE_H // 2 + 4}" '
+                    f'fill="#ffffff" font-size="10.5" '
+                    f'font-weight="600" text-anchor="end" '
+                    f'style="letter-spacing: 0.06em;">'
+                    f'{label}</text>'
+                    f'</g>'
+                )
+
+            # Exclusion boxes (slate fill, dark text)
+            for from_idx, label, num in exclusions:
+                _y = stages[from_idx][2] + EXCL_CY_OFFSET
+                svg_parts.append(
+                    f'<g>'
+                    f'<rect x="{EXCL_X}" y="{_y}" '
+                    f'width="{EXCL_W}" height="{EXCL_H}" rx="6" '
+                    f'fill="#f1f5f9" stroke="#e2e8f0" stroke-width="1"/>'
+                    f'<text x="{EXCL_X + 14}" y="{_y + EXCL_H // 2 + 6}" '
+                    f'fill="#1f2937" font-size="17" font-weight="700" '
+                    f'style="font-variant-numeric: tabular-nums;">'
+                    f'{num:,}</text>'
+                    f'<text x="{EXCL_X + EXCL_W - 14}" '
+                    f'y="{_y + EXCL_H // 2 + 4}" '
+                    f'fill="#64748b" font-size="9.5" font-weight="600" '
+                    f'text-anchor="end" style="letter-spacing: 0.06em;">'
+                    f'{label}</text>'
+                    f'</g>'
+                )
+
+            svg_parts.append("</svg>")
+            svg_html = (
+                '<div style="background:#ffffff; border:1px solid #e5e7eb; '
+                'border-radius:10px; padding:18px 12px; margin:6px 0 14px 0;">'
+                + "".join(svg_parts)
+                + '</div>'
+            )
+            st.markdown(svg_html, unsafe_allow_html=True)
 
             # Caption with the PRISMA-style narrative
             st.markdown(

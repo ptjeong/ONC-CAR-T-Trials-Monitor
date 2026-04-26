@@ -27,7 +27,7 @@ tests/
 
 - **Version:** v1
 - **N:** 200 trials
-- **sha256:** `4071765124017d9c278e229c005050c7f20ad2f8ead7254fe7da47b2f064d254`
+- **sha256:** `61473bd8600c6c2f0b6f1c6827eec6b4a29b699e0d795f0562cbe6470a4fa559`
 - **Source snapshot:** 2026-04-24
 - **Stratification:** 50% Heme-onc / 50% Solid-onc; ≥5 trials per major DiseaseCategory
 - **Seed:** 20260426 (reproducible — re-running the generator with the

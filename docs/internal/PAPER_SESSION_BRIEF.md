@@ -41,7 +41,7 @@ Now self-bootstrapping: `auto_label_flags.yml` workflow ensures missing labels a
 - Within each branch, ≥ 5 trials per major DiseaseCategory (defined as ≥ 10 trials in source)
 - Trials with insufficient text for human classification (no Title / Summary / Conditions / Interventions ≥ 50 chars) excluded prior to sampling
 - Locked sample manifest committed at `validation_study/sample_v1.json`
-- **sha256 = `4071765124017d9c278e229c005050c7f20ad2f8ead7254fe7da47b2f064d254`** (record this in the methods section as the pre-registration hash; equivalent to a CT.gov registration before enrollment)
+- **sha256 = `61473bd8600c6c2f0b6f1c6827eec6b4a29b699e0d795f0562cbe6470a4fa559`** (record this in the methods section as the pre-registration hash; equivalent to a CT.gov registration before enrollment)
 
 **Stratification breakdown (audit trail):**
 | Branch | DiseaseCategory | N |
@@ -107,7 +107,7 @@ Now self-bootstrapping: `auto_label_flags.yml` workflow ensures missing labels a
 | Methods §1 | "2 100+ trials classified across six axes" | Live snapshot count (auto-derived) |
 | Methods §2 | "Locked benchmark of 25 hand-curated trials covering pivotal approvals + 13 solid-tumour additions" | `tests/benchmark_set.csv` |
 | Methods §3 | "Three-layer validation infrastructure" | `docs/methods.md` (already written) |
-| Methods §4 | "Pre-registered random sample of 200 trials, stratified by Branch and DiseaseCategory, sha256 `40717651…`" | `validation_study/sample_v1.json` |
+| Methods §4 | "Pre-registered random sample of 200 trials, stratified by Branch and DiseaseCategory, sha256 `61473bd8…`" | `validation_study/sample_v1.json` |
 | Methods §5 | "Two raters independently classified each trial blinded to pipeline output and each other's labels using a custom Streamlit interface" | This brief + `validation_study/app.py` source |
 | Methods §6 | "Cohen's κ per axis with 95% bootstrap CI from 10 000 resamples" | `scripts/compute_validation_kappa.py` (pending) |
 | Methods §7 | "Disagreements adjudicated by joint review; adjudicated labels = gold-standard benchmark" | adjudication-mode output (pending) |

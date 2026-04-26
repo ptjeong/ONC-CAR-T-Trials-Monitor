@@ -54,6 +54,123 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = REPO_ROOT / "validation_study"
 
 
+_CT_GOV_BASE = "https://clinicaltrials.gov/api/v2/studies"
+
+
+def _fetch_ctgov_detail(nct_ids: list[str]) -> dict[str, dict]:
+    """Fetch long-form fields from CT.gov v2 API for each NCT in the sample.
+
+    Returns {nct_id: {DetailedDescription, EligibilityCriteria,
+                       InterventionDescription, ArmGroupDescriptions,
+                       CollaboratorNames, StudyType, Allocation,
+                       InterventionModel, Masking, PrimaryCompletionDate,
+                       CompletionDate, ResponsiblePartyType, ConditionsDetail}}
+
+    Batches 100 NCTs per request via filter.ids. On any per-batch failure
+    we continue (return what we have); on per-trial parse failure that
+    trial silently gets an empty enrichment dict.
+
+    Polite 0.25s pause between batches — same as backfill_site_geo.
+    """
+    import time as _time
+    import requests as _req
+
+    out: dict[str, dict] = {}
+    BATCH = 100
+    for i in range(0, len(nct_ids), BATCH):
+        chunk = nct_ids[i: i + BATCH]
+        params = {
+            "filter.ids": ",".join(chunk),
+            "pageSize": BATCH,
+            "format": "json",
+        }
+        try:
+            resp = _req.get(_CT_GOV_BASE, params=params, timeout=60)
+            if resp.status_code != 200:
+                print(f"  WARN batch {i // BATCH + 1}: HTTP "
+                      f"{resp.status_code}; skipping {len(chunk)} trials")
+                continue
+            for s in resp.json().get("studies", []):
+                ps = s.get("protocolSection", {})
+                ident = ps.get("identificationModule", {})
+                nct = ident.get("nctId")
+                if not nct:
+                    continue
+                desc = ps.get("descriptionModule", {})
+                elig = ps.get("eligibilityModule", {})
+                arms = ps.get("armsInterventionsModule", {})
+                spons = ps.get("sponsorCollaboratorsModule", {})
+                design = ps.get("designModule", {})
+                status = ps.get("statusModule", {})
+                conds = ps.get("conditionsModule", {})
+
+                # Pull intervention descriptions per arm
+                interventions = arms.get("interventions") or []
+                int_descs = []
+                for iv in interventions:
+                    name = iv.get("name") or ""
+                    desc_text = iv.get("description") or ""
+                    if desc_text:
+                        int_descs.append(f"{name}: {desc_text}".strip())
+                    elif name:
+                        int_descs.append(name)
+
+                arm_groups = arms.get("armGroups") or []
+                arm_descs = []
+                for ag in arm_groups:
+                    label = ag.get("label") or ""
+                    arm_type = ag.get("type") or ""
+                    desc_text = ag.get("description") or ""
+                    bits = " · ".join(b for b in [
+                        label, arm_type, desc_text
+                    ] if b)
+                    if bits:
+                        arm_descs.append(bits)
+
+                collaborators = [
+                    c.get("name", "") for c in (spons.get("collaborators") or [])
+                ]
+                resp_party = spons.get("responsibleParty") or {}
+
+                out[nct] = {
+                    "DetailedDescription": desc.get("detailedDescription") or "",
+                    "EligibilityCriteria": elig.get("eligibilityCriteria") or "",
+                    "InterventionDescription": "\n\n".join(int_descs),
+                    "ArmGroupDescriptions": "\n\n".join(arm_descs),
+                    "CollaboratorNames": "; ".join(collaborators),
+                    "ResponsiblePartyType": resp_party.get("type") or "",
+                    "ResponsiblePartyName": resp_party.get(
+                        "investigatorFullName"
+                    ) or resp_party.get("oldNameTitle") or "",
+                    "StudyType": design.get("studyType") or "",
+                    "Allocation": (
+                        design.get("designInfo", {}).get("allocation") or ""
+                    ),
+                    "InterventionModel": (
+                        design.get("designInfo", {}).get("interventionModel")
+                        or ""
+                    ),
+                    "Masking": (
+                        design.get("designInfo", {})
+                        .get("maskingInfo", {})
+                        .get("masking") or ""
+                    ),
+                    "PrimaryCompletionDate": (
+                        status.get("primaryCompletionDateStruct", {})
+                        .get("date") or ""
+                    ),
+                    "CompletionDate": (
+                        status.get("completionDateStruct", {}).get("date") or ""
+                    ),
+                    "ConditionKeywords": "; ".join(conds.get("keywords") or []),
+                }
+        except Exception as _e:
+            print(f"  WARN batch {i // BATCH + 1} failed: {_e}")
+            continue
+        _time.sleep(0.25)
+    return out
+
+
 def _stratified_sample(
     df: pd.DataFrame,
     n_total: int,
@@ -136,13 +253,31 @@ def main() -> int:
     sample_df = _stratified_sample(df, args.n, args.seed)
     print(f"  drew {len(sample_df)} trials.")
 
-    # Build the manifest with the minimum trial info raters need
+    # ---- Live CT.gov enrichment ----
+    # The snapshot's trials.csv has the high-frequency fields (Title,
+    # BriefSummary, Conditions, Interventions, Phase, etc.) but is
+    # deliberately compact. Raters benefit from the longer-form CT.gov
+    # fields (DetailedDescription, EligibilityCriteria, InterventionDescription,
+    # CollaboratorNames) that aren't worth carrying in every snapshot
+    # but ARE worth baking into the locked validation sample for
+    # one-time per-trial enrichment.
+    #
+    # We fetch from CT.gov ONCE during sample generation, then store
+    # the enriched fields in the manifest. This preserves reproducibility
+    # (sample sha256 captures what raters see) without bloating the
+    # daily snapshot.
+    print(f"Enriching {len(sample_df)} sample trials with live CT.gov data …")
+    enriched = _fetch_ctgov_detail(sample_df["NCTId"].tolist())
+    print(f"  enriched {len(enriched)}/{len(sample_df)} trials.")
+
+    # Build the manifest with everything raters need to make a confident call
     # — no pipeline labels (those are deliberately hidden during rating)
     fields_for_raters = [
         "NCTId", "BriefTitle", "BriefSummary",
         "Conditions", "Interventions",
-        "Phase", "OverallStatus", "LeadSponsor",
+        "Phase", "OverallStatus", "LeadSponsor", "LeadSponsorClass",
         "EnrollmentCount", "StartDate", "TrialDesign",
+        "PrimaryEndpoints", "Countries",
     ]
     manifest_trials = []
     for _, row in sample_df.iterrows():
@@ -155,6 +290,8 @@ def main() -> int:
                 rec[f] = v.isoformat()
             else:
                 rec[f] = str(v) if not isinstance(v, (int, float, bool)) else v
+        # Live CT.gov enrichment — long-form fields
+        rec.update(enriched.get(row["NCTId"], {}))
         # Pipeline labels — kept in the manifest under a `_pipeline` key
         # so the analysis script can compute κ vs pipeline as a secondary
         # statistic. The rater UI MUST NOT display these.

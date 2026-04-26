@@ -326,51 +326,192 @@ def _next_unrated_trial(state: dict, sample: dict) -> dict | None:
     return None
 
 
+def _scrollbox(label: str, content: str, *, max_height: int = 240,
+                accent: str = "#cbd5e1") -> None:
+    """Reusable scrollable text panel — used for long-form CT.gov fields."""
+    if not content:
+        return
+    st.markdown(f"**{label}**")
+    st.markdown(
+        f"<div style='max-height:{max_height}px; overflow-y:auto; "
+        f"padding:8px 12px; background:#f8fafc; "
+        f"border-left:3px solid {accent}; border-radius:4px; "
+        f"font-size:0.92em; white-space:pre-wrap;'>"
+        f"{_html_escape(content)}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _html_escape(s: str) -> str:
+    """Minimal HTML escape so trial text doesn't break the markdown div."""
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 def _format_trial_for_rater(trial: dict) -> None:
     """Render the trial info — ONLY the raw evidence, no pipeline labels.
 
-    Layout is optimized for one-glance scannability:
-      - Title at the top
-      - Metadata chip row (NCT, phase, status, sponsor, design)
-      - Conditions + Interventions side-by-side (the two highest-signal
-        fields for classification)
-      - Brief summary in a scrollable area (NOT collapsed — collapsing
-        added a click that ~5 sec of context-switching per trial)
+    Layout is optimized for one-glance scannability with progressive
+    disclosure for long-form fields:
+
+      ABOVE THE FOLD (always visible — sufficient for ~70% of trials):
+        - Title
+        - Metadata chip row (NCT link · Phase · Status · Sponsor + class · Design)
+        - Conditions + Interventions side-by-side (highest-signal)
+        - Brief summary (scrollable, max-height 240px)
+
+      BELOW THE FOLD (in expanders — open when context insufficient):
+        - Detailed description (often 5-10× the BriefSummary)
+        - Eligibility criteria (disease-defining inclusion/exclusion)
+        - Intervention + arm group details (antigen + product type signals)
+        - Primary endpoints + study design (interventional/observational, etc.)
+        - Sponsor + collaborators (SponsorType signal)
+        - Direct CT.gov link (full record)
     """
     nct = trial["NCTId"]
     title = trial.get("BriefTitle") or "(no title)"
     st.markdown(f"#### {title}")
+
+    # Build the metadata chip row — adds LeadSponsorClass to give the
+    # rater an immediate hint for SponsorType (INDUSTRY/OTHER/NIH/etc.)
+    sponsor_str = trial.get("LeadSponsor") or "—"
+    if trial.get("LeadSponsorClass"):
+        sponsor_str = f"{sponsor_str} ({trial['LeadSponsorClass']})"
     st.caption(
         f"[{nct}](https://clinicaltrials.gov/study/{nct}) · "
         f"**Phase:** {trial.get('Phase') or '—'} · "
         f"**Status:** {trial.get('OverallStatus') or '—'} · "
-        f"**Sponsor:** {trial.get('LeadSponsor') or '—'} · "
-        f"**Design:** {trial.get('TrialDesign') or '—'}"
+        f"**Sponsor:** {sponsor_str} · "
+        f"**Design:** {trial.get('TrialDesign') or '—'} · "
+        f"**Enrollment:** {trial.get('EnrollmentCount') or '—'} · "
+        f"**Started:** {(trial.get('StartDate') or '—')[:10]}"
     )
+    if trial.get("Countries"):
+        st.caption(f"**Countries:** {trial['Countries']}")
 
     # Conditions + Interventions side-by-side (highest-signal fields)
     _ec1, _ec2 = st.columns(2)
     with _ec1:
         if trial.get("Conditions"):
             st.markdown(f"**Conditions**")
-            st.markdown(f"<small>{trial['Conditions']}</small>",
+            st.markdown(f"<small>{_html_escape(trial['Conditions'])}</small>",
                         unsafe_allow_html=True)
+        if trial.get("ConditionKeywords"):
+            st.caption(f"_Keywords:_ {trial['ConditionKeywords']}")
     with _ec2:
         if trial.get("Interventions"):
             st.markdown(f"**Interventions**")
-            st.markdown(f"<small>{trial['Interventions']}</small>",
-                        unsafe_allow_html=True)
+            st.markdown(
+                f"<small>{_html_escape(trial['Interventions'])}</small>",
+                unsafe_allow_html=True,
+            )
 
     # Brief summary always visible (no expander click)
-    if trial.get("BriefSummary"):
-        st.markdown(f"**Brief summary**")
-        st.markdown(
-            f"<div style='max-height:240px; overflow-y:auto; "
-            f"padding:8px 12px; background:#f8fafc; "
-            f"border-left:3px solid #cbd5e1; border-radius:4px; "
-            f"font-size:0.92em;'>{trial['BriefSummary']}</div>",
-            unsafe_allow_html=True,
-        )
+    _scrollbox("Brief summary", trial.get("BriefSummary") or "")
+
+    # ---- Below-the-fold: expanders for deep context ----
+    # These open progressively. Most trials are classifiable from above-fold
+    # alone; expanders unlock fast for the hard ones.
+
+    # The longest-form fields are gated behind expanders so the page is
+    # scannable on first render. Single column (full-width) inside each
+    # expander so the text isn't squeezed.
+
+    if trial.get("DetailedDescription"):
+        with st.expander(
+            f"📋 Detailed description "
+            f"({len(trial['DetailedDescription'])} chars)",
+            expanded=False,
+        ):
+            _scrollbox(
+                "", trial["DetailedDescription"],
+                max_height=400, accent="#3b82f6",
+            )
+
+    if trial.get("InterventionDescription"):
+        with st.expander(
+            "💉 Intervention details (antigen / construct / route)",
+            expanded=False,
+        ):
+            _scrollbox(
+                "", trial["InterventionDescription"],
+                max_height=300, accent="#10b981",
+            )
+            if trial.get("ArmGroupDescriptions"):
+                _scrollbox(
+                    "Arm groups", trial["ArmGroupDescriptions"],
+                    max_height=200, accent="#10b981",
+                )
+
+    if trial.get("EligibilityCriteria"):
+        with st.expander(
+            f"👤 Eligibility criteria "
+            f"({len(trial['EligibilityCriteria'])} chars — often disease-defining)",
+            expanded=False,
+        ):
+            _scrollbox(
+                "", trial["EligibilityCriteria"],
+                max_height=400, accent="#f59e0b",
+            )
+
+    if trial.get("PrimaryEndpoints"):
+        with st.expander(
+            "🎯 Primary endpoints + study design", expanded=False,
+        ):
+            _scrollbox(
+                "", trial["PrimaryEndpoints"],
+                max_height=240, accent="#8b5cf6",
+            )
+            design_bits = []
+            if trial.get("StudyType"):
+                design_bits.append(f"**Study type:** {trial['StudyType']}")
+            if trial.get("Allocation"):
+                design_bits.append(f"**Allocation:** {trial['Allocation']}")
+            if trial.get("InterventionModel"):
+                design_bits.append(
+                    f"**Intervention model:** {trial['InterventionModel']}"
+                )
+            if trial.get("Masking"):
+                design_bits.append(f"**Masking:** {trial['Masking']}")
+            if design_bits:
+                st.markdown(" · ".join(design_bits))
+
+    if trial.get("CollaboratorNames") or trial.get("ResponsiblePartyType"):
+        with st.expander(
+            "🏢 Sponsor + collaborators (SponsorType signal)",
+            expanded=False,
+        ):
+            st.markdown(
+                f"**Lead sponsor:** {trial.get('LeadSponsor') or '—'}"
+            )
+            if trial.get("LeadSponsorClass"):
+                st.markdown(
+                    f"**LeadSponsorClass (CT.gov):** "
+                    f"`{trial['LeadSponsorClass']}`"
+                )
+            if trial.get("CollaboratorNames"):
+                st.markdown(
+                    f"**Collaborators:** {trial['CollaboratorNames']}"
+                )
+            if trial.get("ResponsiblePartyType"):
+                st.markdown(
+                    f"**Responsible party:** "
+                    f"{trial.get('ResponsiblePartyName') or '—'} "
+                    f"({trial['ResponsiblePartyType']})"
+                )
+
+    # Always-visible direct CT.gov link at the bottom — for raters who want
+    # to verify against the live record (or check anything we didn't cache).
+    st.caption(
+        f"📎 **Anything else you need?** "
+        f"[Open the full record on ClinicalTrials.gov ↗]"
+        f"(https://clinicaltrials.gov/study/{nct}) "
+        f"(opens in a new tab)."
+    )
 
 
 def _render_axis_input(axis: str, sample: dict, key: str) -> str:

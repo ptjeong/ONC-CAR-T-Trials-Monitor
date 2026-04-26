@@ -7,6 +7,29 @@ of minor UI / figure tweaks.
 
 ## [Unreleased]
 
+### Changed
+
+- **Flag UX from reserved column to inline 🚩 prefix.** The dedicated
+  `_Flag` column was reserving ~5% of every trial table's width for a
+  cell that was empty 99% of the time. Now flagged trials get a 🚩
+  prepended to their `BriefTitle` (no width reserved), and the per-trial
+  drilldown card opens with a status banner — `st.error` for
+  consensus-reached, `st.warning` for open flags — that lists the
+  proposed corrections inline (axis | current | proposed) with direct
+  GitHub-issue links.
+- **Data tab gets a "🚩 Flagged only (N)" filter checkbox.** Live count;
+  disabled when N=0. Lets the moderator subset to just the trials with
+  open flags without scrolling the table.
+- New cached helper `_load_flag_issue_details(issue_url)` (5-min TTL)
+  fetches each flag issue's body and parses out the `BEGIN_FLAG_DATA`
+  YAML blocks so the drilldown banner shows the actual proposed
+  corrections, not just a count. Falls back to a regex scrape when
+  pyyaml isn't available.
+- `requirements.txt`: pin `pyyaml>=6.0` for robust flag-issue parsing.
+- 6 new tests in `tests/test_flag_inline_prefix.py` covering the new
+  prefix behaviour (idempotent re-prefix, zero-count edge case, empty
+  flags early-return).
+
 ## [0.5.0] — 2026-04-25 — Click-to-drill UX + community quality-improvement loop
 
 Headline: every trial table in the app is now click-to-drill, a new

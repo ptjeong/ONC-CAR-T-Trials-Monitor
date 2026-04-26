@@ -7,6 +7,10 @@ pillow==12.2.0
 requests==2.33.1
 anthropic>=0.40.0
 pyarrow==24.0.0
+# Flag-issue body parsing (drilldown card fetches the BEGIN_FLAG_DATA YAML
+# block from each open issue to render the proposed correction inline).
+# Falls back to regex if pyyaml is unavailable, but proper parsing is robust.
+pyyaml>=6.0
 # Independent-LLM cross-validation harness (scripts/validate_independent_llm.py).
 # Required by the validation loop's non-Anthropic providers — without these,
 # a fresh checkout fails with ModuleNotFoundError when the script picks up

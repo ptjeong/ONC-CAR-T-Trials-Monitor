@@ -346,6 +346,16 @@ def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
     _sel_nct = record.get("NCTId", "")
     _title = record.get("BriefTitle", "")
     with st.expander(f"**{_sel_nct}** — {_title}", expanded=True):
+        # Flag banner first — surfaces consensus-reached / open-flag state
+        # before the user reads the (possibly-incorrect) classification below.
+        # Wrapped in try/except NameError to keep the drilldown rendering
+        # even if the flag subsystem fails to load (same defensive pattern as
+        # _render_suggest_correction at the bottom of this card).
+        try:
+            _render_flag_banner(record)
+        except NameError:
+            pass
+
         d1, d2 = st.columns([1, 1])
         with d1:
             _start_year = record.get("StartYear")
@@ -663,56 +673,189 @@ def _load_active_flags() -> dict:
         return {}
 
 
-def _flag_badge(flag_entry: dict | None) -> str:
-    """Compact badge string for a trial table cell. Empty when no flags."""
-    if not flag_entry:
-        return ""
-    n = flag_entry.get("count", 0)
-    if n == 0:
-        return ""
-    if flag_entry.get("consensus"):
-        return f"⚑ consensus ({n})"
-    return f"⚑ {n}"
-
-
-_FLAG_COL_HELP = (
-    "⚑ N = N open classification-correction issues on GitHub. "
-    "⚑ consensus (N) = ≥3 reviewers agree on a correction; "
-    "awaiting moderator approval. Click row → Suggest correction."
-)
+_FLAG_EMOJI = "🚩"
 
 
 def _attach_flag_column(
     df: "pd.DataFrame", show_cols: list[str]
 ) -> "tuple[pd.DataFrame, list[str]]":
-    """Inject `_Flag` column populated from open GitHub flag issues.
+    """Inline-flag indicator: prepend 🚩 to BriefTitle for flagged trials.
 
-    Idempotent: if `_Flag` already in df / show_cols, recomputes badge values
-    but does not duplicate the column placement. Returns (df_copy, new_show_cols)
-    so the caller can drop straight into st.dataframe — pair with
-    `column_config={**_trial_detail_cols(), "_Flag": _flag_column_config()}`
-    or pass `_Flag` via `_trial_detail_cols`'s extra dict.
+    Replaces the earlier `_Flag` column approach (which reserved a fixed
+    width even when no trials were flagged — wasted screen real estate
+    in the common case). Now the indicator is invisible until a flag
+    exists, and clicking the row opens the drilldown which renders
+    `_render_flag_banner` with full proposal details + GH link.
 
-    The badge is purely cosmetic: it doesn't filter or sort; reviewers click
-    through to GitHub for the actual flag thread.
+    Returns (df_copy, show_cols) — show_cols is unchanged. The function
+    name is kept stable so the call sites in every trial table don't
+    need to be touched again.
+
+    Idempotent: re-running on an already-prefixed BriefTitle is a no-op.
     """
     flags = _load_active_flags()
     out = df.copy()
-    if "NCTId" in out.columns:
-        out["_Flag"] = out["NCTId"].map(lambda _n: _flag_badge(flags.get(_n)))
-    else:
-        out["_Flag"] = ""
-    new_cols = ["_Flag"] + [c for c in show_cols if c != "_Flag"]
-    return out, new_cols
+    if not flags or "NCTId" not in out.columns or "BriefTitle" not in out.columns:
+        return out, show_cols
+
+    def _prefix(row):
+        nct = row.get("NCTId", "")
+        title = str(row.get("BriefTitle", ""))
+        if title.startswith(f"{_FLAG_EMOJI} "):
+            return title  # already prefixed (idempotent)
+        entry = flags.get(nct)
+        if entry and entry.get("count", 0) > 0:
+            return f"{_FLAG_EMOJI} {title}"
+        return title
+
+    out["BriefTitle"] = out.apply(_prefix, axis=1)
+    return out, show_cols
 
 
 def _flag_column_config() -> dict:
-    """Streamlit column_config entry for the `_Flag` column."""
-    return {
-        "_Flag": st.column_config.TextColumn(
-            "Flag", width="small", help=_FLAG_COL_HELP,
-        ),
-    }
+    """Compatibility shim — no column added anymore, but call sites still
+    pass this into `column_config`. Returns an empty dict so the
+    spread-merge in caller code (`{**_trial_detail_cols(), **_flag_column_config()}`)
+    is a no-op."""
+    return {}
+
+
+@st.cache_data(ttl=60 * 5, show_spinner=False)
+def _load_flag_issue_details(issue_url: str) -> dict:
+    """Fetch a single flag issue's body + parse out proposal blocks.
+
+    Called from the drilldown banner so we can show the actual proposed
+    corrections inline (not just a count). Cached 5 minutes to match
+    `_load_active_flags`. Returns {} on any failure so the banner
+    silently degrades to a plain GitHub link rather than crashing.
+    """
+    if not issue_url:
+        return {}
+    import re as _re_det
+    m = _re_det.match(
+        r"https://github\.com/([^/]+/[^/]+)/issues/(\d+)", issue_url
+    )
+    if not m:
+        return {}
+    api_url = f"https://api.github.com/repos/{m.group(1)}/issues/{m.group(2)}"
+    try:
+        import requests
+        r = requests.get(api_url, timeout=8)
+        if r.status_code != 200:
+            return {}
+        issue = r.json()
+        body = issue.get("body", "") or ""
+        # Pull each BEGIN_FLAG_DATA block; tolerant of malformed YAML.
+        proposals: list[dict] = []
+        block_re = _re_det.compile(
+            r"<!--\s*BEGIN_FLAG_DATA\s*\n(.*?)END_FLAG_DATA\s*-->",
+            _re_det.DOTALL,
+        )
+        try:
+            import yaml as _yaml_det
+            for blk in block_re.finditer(body):
+                try:
+                    data = _yaml_det.safe_load(blk.group(1))
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                for ax in (data.get("flagged_axes") or []):
+                    if isinstance(ax, dict):
+                        proposals.append(ax)
+        except ImportError:
+            # pyyaml not installed — fall back to a regex scrape so the
+            # banner still shows the proposed values, just less robustly.
+            pair_re = _re_det.compile(
+                r"axis:\s*(\w+).*?pipeline_label:\s*\"?([^\"\n]*)\"?.*?"
+                r"proposed_correction:\s*\"?([^\"\n]*)\"?",
+                _re_det.DOTALL,
+            )
+            for blk in block_re.finditer(body):
+                for axm in pair_re.finditer(blk.group(1)):
+                    proposals.append({
+                        "axis": axm.group(1).strip(),
+                        "pipeline_label": axm.group(2).strip(),
+                        "proposed_correction": axm.group(3).strip(),
+                    })
+        return {
+            "title": issue.get("title", ""),
+            "html_url": issue.get("html_url", issue_url),
+            "author": (issue.get("user") or {}).get("login", ""),
+            "created_at": issue.get("created_at", ""),
+            "proposals": proposals,
+        }
+    except Exception:
+        return {}
+
+
+def _render_flag_banner(record) -> None:
+    """Render the per-trial flag banner at the top of the drilldown card.
+
+    Invisible when the trial has no open flags. Otherwise renders:
+      - st.error (consensus) or st.warning (open) status header
+      - inline table of proposed corrections (axis | current | proposed)
+        with direct links to the originating GitHub issue
+      - explicit "View discussion on GitHub" link button(s)
+
+    Called from `_render_trial_drilldown` for every trial-detail render.
+    Safe to call when `_load_active_flags()` returned {} (no-op).
+    """
+    nct = record.get("NCTId", "") if record is not None else ""
+    if not nct:
+        return
+    flags = _load_active_flags()
+    entry = flags.get(nct)
+    if not entry or entry.get("count", 0) == 0:
+        return
+
+    n = entry["count"]
+    is_consensus = bool(entry.get("consensus"))
+    issue_urls = entry.get("issue_urls", [])
+
+    if is_consensus:
+        st.error(
+            f"{_FLAG_EMOJI} **Community consensus reached** — ≥3 reviewers "
+            "agree this trial's classification needs correction. Awaiting "
+            "moderator approval."
+        )
+    else:
+        plural = "s" if n > 1 else ""
+        st.warning(
+            f"{_FLAG_EMOJI} **{n} open classification flag{plural}** — "
+            "community has suggested a correction to this trial's labels."
+        )
+
+    # Pull proposals from each linked issue and show them inline so the
+    # reader sees what's being challenged without having to click through.
+    all_proposals: list[dict] = []
+    for url in issue_urls:
+        details = _load_flag_issue_details(url)
+        for prop in details.get("proposals", []):
+            all_proposals.append({
+                "Axis": prop.get("axis", ""),
+                "Current label": prop.get("pipeline_label", ""),
+                "Proposed correction": prop.get("proposed_correction", ""),
+                "Discussion": url,
+            })
+
+    if all_proposals:
+        st.markdown("**Proposed corrections:**")
+        st.dataframe(
+            pd.DataFrame(all_proposals),
+            hide_index=True, width="stretch",
+            column_config={
+                "Discussion": st.column_config.LinkColumn(
+                    "Discussion",
+                    display_text="View ↗",
+                    help="Open the GitHub issue thread for this proposal.",
+                ),
+            },
+        )
+    else:
+        # YAML parse failed or yet-unfetched — give the link(s) anyway.
+        for url in issue_urls:
+            st.markdown(f"- [View flag discussion on GitHub ↗]({url})")
 
 
 # ---------------------------------------------------------------------------
@@ -2779,7 +2922,7 @@ with tab_data:
         _country_options.index(_prev_zoom) if _prev_zoom in _country_options else 0
     )
 
-    _c_search, _c_country = st.columns([0.65, 0.35])
+    _c_search, _c_country, _c_flag = st.columns([0.55, 0.30, 0.15])
     with _c_search:
         search_q = st.text_input(
             "Search",
@@ -2796,6 +2939,23 @@ with tab_data:
             key="data_country_zoom",
             label_visibility="collapsed",
         )
+    with _c_flag:
+        # Counts the actual flagged trials in the current view, before
+        # text-search filtering. The label always shows the live count so
+        # the user knows whether the filter would do anything.
+        _active_flags_for_filter = _load_active_flags()
+        _n_flagged_in_view = (
+            table_df["NCTId"].isin(_active_flags_for_filter.keys()).sum()
+            if _active_flags_for_filter else 0
+        )
+        _flagged_only = st.checkbox(
+            f"🚩 Flagged only ({_n_flagged_in_view})",
+            key="data_flagged_only",
+            value=st.session_state.get("data_flagged_only", False),
+            help="Show only trials with one or more open community "
+                 "classification-flag GitHub issues.",
+            disabled=_n_flagged_in_view == 0,
+        )
     _zoom_active = _zoom_country != _ALL_COUNTRIES_LABEL
 
     # Apply text search across the columns users actually scan
@@ -2807,6 +2967,12 @@ with tab_data:
         for _c in _search_cols:
             mask = mask | table_df[_c].astype(str).str.lower().str.contains(q, na=False)
         table_df = table_df[mask].copy()
+
+    # Apply flagged-only filter
+    if _flagged_only and _active_flags_for_filter:
+        table_df = table_df[
+            table_df["NCTId"].isin(_active_flags_for_filter.keys())
+        ].copy()
 
     # Apply country zoom — swap Countries for Cities + SiteStatuses
     if _zoom_active:

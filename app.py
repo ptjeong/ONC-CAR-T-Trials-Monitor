@@ -6044,6 +6044,133 @@ with tab_methods:
     snap_date = df["SnapshotDate"].iloc[0] if "SnapshotDate" in df.columns and not df.empty else date.today().isoformat()
     n_inc = len(df_filt)
 
+    # ------------------------------------------------------------------
+    # FIG 11 — PRISMA flow as a Sankey diagram
+    # ------------------------------------------------------------------
+    # Renders the same PRISMA counts as the existing flow table (Overview
+    # tab expander), but as a left-to-right Sankey so the reader sees
+    # WHERE every trial went visually. Methods-paper-grade reproducibility
+    # — most CAR-T reviews give "we screened N, included M" with no
+    # audit trail; this is the audit trail.
+
+    if prisma_counts:
+        st.subheader("Figure 11 — PRISMA selection flow")
+        st.markdown(
+            '<p class="small-note">Left-to-right Sankey of trial flow '
+            'through the selection pipeline. Width of each link is '
+            'proportional to the number of trials traversing that step. '
+            'Dataset audit trail at the per-stage granularity rarely '
+            'reported in published CAR-T reviews.</p>',
+            unsafe_allow_html=True,
+        )
+
+        n_fetched_p = int(prisma_counts.get("n_fetched", 0) or 0)
+        n_dups_p = int(prisma_counts.get("n_duplicates_removed", 0) or 0)
+        n_dedup_p = int(prisma_counts.get("n_after_dedup", 0) or 0)
+        n_hard_p = int(prisma_counts.get("n_hard_excluded", 0) or 0)
+        n_indic_p = int(prisma_counts.get("n_indication_excluded", 0) or 0)
+        n_inc_p = int(prisma_counts.get("n_included", n_inc) or n_inc)
+
+        if n_fetched_p > 0:
+            # Sankey nodes (left → right ordering)
+            _sk_labels = [
+                f"Identified via CT.gov API\n(n={n_fetched_p:,})",         # 0
+                f"After dedup\n(n={n_dedup_p:,})",                           # 1
+                f"Duplicates removed\n(n={n_dups_p:,})",                     # 2
+                f"After hard-exclusion list\n(n={max(0, n_dedup_p - n_hard_p):,})",  # 3
+                f"Hard-excluded\n(n={n_hard_p:,})",                          # 4
+                f"After indication filter\n(n={max(0, n_dedup_p - n_hard_p - n_indic_p):,})",  # 5
+                f"Indication-mismatch\n(n={n_indic_p:,})",                   # 6
+                f"Included in analysis\n(n={n_inc_p:,})",                    # 7
+            ]
+            # Color discipline: NEJM-flat. Inclusion path navy; exclusion
+            # paths slate; final inclusion the deepest navy.
+            _sk_node_colors = [
+                "#1e40af",  # 0 identified
+                "#1e40af",  # 1 after dedup
+                "#94a3b8",  # 2 duplicates removed (excluded)
+                "#1e40af",  # 3 after hard-exclusion
+                "#94a3b8",  # 4 hard-excluded
+                "#1e40af",  # 5 after indication filter
+                "#94a3b8",  # 6 indication-mismatch
+                "#0b3d91",  # 7 included (deeper navy — endpoint)
+            ]
+            # Links: source → target, value = trial count
+            # Inclusion-path links are deeper navy, exclusion lighter slate
+            _sk_sources = [0, 0, 1, 1, 3, 3, 5]
+            _sk_targets = [1, 2, 3, 4, 5, 6, 7]
+            _sk_values  = [n_dedup_p, n_dups_p,
+                           max(0, n_dedup_p - n_hard_p), n_hard_p,
+                           max(0, n_dedup_p - n_hard_p - n_indic_p), n_indic_p,
+                           n_inc_p]
+            _sk_link_colors = [
+                "rgba(30, 64, 175, 0.45)",  # 0→1 dedup keep
+                "rgba(148, 163, 184, 0.55)",  # 0→2 duplicates
+                "rgba(30, 64, 175, 0.45)",  # 1→3 hard-exclusion keep
+                "rgba(148, 163, 184, 0.55)",  # 1→4 hard-excluded
+                "rgba(30, 64, 175, 0.45)",  # 3→5 indication keep
+                "rgba(148, 163, 184, 0.55)",  # 3→6 indication mismatch
+                "rgba(11, 61, 145, 0.55)",  # 5→7 final inclusion (deeper)
+            ]
+
+            fig11 = go.Figure(data=[go.Sankey(
+                arrangement="snap",
+                node=dict(
+                    pad=18, thickness=18,
+                    line=dict(color="#0f172a", width=0.5),
+                    label=_sk_labels,
+                    color=_sk_node_colors,
+                ),
+                link=dict(
+                    source=_sk_sources,
+                    target=_sk_targets,
+                    value=_sk_values,
+                    color=_sk_link_colors,
+                ),
+            )])
+            fig11.update_layout(
+                **PUB_BASE,
+                height=420,
+                margin=dict(l=10, r=10, t=20, b=20),
+            )
+            st.plotly_chart(fig11, width="stretch", config=PUB_EXPORT)
+
+            # Caption with the PRISMA-style narrative
+            st.markdown(
+                '<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
+                f'Of <b>{n_fetched_p:,}</b> records identified via the '
+                'ClinicalTrials.gov v2 API '
+                f'({_get_methods_query_summary() if "_get_methods_query_summary" in globals() else "broad CAR-based cell-therapy term query, no condition restriction"}), '
+                f'<b>{n_dups_p:,}</b> duplicates were removed, '
+                f'<b>{n_hard_p:,}</b> were excluded by the curated '
+                'hard-exclusion NCT list (manually-flagged off-scope '
+                f'trials), and <b>{n_indic_p:,}</b> were excluded as '
+                'autoimmune- or rheumatology-only indications. '
+                f'<b>{n_inc_p:,}</b> trials proceeded to classification '
+                'and analysis.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            # CSV export of the underlying counts (one row per node-pair link)
+            _fig11_csv = pd.DataFrame({
+                "Source": [_sk_labels[s].split("\n")[0] for s in _sk_sources],
+                "Target": [_sk_labels[t].split("\n")[0] for t in _sk_targets],
+                "n": _sk_values,
+            })
+            st.download_button(
+                "Fig 11 data (CSV)",
+                _csv_with_provenance(
+                    _fig11_csv,
+                    "Fig 11 — PRISMA selection flow (Sankey)",
+                ),
+                "fig11_prisma_sankey.csv", "text/csv",
+            )
+        else:
+            st.info("PRISMA counts unavailable — refresh the snapshot to populate.")
+    else:
+        st.info("No PRISMA counts available for this dataset.")
+
     methods_text = _build_methods_text(prisma_counts, snap_date, n_inc)
 
     st.subheader("Methods section (auto-generated)")

@@ -234,23 +234,22 @@ Tests + governance:
 - [ ] No emojis added unless they were in the original onc commits
       (the 🚩 IS in the onc commits — that's intentional)
 
-## GitHub repo configuration (one-time, before first flag is filed)
+## GitHub repo configuration
 
-After the port is complete, run these `gh label create` commands from
-inside the rheum-car-t-trial-monitor repo:
+**Labels are auto-created.** Copy the
+`.github/workflows/auto_label_flags.yml` workflow from the onc repo
+(commit `4121d9a`) — it fires on every new flag issue and creates any
+missing labels (`classification-flag`, `consensus-reached`,
+`moderator-approved`, `axis-*`) before applying them. So the first
+flag a user files in the rheum app will work end-to-end without you
+running any `gh label create` setup commands.
 
-```bash
-gh label create "classification-flag" --color "d93f0b" --description "User-suggested classification correction"
-gh label create "consensus-reached" --color "0e8a16" --description "≥3 reviewers agree on the same correction"
-gh label create "moderator-approved" --color "5319e7" --description "Promoted to llm_overrides.json"
-gh label create "needs-review" --color "fbca04" --description "Awaiting community input"
-gh label create "axis-Branch" --color "c5def5"
-gh label create "axis-DiseaseCategory" --color "c5def5"
-gh label create "axis-DiseaseEntity" --color "c5def5"
-gh label create "axis-TargetCategory" --color "c5def5"
-gh label create "axis-ProductType" --color "c5def5"
-gh label create "axis-SponsorType" --color "c5def5"
-```
+**Why this matters:** GitHub silently drops any label in
+`issues/new?labels=...` URL params that doesn't already exist in the
+repo. Without the auto-label workflow, the first flag would be
+filed with an empty labels array, the dashboard's `_load_active_flags`
+filter would never see it, and the badge wouldn't render. The onc
+app hit this bug live; the fix is the workflow.
 
 In Streamlit Cloud (Settings → Secrets), add:
 ```toml

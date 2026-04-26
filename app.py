@@ -6196,68 +6196,138 @@ with tab_methods:
         n_inc_p = int(prisma_counts.get("n_included", n_inc) or n_inc)
 
         if n_fetched_p > 0:
-            # Sankey nodes (left → right ordering)
-            _sk_labels = [
-                f"Identified via CT.gov API\n(n={n_fetched_p:,})",         # 0
-                f"After dedup\n(n={n_dedup_p:,})",                           # 1
-                f"Duplicates removed\n(n={n_dups_p:,})",                     # 2
-                f"After hard-exclusion list\n(n={max(0, n_dedup_p - n_hard_p):,})",  # 3
-                f"Hard-excluded\n(n={n_hard_p:,})",                          # 4
-                f"After indication filter\n(n={max(0, n_dedup_p - n_hard_p - n_indic_p):,})",  # 5
-                f"Indication-mismatch\n(n={n_indic_p:,})",                   # 6
-                f"Included in analysis\n(n={n_inc_p:,})",                    # 7
-            ]
-            # Color discipline: NEJM-flat. Inclusion path navy; exclusion
-            # paths slate; final inclusion the deepest navy.
-            _sk_node_colors = [
-                "#1e40af",  # 0 identified
-                "#1e40af",  # 1 after dedup
-                "#94a3b8",  # 2 duplicates removed (excluded)
-                "#1e40af",  # 3 after hard-exclusion
-                "#94a3b8",  # 4 hard-excluded
-                "#1e40af",  # 5 after indication filter
-                "#94a3b8",  # 6 indication-mismatch
-                "#0b3d91",  # 7 included (deeper navy — endpoint)
-            ]
-            # Links: source → target, value = trial count
-            # Inclusion-path links are deeper navy, exclusion lighter slate
-            _sk_sources = [0, 0, 1, 1, 3, 3, 5]
-            _sk_targets = [1, 2, 3, 4, 5, 6, 7]
-            _sk_values  = [n_dedup_p, n_dups_p,
-                           max(0, n_dedup_p - n_hard_p), n_hard_p,
-                           max(0, n_dedup_p - n_hard_p - n_indic_p), n_indic_p,
-                           n_inc_p]
-            _sk_link_colors = [
-                "rgba(30, 64, 175, 0.45)",  # 0→1 dedup keep
-                "rgba(148, 163, 184, 0.55)",  # 0→2 duplicates
-                "rgba(30, 64, 175, 0.45)",  # 1→3 hard-exclusion keep
-                "rgba(148, 163, 184, 0.55)",  # 1→4 hard-excluded
-                "rgba(30, 64, 175, 0.45)",  # 3→5 indication keep
-                "rgba(148, 163, 184, 0.55)",  # 3→6 indication mismatch
-                "rgba(11, 61, 145, 0.55)",  # 5→7 final inclusion (deeper)
-            ]
+            # Custom HTML/CSS PRISMA flowchart — NEJM-style.
+            # Plotly Sankey labels are notoriously small + ugly; this
+            # gives us full typography control. Big legible numbers,
+            # clear inclusion vs exclusion path, sleek navy palette.
+            n_after_hard = max(0, n_dedup_p - n_hard_p)
+            n_after_indic = max(0, n_dedup_p - n_hard_p - n_indic_p)
 
-            fig11 = go.Figure(data=[go.Sankey(
-                arrangement="snap",
-                node=dict(
-                    pad=18, thickness=18,
-                    line=dict(color="#0f172a", width=0.5),
-                    label=_sk_labels,
-                    color=_sk_node_colors,
-                ),
-                link=dict(
-                    source=_sk_sources,
-                    target=_sk_targets,
-                    value=_sk_values,
-                    color=_sk_link_colors,
-                ),
-            )])
-            fig11.update_layout(
-                **PUB_BASE,
-                height=420,
-                margin=dict(l=10, r=10, t=20, b=20),
-            )
-            st.plotly_chart(fig11, width="stretch", config=PUB_EXPORT)
+            st.markdown("""
+            <style>
+                .prisma-wrap {
+                    background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+                    border: 1px solid #e2e8f0; border-radius: 12px;
+                    padding: 28px 24px; margin: 8px 0 18px 0;
+                    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04),
+                                0 4px 12px rgba(15, 23, 42, 0.03);
+                }
+                .prisma-row {
+                    display: grid; grid-template-columns: 1fr 24px 1fr;
+                    align-items: center; gap: 8px;
+                    margin-bottom: 14px;
+                }
+                .prisma-stage, .prisma-excl {
+                    border-radius: 8px; padding: 14px 18px;
+                    font-family: Arial, Helvetica, sans-serif;
+                    line-height: 1.3;
+                }
+                .prisma-stage {
+                    background: #1e3a8a; color: #ffffff;
+                    border: 1px solid #1e3a8a;
+                    box-shadow: 0 1px 2px rgba(30, 58, 138, 0.2);
+                }
+                .prisma-stage.endpoint {
+                    background: #0b3d91; border-color: #0b3d91;
+                    box-shadow: 0 2px 6px rgba(11, 61, 145, 0.35);
+                }
+                .prisma-excl {
+                    background: #f1f5f9; color: #475569;
+                    border: 1px solid #e2e8f0;
+                }
+                .prisma-num {
+                    font-size: 24px; font-weight: 700;
+                    font-variant-numeric: tabular-nums;
+                    letter-spacing: -0.01em; line-height: 1;
+                }
+                .prisma-stage .prisma-num { color: #ffffff; }
+                .prisma-excl .prisma-num { color: #334155; }
+                .prisma-lbl {
+                    font-size: 11px; text-transform: uppercase;
+                    letter-spacing: 0.6px; font-weight: 600;
+                    margin-top: 4px; opacity: 0.85;
+                }
+                .prisma-stage.endpoint .prisma-num { font-size: 28px; }
+                .prisma-arrow {
+                    color: #cbd5e1; font-size: 20px; text-align: center;
+                    line-height: 1; user-select: none;
+                }
+                .prisma-arrow-down {
+                    grid-column: 1 / 2; text-align: center;
+                    color: #cbd5e1; font-size: 16px; font-weight: 700;
+                    margin: -8px 0 -4px 0; letter-spacing: 1px;
+                }
+            </style>
+            """, unsafe_allow_html=True)
+
+            # Build the flowchart inline. Each row = one stage of the
+            # main inclusion path on the left, optional exclusion on
+            # the right. Vertical arrows between rows show the "kept"
+            # count flowing downward.
+            _rows_html = f"""
+            <div class="prisma-wrap">
+              <div class="prisma-row">
+                <div class="prisma-stage">
+                  <div class="prisma-num">{n_fetched_p:,}</div>
+                  <div class="prisma-lbl">Records identified · ClinicalTrials.gov v2 API</div>
+                </div>
+                <div></div>
+                <div></div>
+              </div>
+              <div class="prisma-arrow-down">↓</div>
+              <div class="prisma-row">
+                <div class="prisma-stage">
+                  <div class="prisma-num">{n_dedup_p:,}</div>
+                  <div class="prisma-lbl">After de-duplication</div>
+                </div>
+                <div class="prisma-arrow">→</div>
+                <div class="prisma-excl">
+                  <div class="prisma-num">{n_dups_p:,}</div>
+                  <div class="prisma-lbl">Duplicates removed (same NCT ID)</div>
+                </div>
+              </div>
+              <div class="prisma-arrow-down">↓</div>
+              <div class="prisma-row">
+                <div class="prisma-stage">
+                  <div class="prisma-num">{n_after_hard:,}</div>
+                  <div class="prisma-lbl">After curated hard-exclusion list</div>
+                </div>
+                <div class="prisma-arrow">→</div>
+                <div class="prisma-excl">
+                  <div class="prisma-num">{n_hard_p:,}</div>
+                  <div class="prisma-lbl">Manually flagged off-scope NCTs</div>
+                </div>
+              </div>
+              <div class="prisma-arrow-down">↓</div>
+              <div class="prisma-row">
+                <div class="prisma-stage">
+                  <div class="prisma-num">{n_after_indic:,}</div>
+                  <div class="prisma-lbl">After indication filter</div>
+                </div>
+                <div class="prisma-arrow">→</div>
+                <div class="prisma-excl">
+                  <div class="prisma-num">{n_indic_p:,}</div>
+                  <div class="prisma-lbl">Autoimmune / rheumatology-only indications</div>
+                </div>
+              </div>
+              <div class="prisma-arrow-down">↓</div>
+              <div class="prisma-row">
+                <div class="prisma-stage endpoint">
+                  <div class="prisma-num">{n_inc_p:,}</div>
+                  <div class="prisma-lbl">Included in analysis</div>
+                </div>
+                <div></div>
+                <div></div>
+              </div>
+            </div>
+            """
+            st.markdown(_rows_html, unsafe_allow_html=True)
+
+            # Build a hidden Plotly Sankey for the PNG export toolbar
+            # (publication submissions sometimes require a Sankey-style
+            # figure file). Same data, same colors; not rendered inline.
+            # Skipped for now — the HTML chart prints cleanly via the
+            # browser's print-to-PDF for manuscript figures.
 
             # Caption with the PRISMA-style narrative
             st.markdown(
@@ -6276,19 +6346,32 @@ with tab_methods:
                 unsafe_allow_html=True,
             )
 
-            # CSV export of the underlying counts (one row per node-pair link)
-            _fig11_csv = pd.DataFrame({
-                "Source": [_sk_labels[s].split("\n")[0] for s in _sk_sources],
-                "Target": [_sk_labels[t].split("\n")[0] for t in _sk_targets],
-                "n": _sk_values,
-            })
+            # CSV export of the underlying counts (one row per stage)
+            _fig11_csv = pd.DataFrame([
+                {"Stage": "Identified via CT.gov v2 API", "Path": "kept",
+                 "n": n_fetched_p},
+                {"Stage": "Duplicates removed", "Path": "excluded",
+                 "n": n_dups_p},
+                {"Stage": "After de-duplication", "Path": "kept",
+                 "n": n_dedup_p},
+                {"Stage": "Hard-excluded (curated NCT list)",
+                 "Path": "excluded", "n": n_hard_p},
+                {"Stage": "After hard-exclusion list", "Path": "kept",
+                 "n": n_after_hard},
+                {"Stage": "Indication-mismatch (autoimmune-only)",
+                 "Path": "excluded", "n": n_indic_p},
+                {"Stage": "After indication filter", "Path": "kept",
+                 "n": n_after_indic},
+                {"Stage": "Included in analysis", "Path": "kept",
+                 "n": n_inc_p},
+            ])
             st.download_button(
                 "Fig 11 data (CSV)",
                 _csv_with_provenance(
                     _fig11_csv,
-                    "Fig 11 — PRISMA selection flow (Sankey)",
+                    "Fig 11 — PRISMA selection flow",
                 ),
-                "fig11_prisma_sankey.csv", "text/csv",
+                "fig11_prisma_flow.csv", "text/csv",
             )
         else:
             st.info("PRISMA counts unavailable — refresh the snapshot to populate.")

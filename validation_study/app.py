@@ -120,20 +120,86 @@ st.markdown("""
     .block-container { max-width: 1100px; padding-top: 2rem; }
     .stRadio > div { gap: 0.4rem; }
 
-    /* Progress heatmap — GitHub-contributions-style cell grid.
-       Fills with a deep clinical blue as trials are rated. Hover reveals
-       NCT ID in the tooltip. The visual reward is the grid filling in;
-       no cartoon glyphs needed. */
-    .pgrid { display: grid; grid-template-columns: repeat(20, 1fr);
-             gap: 3px; padding: 8px 0; }
-    .pcell { width: 100%; aspect-ratio: 1 / 1; border-radius: 2px;
-             transition: transform 120ms ease, box-shadow 120ms ease; }
-    .pcell.empty  { background: #f1f5f9; border: 1px solid #e2e8f0; }
-    .pcell.filled { background: #1e40af;
-                    box-shadow: 0 1px 2px rgba(30, 64, 175, 0.25); }
-    .pcell.filled:hover { transform: scale(1.4);
-                           box-shadow: 0 2px 6px rgba(30, 64, 175, 0.4);
-                           cursor: default; }
+    /* Heatmap card — premium, COMPACT. Visible by default at the top of
+       every session. Side-by-side: thin grid strip on the left, summary
+       stats on the right. Total card height ~120px — gives visual reward
+       without eating real estate. */
+    .heatmap-card {
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin: 4px 0 14px 0;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03),
+                    0 2px 8px rgba(15, 23, 42, 0.025);
+    }
+    .heatmap-grid-wrap {
+        flex: 1 1 auto; min-width: 0;
+    }
+    .heatmap-stats {
+        flex: 0 0 auto;
+        display: flex; flex-direction: column; align-items: flex-end;
+        gap: 2px; min-width: 130px;
+    }
+    .heatmap-pct {
+        font-size: 22px; font-weight: 700; color: #1e40af;
+        line-height: 1.0; font-variant-numeric: tabular-nums;
+        letter-spacing: -0.02em;
+    }
+    .heatmap-lbl {
+        font-size: 10px; color: #64748b;
+        text-transform: uppercase; letter-spacing: 0.6px;
+        font-weight: 600;
+    }
+    .heatmap-count {
+        font-size: 11px; color: #475569;
+        font-variant-numeric: tabular-nums;
+        margin-top: 2px;
+    }
+
+    /* Compact heatmap grid — 50 columns × 4 rows for 200 cells.
+       Each cell is a tiny pixel-precise square. Three intensity bands
+       so the grid has visual texture as it fills. */
+    .pgrid {
+        display: grid;
+        grid-template-columns: repeat(50, 1fr);
+        gap: 2px;
+        max-width: 100%;
+    }
+    .pcell {
+        width: 100%; aspect-ratio: 1 / 1;
+        border-radius: 2px;
+        transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+                    box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1),
+                    background-color 240ms ease;
+    }
+    .pcell.empty {
+        background: #eef2f7;
+        box-shadow: inset 0 0 0 0.5px rgba(203, 213, 225, 0.6);
+    }
+    .pcell.older {
+        background: #6688c8;
+    }
+    .pcell.recent {
+        background: #1e40af;
+        box-shadow: 0 0 0 0.5px rgba(30, 64, 175, 0.4);
+    }
+    .pcell.fresh {
+        background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+        box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.4),
+                    0 1px 3px rgba(30, 64, 175, 0.4);
+    }
+    .pcell.empty:hover, .pcell.older:hover,
+    .pcell.recent:hover, .pcell.fresh:hover {
+        transform: scale(2.2);
+        z-index: 2;
+        position: relative;
+        box-shadow: 0 4px 12px rgba(30, 64, 175, 0.45);
+        cursor: default;
+    }
 
     /* Stat tiles — clean numeric callouts in the session-stats panel.
        Big number, small label — the same hierarchy Linear / Stripe use. */
@@ -291,25 +357,62 @@ def _persist(state: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def _progress_grid_html(state: dict, sample: dict) -> str:
-    """Render the progress heatmap — GitHub-contributions-style.
+    """Render the compact progress heatmap card — visible by default.
 
-    Each rated trial fills a cell with deep clinical blue; pending cells
-    are pale. Hover reveals the NCT ID. The visual reward is watching
-    the grid saturate over a session — no cartoon glyphs, just a
-    satisfying CSS-styled accumulation.
+    Three intensity bands give the grid visual texture as it fills:
+      - fresh   = the 5 most-recently-rated trials (gradient + glow)
+      - recent  = next 25 rated (saturated navy)
+      - older   = everything else rated (slightly desaturated navy)
+      - empty   = pending (subtle slate)
+
+    Side-by-side card layout: thin grid strip on the left, summary
+    stats (percentage + count) on the right. Total height ~120px.
     """
+    n_total = len(sample["trials"])
+    ratings = state.get("ratings", {})
+    n_done = len(ratings)
+
+    # Order rated NCTs by timestamp (most recent first) to assign tiers
+    rated_with_ts = sorted(
+        [(nct, r.get("timestamp", "")) for nct, r in ratings.items()],
+        key=lambda t: t[1] or "",
+        reverse=True,
+    )
+    fresh_set = {nct for nct, _ in rated_with_ts[:5]}
+    recent_set = {nct for nct, _ in rated_with_ts[5:30]}
+
     cells = []
     for trial in sample["trials"]:
         nct = trial["NCTId"]
-        if nct in state["ratings"]:
+        if nct in fresh_set:
             cells.append(
-                f'<div class="pcell filled" title="{nct} — rated"></div>'
+                f'<div class="pcell fresh" title="{nct} — just rated"></div>'
+            )
+        elif nct in recent_set:
+            cells.append(
+                f'<div class="pcell recent" title="{nct} — recent"></div>'
+            )
+        elif nct in ratings:
+            cells.append(
+                f'<div class="pcell older" title="{nct} — rated"></div>'
             )
         else:
             cells.append(
                 f'<div class="pcell empty" title="{nct} — pending"></div>'
             )
-    return f'<div class="pgrid">{"".join(cells)}</div>'
+    pct = (n_done / n_total * 100) if n_total else 0
+    return (
+        f'<div class="heatmap-card">'
+        f'  <div class="heatmap-grid-wrap">'
+        f'    <div class="pgrid">{"".join(cells)}</div>'
+        f'  </div>'
+        f'  <div class="heatmap-stats">'
+        f'    <div class="heatmap-pct">{pct:.0f}%</div>'
+        f'    <div class="heatmap-lbl">complete</div>'
+        f'    <div class="heatmap-count">{n_done} / {n_total} trials</div>'
+        f'  </div>'
+        f'</div>'
+    )
 
 
 def _stat_tiles_html(stats: list[tuple[str, str]]) -> str:
@@ -722,23 +825,14 @@ def _render_rater(rater_id: str) -> None:
             use_container_width=True,
         )
 
-    # ---- Session stats tile row (sophisticated gamification) ----
-    # Surfaces pace + time + ETA so the rater can see their own
-    # progress in real numbers — same psychology as a runner watching
-    # pace tick down. Replaces childish badges with informative ones.
-    st.markdown(_session_stats_html(state), unsafe_allow_html=True)
+    # ---- Compact heatmap card — visible by default, sleek + tight ----
+    # Side-by-side card: 50-col × 4-row strip on the left, big percent +
+    # count on the right. ~120px tall. Hover any cell for the NCT ID.
+    # Three intensity tiers (fresh/recent/older) give the visual texture.
+    st.markdown(_progress_grid_html(state, sample), unsafe_allow_html=True)
 
-    # ---- Progress heatmap (GitHub-contributions-style) ----
-    with st.expander(
-        f"Progress heatmap — {n_done} of {n_total} rated",
-        expanded=False,
-    ):
-        st.caption(
-            "Each cell represents one trial in the locked sample. "
-            "Cells fill in deep clinical blue as you rate. Hover for "
-            "the NCT ID."
-        )
-        st.markdown(_progress_grid_html(state, sample), unsafe_allow_html=True)
+    # ---- Session stats tile row (live pace + ETA) ----
+    st.markdown(_session_stats_html(state), unsafe_allow_html=True)
 
     # ---- Milestone banner (informative + methodologically grounded) ----
     _durations_for_msg = [

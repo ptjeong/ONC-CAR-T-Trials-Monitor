@@ -18,6 +18,7 @@ from pipeline import (
     BASE_URL,
     _LLM_OVERRIDES,
     _LLM_EXCLUDED_NCT_IDS,
+    compute_classification_rationale,
 )
 from config import (
     ONTOLOGY,
@@ -403,6 +404,17 @@ def _render_trial_drilldown(record, *, key_suffix: str = "") -> None:
             st.markdown("**Brief summary**")
             st.markdown(f"> {record['BriefSummary']}")
 
+        # "How was this classified?" expander — re-runs the classifier
+        # on this row with rationale-tracking turned on, surfaces matched
+        # terms and source-tag explanation per axis. Aligns with the
+        # rheum app's per-trial rationale UI (REVIEW.md Phase 3 item 19).
+        # Wrapped in try/except — never block the drilldown if the
+        # rationale helper fails (e.g. on a malformed legacy snapshot row).
+        try:
+            _render_classification_rationale(record, key_suffix=key_suffix)
+        except Exception as _e:  # noqa: BLE001
+            st.caption(f"_(classification rationale unavailable: {_e})_")
+
         # Suggest-correction affordance — populated by _render_suggest_correction
         # below. Wrapped in try/except NameError as a defence against the helper
         # being trimmed out of a future revision; keeps the drilldown rendering
@@ -537,6 +549,75 @@ affordance. See `docs/methods.md` § 4.4 for the validation methodology.</sub>
         f"https://github.com/{GITHUB_REPO_SLUG}/issues/new?"
         + _up.urlencode(params)
     )
+
+
+def _render_classification_rationale(record, *, key_suffix: str = "") -> None:
+    """Per-trial 'How was this classified?' expander.
+
+    Re-runs `compute_classification_rationale` on the trial row to
+    surface, per axis: the assigned label + source tag + matched
+    terms + a one-sentence human-readable explanation.
+
+    The matched-term lists let a reviewer immediately see WHICH
+    text bits drove a classification — turning a black-box label
+    into an auditable evidence chain. If they disagree they can
+    click through to the Suggest-correction expander right below.
+    """
+    if record is None:
+        return
+    # Convert pd.Series to dict for the pure-function rationale helper
+    row = (record.to_dict()
+           if hasattr(record, "to_dict") else dict(record))
+    nct = row.get("NCTId", "")
+    if not nct:
+        return
+
+    with st.expander("How was this classified?", expanded=False):
+        st.caption(
+            "Re-runs the classifier on this trial's text and surfaces the "
+            "matched terms + source tag per axis. Use this to audit a "
+            "label before flagging it. If you disagree, scroll down to "
+            "*Suggest a classification correction*."
+        )
+        try:
+            rationale = compute_classification_rationale(row)
+        except Exception as e:
+            st.error(f"Could not compute rationale: {e}")
+            return
+
+        rows = []
+        for axis, info in rationale.items():
+            matched = info.get("matched_terms") or []
+            rows.append({
+                "Axis": axis,
+                "Label": info.get("label") or "—",
+                "Source": info.get("source") or "—",
+                "Matched terms": (", ".join(str(m) for m in matched[:6])
+                                  if matched else "—"),
+                "Explanation": info.get("explanation") or "",
+            })
+        st.dataframe(
+            pd.DataFrame(rows),
+            hide_index=True, width="stretch",
+            column_config={
+                "Axis": st.column_config.TextColumn(width="small"),
+                "Label": st.column_config.TextColumn(width="small"),
+                "Source": st.column_config.TextColumn(
+                    width="small",
+                    help=("How the label was determined. `llm_override` = "
+                          "manual entry in llm_overrides.json; everything "
+                          "else is rule-based (term match, default, etc.)."),
+                ),
+                "Matched terms": st.column_config.TextColumn(width="medium"),
+                "Explanation": st.column_config.TextColumn(width="large"),
+            },
+        )
+
+        # Surface the LLM-override note prominently when present
+        if any(r["Source"] == "llm_override" for r in rows):
+            override_entry = _LLM_OVERRIDES.get(nct, {})
+            if override_entry.get("notes"):
+                st.info(f"**LLM-override note:** {override_entry['notes']}")
 
 
 def _render_suggest_correction(record, *, key_suffix: str = "") -> None:

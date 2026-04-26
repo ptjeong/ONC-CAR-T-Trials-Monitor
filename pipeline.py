@@ -1268,6 +1268,159 @@ def _git_sha_or_unknown() -> str:
         return "unknown"
 
 
+def compute_classification_rationale(row: dict) -> dict:
+    """Re-run the classifier instrumented to surface WHY each label was chosen.
+
+    Returns a dict with keys per axis, each value being a sub-dict:
+        {
+            "label": <the label assigned>,
+            "source": <short source-tag, e.g. 'llm_override' / 'strict_term'>,
+            "matched_terms": <list of terms the row text matched>,
+            "explanation": <human-readable one-sentence rationale>,
+        }
+
+    Used by the dashboard's per-trial drilldown to render a
+    "How was this classified?" expander. Read-only — never mutates
+    the input row, never persists. Pure function: same row in →
+    same rationale out.
+
+    Aligns with the rheum app's per-trial rationale UI (REVIEW.md
+    Phase 3 item 19 from the cross-app sync brief).
+    """
+    text = _row_text(row)
+    nct = _safe_text(row.get("NCTId")).strip()
+
+    rationale: dict[str, dict] = {}
+
+    # ---- LLM override fast-path: applies to every axis ----
+    is_llm_override = nct in _LLM_OVERRIDES
+    override_entry = _LLM_OVERRIDES.get(nct, {}) if is_llm_override else {}
+
+    # ---- Branch / DiseaseCategory / DiseaseEntity ----
+    disease = _classify_disease(row)
+    for axis_field, axis_key, override_field in [
+        ("branch", "Branch", "branch"),
+        ("category", "DiseaseCategory", "disease_category"),
+        ("entity", "DiseaseEntity", "disease_entity"),
+    ]:
+        value = disease.get(axis_field)
+        if is_llm_override and override_entry.get(override_field):
+            rationale[axis_key] = {
+                "label": override_entry[override_field],
+                "source": "llm_override",
+                "matched_terms": [],
+                "explanation": (
+                    f"Overridden by `llm_overrides.json` entry for {nct}. "
+                    f"Notes: {override_entry.get('notes', '—')[:200]}"
+                ),
+            }
+        else:
+            # Show the entities that matched (regardless of which axis we're explaining)
+            ent_matches = _match_terms(text, ENTITY_TERMS)
+            cat_matches = _match_terms(text, CATEGORY_FALLBACK_TERMS)
+            rationale[axis_key] = {
+                "label": value,
+                "source": "rule_based",
+                "matched_terms": (
+                    ent_matches if axis_key == "DiseaseEntity"
+                    else cat_matches if axis_key == "DiseaseCategory"
+                    else (ent_matches + cat_matches)[:5]
+                ),
+                "explanation": (
+                    f"Rule-based classification from condition + title text. "
+                    f"design = {disease.get('design', '?')}."
+                ),
+            }
+
+    # ---- TargetCategory ----
+    target_label = _assign_target(row)
+    if is_llm_override and override_entry.get("target_category"):
+        rationale["TargetCategory"] = {
+            "label": override_entry["target_category"],
+            "source": "llm_override",
+            "matched_terms": [],
+            "explanation": (
+                f"Overridden by `llm_overrides.json` entry for {nct}."
+            ),
+        }
+    else:
+        antigen_matches = _detect_targets(text)
+        platform_hits = []
+        if _contains_any(text, CAR_NK_TERMS):
+            platform_hits.append("CAR-NK")
+        if _contains_any(text, CAAR_T_TERMS):
+            platform_hits.append("CAAR-T")
+        if _contains_any(text, CAR_TREG_TERMS):
+            platform_hits.append("CAR-Treg")
+        if _contains_any(text, CAR_GD_T_TERMS):
+            platform_hits.append("CAR-γδ T")
+        rationale["TargetCategory"] = {
+            "label": target_label,
+            "source": (
+                "named_product" if _lookup_named_product(text, NAMED_PRODUCT_TARGETS)
+                else "antigen_match" if antigen_matches
+                else "platform_only" if platform_hits
+                else "fallback"
+            ),
+            "matched_terms": antigen_matches + platform_hits,
+            "explanation": (
+                f"Antigens detected: {antigen_matches or '—'}; "
+                f"Platforms: {platform_hits or '—'}."
+            ),
+        }
+
+    # ---- ProductType ----
+    # Pipeline's _assign_product_type returns (label, source_tag);
+    # we capture the source tag for the explanation
+    try:
+        ptype, ptype_source = _assign_product_type(row)
+    except Exception:
+        ptype, ptype_source = (
+            row.get("ProductType", "Unclear"),
+            row.get("ProductTypeSource", "unknown"),
+        )
+    rationale["ProductType"] = {
+        "label": ptype,
+        "source": (
+            "llm_override" if is_llm_override
+            and override_entry.get("product_type")
+            else ptype_source
+        ),
+        "matched_terms": [],
+        "explanation": {
+            "explicit_allogeneic_marker":
+                "Explicit allogeneic markers in title/summary (e.g. 'allogeneic', 'off-the-shelf', 'donor-derived').",
+            "explicit_autologous_marker":
+                "Explicit autologous markers in title/summary (e.g. 'autologous', 'patient-derived').",
+            "explicit_in_vivo_marker":
+                "Explicit in-vivo markers (e.g. 'in vivo', 'mRNA-LNP', 'lipid nanoparticle').",
+            "default_autologous_no_allo_markers":
+                "Defaulted to autologous — no explicit allogeneic / in-vivo markers found.",
+            "weak_autologous_marker":
+                "Weak autologous signal (e.g. 'leukapheresis', 'manufactured from patient cells').",
+            "weak_allogeneic_marker":
+                "Weak allogeneic signal but not definitive.",
+        }.get(ptype_source, f"Source tag: {ptype_source}"),
+    }
+
+    # ---- SponsorType ----
+    sponsor_label, sponsor_source = (
+        _classify_sponsor(row.get("LeadSponsor"), row.get("LeadSponsorClass")),
+        "lead_sponsor_class + name_pattern",
+    )
+    rationale["SponsorType"] = {
+        "label": sponsor_label,
+        "source": sponsor_source,
+        "matched_terms": [],
+        "explanation": (
+            f"Classified from LeadSponsor name + LeadSponsorClass. "
+            f"Class hint: {row.get('LeadSponsorClass', '—')}."
+        ),
+    }
+
+    return rationale
+
+
 _BACKFILL_BATCH_SIZE = 100
 _BACKFILL_SLEEP_SEC = 0.25  # polite pause between batches
 

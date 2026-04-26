@@ -712,14 +712,6 @@ def _attach_flag_column(
     return out, show_cols
 
 
-def _flag_column_config() -> dict:
-    """Compatibility shim — no column added anymore, but call sites still
-    pass this into `column_config`. Returns an empty dict so the
-    spread-merge in caller code (`{**_trial_detail_cols(), **_flag_column_config()}`)
-    is a no-op."""
-    return {}
-
-
 @st.cache_data(ttl=60 * 5, show_spinner=False)
 def _load_flag_issue_details(issue_url: str) -> dict:
     """Fetch a single flag issue's body + parse out proposal blocks.
@@ -2841,7 +2833,6 @@ with tab_geo:
                         selection_mode="single-row",
                         key=f"city_trial_table_{selected_country}_{selected_city}",
                         column_config={
-                            **_flag_column_config(),
                             "NCTId": st.column_config.TextColumn("NCT ID"),
                             "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
                             "BriefTitle": st.column_config.TextColumn("Title", width="large"),
@@ -3006,7 +2997,6 @@ with tab_data:
         on_select="rerun", selection_mode="single-row",
         key="data_table_sel",
         column_config=_trial_detail_cols({
-            **_flag_column_config(),
             "ClassificationConfidence": st.column_config.TextColumn(
                 "Conf.", width="small",
                 help="high = explicit markers / LLM-validated; medium = defaults or weak markers; low = Unknown branch/entity or combined Unclear.",
@@ -3365,7 +3355,6 @@ with tab_deep:
                 selection_mode="single-row",
                 key=f"deep_disease_focus_{dd_branch}_{dd_cat}_{dd_ent}",
                 column_config={
-                    **_flag_column_config(),
                     "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
                     "BriefTitle": st.column_config.TextColumn("Title", width="large"),
                     "ProductName": st.column_config.TextColumn("Product", width="medium"),
@@ -3606,7 +3595,7 @@ with tab_deep:
                     width="stretch", height=420, hide_index=True,
                     on_select="rerun", selection_mode="single-row",
                     key=f"deep_target_trial_table_{target_pick}",
-                    column_config=_trial_detail_cols(_flag_column_config()),
+                    column_config=_trial_detail_cols(),
                 )
                 _target_rows = (
                     _target_event.selection.rows
@@ -3754,7 +3743,7 @@ with tab_deep:
                     width='stretch', height=320, hide_index=True,
                     on_select="rerun", selection_mode="single-row",
                     key=f"deep_product_trial_table_{_picked_product}",
-                    column_config=_trial_detail_cols(_flag_column_config()),
+                    column_config=_trial_detail_cols(),
                 )
                 _prod_trial_rows = (
                     _prod_trial_event.selection.rows
@@ -3944,7 +3933,7 @@ with tab_deep:
                         width='stretch', height=320, hide_index=True,
                         on_select="rerun", selection_mode="single-row",
                         key=f"dd_sponsor_trial_table_{pick}_{_picked_sponsor}",
-                        column_config=_trial_detail_cols(_flag_column_config()),
+                        column_config=_trial_detail_cols(),
                     )
                     _spon_trial_rows = (
                         _spon_trial_event.selection.rows

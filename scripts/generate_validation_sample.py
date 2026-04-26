@@ -171,6 +171,45 @@ def main() -> int:
         .size().reset_index(name="n").to_dict("records")
     )
 
+    # Provenance: pin the exact pipeline state at sample-generation time
+    # so the analysis can claim "we compared against pipeline @ <sha>"
+    # in the manuscript's methods section. Without this, a pipeline
+    # change mid-study could silently shift the secondary-outcome
+    # (rater-vs-pipeline) numbers and require re-running everything.
+    import subprocess as _sp
+    try:
+        pipeline_sha = _sp.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(REPO_ROOT), text=True, stderr=_sp.DEVNULL,
+        ).strip()
+    except Exception:
+        pipeline_sha = "unknown"
+    try:
+        pipeline_dirty = bool(_sp.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=str(REPO_ROOT), text=True, stderr=_sp.DEVNULL,
+        ).strip())
+    except Exception:
+        pipeline_dirty = False
+
+    # Autocomplete vocabularies — surface the canonical entity + antigen
+    # lists in the manifest so the rater UI can offer them as quick-pick
+    # suggestions while still allowing free text. Cuts typing time and
+    # standardizes spelling so κ doesn't get artificially deflated by
+    # "DLBCL" vs "Diffuse large B-cell lymphoma".
+    try:
+        from config import (
+            HEME_TARGET_TERMS, SOLID_TARGET_TERMS, ENTITY_TERMS,
+        )
+        autocomplete_vocab = {
+            "DiseaseEntity": sorted(ENTITY_TERMS.keys()),
+            "TargetCategory": sorted(
+                set(HEME_TARGET_TERMS) | set(SOLID_TARGET_TERMS)
+            ),
+        }
+    except Exception:
+        autocomplete_vocab = {"DiseaseEntity": [], "TargetCategory": []}
+
     manifest = {
         "version": args.version,
         "n": len(manifest_trials),
@@ -178,6 +217,8 @@ def main() -> int:
         "snapshot_date": args.snapshot,
         "seed": args.seed,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "pipeline_sha": pipeline_sha,
+        "pipeline_dirty_worktree": pipeline_dirty,
         "stratification": "50% Heme-onc / 50% Solid-onc; ≥5 trials per "
                           "major DiseaseCategory (≥10 in source). Trials "
                           "with insufficient text (no Title/Summary/"
@@ -187,6 +228,7 @@ def main() -> int:
             "Branch", "DiseaseCategory", "DiseaseEntity",
             "TargetCategory", "ProductType", "SponsorType",
         ],
+        "autocomplete_vocab": autocomplete_vocab,
         "trials": manifest_trials,
     }
 

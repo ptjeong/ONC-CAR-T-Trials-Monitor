@@ -27,7 +27,7 @@ tests/
 
 - **Version:** v1
 - **N:** 200 trials
-- **sha256:** `ac297f4559461914a9c273ad230a9564937e4038997cc390a0cc359325d51f27`
+- **sha256:** `4071765124017d9c278e229c005050c7f20ad2f8ead7254fe7da47b2f064d254`
 - **Source snapshot:** 2026-04-24
 - **Stratification:** 50% Heme-onc / 50% Solid-onc; ≥5 trials per major DiseaseCategory
 - **Seed:** 20260426 (reproducible — re-running the generator with the
@@ -110,19 +110,64 @@ For a multi-hour clinical rater session, every single rating MUST be durable fro
 9. **Atomic writes** — write to `.tmp`, then rename. No half-written files even if the process dies mid-write.
 10. **Non-destructive resume** — uploaded JSONs MERGE with existing state. Existing ratings are never overwritten.
 
-## Running the analysis (after both raters submit)
+## End-to-end workflow (designed for ZERO REWORK)
 
-1. Each rater emails you their final JSON
-2. Save them as `validation_study/responses/peter.json` and `.../drsmith.json`
-3. Commit those files
-4. Run:
-   ```bash
-   python3 scripts/compute_validation_kappa.py --output study_report.md
-   ```
-5. The script writes:
-   - `study_report.md` — full markdown report (drop into manuscript)
-   - `validation_study/disagreements.csv` — adjudication queue
-6. Adjudicate the disagreements jointly with Rater B → record consensus labels → update `responses/` with adjudicated truth → re-run analysis to compute final pipeline-vs-gold-standard κ
+Six steps from "deploy" to "publication-ready report". **Step 0 is a
+pilot check that prevents wasting Rater B's time** if the classifier
+turns out to need work first. Pilot ratings count toward the real
+study — zero rework.
+
+```
+0. PILOT (PJ rates ~25 trials in the app, ~30 min)
+   → python3 scripts/pilot_check.py
+   → GREEN: invite Rater B for full study
+     YELLOW: investigate confusion matrices for weak axes
+     RED: fix classifier first, re-pilot
+   → Pilot ratings ARE the start of the real PJ submission
+
+1. Each rater clicks "Download FINAL submission" in the validation app
+   → emails JSON to peter.jeong@uk-koeln.de
+
+2. Peter saves each as validation_study/responses/<rater_id>.json
+   → git add + git commit + git push
+
+3. Peter visits the validation app's admin tab (?token=ADMIN-...)
+   → "⚖ Adjudication queue" sub-tab walks through every disagreement
+   → For each: shows trial info + both raters' calls + picks consensus
+   → Each pick auto-saves to validation_study/adjudicated_v1.json
+   → Resumable across sessions; "skip & revisit" supported
+
+4. Peter runs the one-shot final-report generator:
+     python3 scripts/build_final_report.py
+   → Writes validation_study/final_report.md containing:
+       - Sample provenance (sha256, pipeline SHA at sample-time)
+       - Methods paragraph (paste-ready)
+       - Inter-rater κ table per axis with 95% bootstrap CI (PRIMARY)
+       - Pipeline F1 vs gold standard per axis (PRIMARY for pipeline)
+       - Per-class precision/recall/F1 breakdowns
+       - Confusion matrices per axis × rater pair
+       - Per-rater operational stats
+       - Auto-flagged limitations + caveats
+       - Reproducibility recipe (commit SHA + sample sha256)
+
+5. Peter drops final_report.md sections into the manuscript.
+   → git commit final_report.md as the canonical record.
+```
+
+**Each script is also runnable standalone** if you want to inspect a
+sub-analysis:
+
+| Script | Output | Use |
+|---|---|---|
+| `pilot_check.py` | Per-axis macro F1 of single rater vs pipeline + GREEN/YELLOW/RED decision | Pre-study sanity check |
+| `compute_validation_kappa.py` | κ per axis + bootstrap CI + confusion matrices + disagreements CSV | Inspect inter-rater agreement only |
+| `compute_pipeline_f1.py` | Per-axis precision / recall / F1 vs gold standard | Inspect pipeline performance only |
+| `build_final_report.py` | The combined publication-grade markdown | The one-shot for manuscript |
+
+`build_final_report.py` calls both subreports internally, so you don't
+need to remember the order. It also auto-flags limitations
+(low-completion raters, missing adjudication, dirty pipeline worktree
+at sample time) so issues get surfaced before submission.
 
 ## Methodology summary (for the paper's Methods section)
 

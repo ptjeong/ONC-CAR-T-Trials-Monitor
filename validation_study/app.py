@@ -327,46 +327,107 @@ def _next_unrated_trial(state: dict, sample: dict) -> dict | None:
 
 
 def _format_trial_for_rater(trial: dict) -> None:
-    """Render the trial info — ONLY the raw evidence, no pipeline labels."""
+    """Render the trial info — ONLY the raw evidence, no pipeline labels.
+
+    Layout is optimized for one-glance scannability:
+      - Title at the top
+      - Metadata chip row (NCT, phase, status, sponsor, design)
+      - Conditions + Interventions side-by-side (the two highest-signal
+        fields for classification)
+      - Brief summary in a scrollable area (NOT collapsed — collapsing
+        added a click that ~5 sec of context-switching per trial)
+    """
     nct = trial["NCTId"]
     title = trial.get("BriefTitle") or "(no title)"
-    st.markdown(f"### {title}")
+    st.markdown(f"#### {title}")
     st.caption(
         f"[{nct}](https://clinicaltrials.gov/study/{nct}) · "
-        f"Phase: {trial.get('Phase') or '—'} · "
-        f"Status: {trial.get('OverallStatus') or '—'} · "
-        f"Sponsor: {trial.get('LeadSponsor') or '—'} · "
-        f"Trial design: {trial.get('TrialDesign') or '—'}"
+        f"**Phase:** {trial.get('Phase') or '—'} · "
+        f"**Status:** {trial.get('OverallStatus') or '—'} · "
+        f"**Sponsor:** {trial.get('LeadSponsor') or '—'} · "
+        f"**Design:** {trial.get('TrialDesign') or '—'}"
     )
+
+    # Conditions + Interventions side-by-side (highest-signal fields)
+    _ec1, _ec2 = st.columns(2)
+    with _ec1:
+        if trial.get("Conditions"):
+            st.markdown(f"**Conditions**")
+            st.markdown(f"<small>{trial['Conditions']}</small>",
+                        unsafe_allow_html=True)
+    with _ec2:
+        if trial.get("Interventions"):
+            st.markdown(f"**Interventions**")
+            st.markdown(f"<small>{trial['Interventions']}</small>",
+                        unsafe_allow_html=True)
+
+    # Brief summary always visible (no expander click)
     if trial.get("BriefSummary"):
-        with st.expander("**Brief summary**", expanded=True):
-            st.markdown(trial["BriefSummary"])
-    if trial.get("Conditions"):
-        st.markdown(f"**Conditions:** {trial['Conditions']}")
-    if trial.get("Interventions"):
-        st.markdown(f"**Interventions:** {trial['Interventions']}")
+        st.markdown(f"**Brief summary**")
+        st.markdown(
+            f"<div style='max-height:240px; overflow-y:auto; "
+            f"padding:8px 12px; background:#f8fafc; "
+            f"border-left:3px solid #cbd5e1; border-radius:4px; "
+            f"font-size:0.92em;'>{trial['BriefSummary']}</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _render_axis_input(axis: str, sample: dict, key: str) -> str:
-    """Render a single axis input. Returns the chosen value (or "")."""
+    """Render a single axis input. Returns the chosen value (or "").
+
+    Three input modes by axis type:
+      - Enumerable (Branch / ProductType / SponsorType): radio buttons
+      - Categorical with many levels (DiseaseCategory): dropdown +
+        "Other (specify)" text fallback
+      - Free-text-with-suggestions (DiseaseEntity / TargetCategory):
+        selectbox of the canonical vocabulary + "Other (specify)" text
+        fallback. Standardizes spelling so κ doesn't get artificially
+        deflated by 'DLBCL' vs 'Diffuse large B-cell lymphoma'.
+    """
     options = AXIS_OPTIONS.get(axis)
+
     if options == "_dynamic":
-        # DiseaseCategory — pull from the sample's pipeline labels
-        # (just for the option list — these aren't shown next to trials)
+        # DiseaseCategory — populated from the sample's pipeline labels
         cats = sorted({
             t["_pipeline"].get("DiseaseCategory") or ""
             for t in sample["trials"]
         } - {""})
-        options = cats + ["Other", "Unsure"]
-    elif options is None:
-        # Free text axis — allow any string
-        return st.text_input(
-            axis, key=key,
-            placeholder="Type a value, or 'Unsure' if unscorable",
-            help=AXIS_HELP[axis],
-        ).strip()
+        options = cats + ["Other (specify)", "Unsure"]
+        choice = st.selectbox(
+            axis, options=[""] + options, key=key,
+            help=AXIS_HELP[axis], index=0,
+            format_func=lambda x: "(pick one)" if not x else x,
+        )
+        if choice == "Other (specify)":
+            other = st.text_input(
+                f"Specify {axis}", key=f"{key}_other",
+                placeholder="Type the category you'd use",
+            ).strip()
+            return other or ""
+        return choice or ""
+
+    if options is None:
+        # Free-text-with-suggestions axis (DiseaseEntity, TargetCategory)
+        vocab = sample.get("autocomplete_vocab", {}).get(axis, [])
+        choices = [""] + sorted(vocab) + ["Other (specify)", "Unsure"]
+        choice = st.selectbox(
+            axis, options=choices, key=key,
+            help=AXIS_HELP[axis], index=0,
+            format_func=lambda x: ("(pick from canonical list, "
+                                    "or 'Other' to type)" if not x else x),
+        )
+        if choice == "Other (specify)":
+            other = st.text_input(
+                f"Specify {axis}", key=f"{key}_other",
+                placeholder="Type the value you'd use",
+            ).strip()
+            return other or ""
+        return choice or ""
+
+    # Enumerable axis — horizontal radio for tightness
     return st.radio(
-        axis, options=options, key=key, horizontal=False,
+        axis, options=options, key=key, horizontal=True,
         help=AXIS_HELP[axis], index=None,
     ) or ""
 
@@ -621,41 +682,280 @@ def _render_done(state: dict, rater_id: str) -> None:
 # Admin view (separate role)
 # ---------------------------------------------------------------------------
 
+_ADJUDICATED_PATH = APP_DIR / "adjudicated_v1.json"
+NON_RATING_LABELS_ADMIN = {"Unsure", "Skipped", "", None}
+
+
+def _load_adjudicated() -> dict:
+    """Load committed adjudicated gold-standard labels.
+
+    Schema: {nct_id: {axis: gold_label, ...}, "_meta": {...}}
+    """
+    if not _ADJUDICATED_PATH.exists():
+        return {"_meta": {
+            "schema_version": SCHEMA_VERSION,
+            "app_version": APP_VERSION,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }}
+    try:
+        return json.loads(_ADJUDICATED_PATH.read_text())
+    except json.JSONDecodeError:
+        return {"_meta": {"corrupted": True}}
+
+
+def _save_adjudicated(adj: dict) -> None:
+    """Atomic write of the adjudicated truth file."""
+    adj["_meta"] = {
+        **(adj.get("_meta") or {}),
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+        "schema_version": SCHEMA_VERSION,
+        "app_version": APP_VERSION,
+    }
+    _atomic_write_json(_ADJUDICATED_PATH, adj)
+
+
+def _disagreements(rater_docs: dict[str, dict]) -> list[dict]:
+    """List every (nct_id, axis) where two raters disagree (excluding
+    Unsure/Skipped, which aren't classifications).
+
+    Returns flat list, sorted by NCT then axis, suitable for sequential
+    moderator triage.
+    """
+    if len(rater_docs) < 2:
+        return []
+    rater_ids = sorted(rater_docs.keys())
+    out = []
+    a_id, b_id = rater_ids[0], rater_ids[1]  # only first pair for now
+    a_doc, b_doc = rater_docs[a_id], rater_docs[b_id]
+    common = sorted(set(a_doc.get("ratings", {})) & set(b_doc.get("ratings", {})))
+    for nct in common:
+        a_rec = a_doc["ratings"][nct]
+        b_rec = b_doc["ratings"][nct]
+        for axis in AXIS_OPTIONS:
+            la = a_rec.get("labels", {}).get(axis)
+            lb = b_rec.get("labels", {}).get(axis)
+            if la in NON_RATING_LABELS_ADMIN or lb in NON_RATING_LABELS_ADMIN:
+                continue
+            if la != lb:
+                out.append({
+                    "nct_id": nct, "axis": axis,
+                    "rater_a": a_id, "rater_b": b_id,
+                    "label_a": la, "label_b": lb,
+                    "notes_a": a_rec.get("notes", ""),
+                    "notes_b": b_rec.get("notes", ""),
+                })
+    return out
+
+
 def _render_admin(rater_id: str) -> None:
     sample = _load_sample()
     st.title(f"⚙ Admin — {rater_id}")
     st.caption(f"Sample: {sample['sha256'][:16]}… · N={sample['n']} · "
                f"Schema v{SCHEMA_VERSION} · App v{APP_VERSION}")
 
-    # Per-rater progress
-    rater_files = sorted(RESPONSES_DIR.glob("*.json"))
-    if not rater_files:
-        st.info("No committed responses yet. Raters' final submissions go in "
-                f"`{RESPONSES_DIR.relative_to(REPO_ROOT)}/`.")
-        return
-    st.subheader("Rater progress (committed)")
-    rows = []
-    for rp in rater_files:
-        try:
-            doc = json.loads(rp.read_text())
-        except Exception:
-            continue
-        n_done = len(doc.get("ratings", {}))
-        n_skipped = sum(1 for r in doc.get("ratings", {}).values()
-                        if r.get("skipped"))
-        rows.append({
-            "Rater": doc.get("rater_id", rp.stem),
-            "N rated": n_done,
-            "N skipped": n_skipped,
-            "Last updated": doc.get("last_updated", "—"),
-            "Schema": doc.get("schema_version", "?"),
-        })
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    tab_status, tab_adj = st.tabs(["📊 Rater status", "⚖ Adjudication queue"])
 
-    st.info("κ analysis + adjudication tools live in "
-            "`scripts/compute_validation_kappa.py` (run locally with the "
-            "responses committed). The next phase will surface the "
-            "adjudication queue here for in-app disagreement resolution.")
+    # --- Tab 1: rater status ---
+    with tab_status:
+        rater_files = sorted(RESPONSES_DIR.glob("*.json"))
+        if not rater_files:
+            st.info(
+                "No committed rater responses yet. Final submissions go in "
+                f"`{RESPONSES_DIR.relative_to(REPO_ROOT)}/`. Each rater "
+                "emails their final JSON, you commit it as `<rater_id>.json`."
+            )
+            return
+        rows = []
+        for rp in rater_files:
+            try:
+                doc = json.loads(rp.read_text())
+            except Exception:
+                continue
+            n_done = len(doc.get("ratings", {}))
+            n_skipped = sum(1 for r in doc.get("ratings", {}).values()
+                            if r.get("skipped"))
+            durations = [r.get("duration_seconds", 0)
+                         for r in doc.get("ratings", {}).values()
+                         if not r.get("skipped")]
+            median_s = (sorted(durations)[len(durations) // 2]
+                        if durations else 0)
+            rows.append({
+                "Rater": doc.get("rater_id", rp.stem),
+                "N rated": n_done,
+                "N skipped": n_skipped,
+                "Median time/trial (s)": median_s,
+                "Last updated": doc.get("last_updated", "—"),
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+        st.info(
+            "When all raters have submitted: run "
+            "`python3 scripts/build_final_report.py` locally — "
+            "produces the publication-ready markdown with κ + bootstrap "
+            "CI + pipeline F1 + confusion matrices in one shot."
+        )
+
+    # --- Tab 2: adjudication ---
+    with tab_adj:
+        st.markdown("### Adjudicate disagreements")
+        st.caption(
+            "Walk through every trial × axis where the two raters "
+            "disagreed. The label you pick becomes the gold-standard "
+            "ground truth for computing the pipeline's per-axis F1. "
+            "All adjudications are saved to "
+            f"`{_ADJUDICATED_PATH.relative_to(REPO_ROOT)}` after each pick "
+            "so partial sessions are durable."
+        )
+
+        # Load the committed rater files
+        rater_docs = {}
+        for rp in sorted(RESPONSES_DIR.glob("*.json")):
+            try:
+                doc = json.loads(rp.read_text())
+                rater_docs[doc.get("rater_id", rp.stem)] = doc
+            except Exception:
+                continue
+        if len(rater_docs) < 2:
+            st.warning(
+                f"Need ≥2 committed rater files; have {len(rater_docs)}. "
+                "Adjudication queue activates once both raters submit."
+            )
+            return
+
+        disagreements = _disagreements(rater_docs)
+        adj = _load_adjudicated()
+        adjudicated_keys = {
+            k for k in adj if k != "_meta"
+            for _ in [None]  # noqa
+        }
+        # Outstanding queue = disagreements not yet adjudicated AND
+        # not session-skipped (lets the moderator deprioritize a hard
+        # one and come back later in the same session).
+        def _adj_key(d):
+            return f"{d['nct_id']}::{d['axis']}"
+        skipped_keys = st.session_state.get("adj_skipped_keys", set())
+        outstanding = [d for d in disagreements
+                       if _adj_key(d) not in adj
+                       and _adj_key(d) not in skipped_keys]
+
+        _m1, _m2, _m3 = st.columns(3)
+        _m1.metric("Disagreed pairs", len(disagreements))
+        _m2.metric("Adjudicated", sum(1 for k in adj if k != "_meta"))
+        _m3.metric("Outstanding (not skipped)", len(outstanding))
+
+        if not outstanding:
+            st.success(
+                "🎉 All disagreements adjudicated. Run "
+                "`python3 scripts/compute_pipeline_f1.py` "
+                "to compute pipeline F1 against the gold standard."
+            )
+            with st.expander("Review/edit adjudicated truth"):
+                rows = [{"NCT": k.split("::")[0], "Axis": k.split("::")[1],
+                         "Gold label": v}
+                        for k, v in adj.items() if k != "_meta"]
+                st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+            return
+
+        # Show the next outstanding disagreement
+        d = outstanding[0]
+        nct, axis = d["nct_id"], d["axis"]
+        st.markdown(f"#### Trial {nct} — axis: **{axis}**")
+
+        # Look up the trial in the sample for context
+        trial = next((t for t in sample["trials"] if t["NCTId"] == nct), None)
+        if trial:
+            with st.expander("Trial info", expanded=True):
+                _format_trial_for_rater(trial)
+
+        st.markdown(f"##### Rater calls (disagreement)")
+        _ac1, _ac2 = st.columns(2)
+        with _ac1:
+            st.markdown(f"**{d['rater_a']}** said: `{d['label_a']}`")
+            if d["notes_a"]:
+                st.caption(f"Notes: _{d['notes_a']}_")
+        with _ac2:
+            st.markdown(f"**{d['rater_b']}** said: `{d['label_b']}`")
+            if d["notes_b"]:
+                st.caption(f"Notes: _{d['notes_b']}_")
+
+        # Picker for the consensus / gold-standard label
+        st.markdown(f"##### Your decision")
+
+        # Pre-compose a sensible option list: rater_a label, rater_b label,
+        # plus the canonical option set for this axis (or the autocomplete
+        # vocab for free-text axes).
+        seed_options = [d["label_a"], d["label_b"]]
+        axis_options = AXIS_OPTIONS.get(axis)
+        if axis_options is None:
+            vocab = sample.get("autocomplete_vocab", {}).get(axis, [])
+            extra = vocab
+        elif axis_options == "_dynamic":
+            extra = sorted({
+                t["_pipeline"].get("DiseaseCategory") or ""
+                for t in sample["trials"]
+            } - {""})
+        else:
+            extra = [o for o in axis_options if o not in NON_RATING_LABELS_ADMIN]
+        all_options = sorted(set(seed_options + list(extra)))
+
+        gold = st.selectbox(
+            "Gold-standard label",
+            options=[""] + all_options + ["Other (specify)"],
+            key=f"adj_gold_{nct}_{axis}",
+            format_func=lambda x: "(pick the consensus label)" if not x else x,
+        )
+        if gold == "Other (specify)":
+            other = st.text_input(
+                "Specify gold label",
+                key=f"adj_other_{nct}_{axis}",
+            ).strip()
+            gold = other or ""
+
+        rationale = st.text_area(
+            "Rationale (recorded, public, becomes part of methodology)",
+            key=f"adj_rationale_{nct}_{axis}",
+            placeholder="e.g. 'CT.gov primary condition is GBM, not generic CNS'",
+        )
+
+        _bc1, _bc2 = st.columns([0.7, 0.3])
+        with _bc1:
+            if st.button(
+                "Skip this disagreement (revisit later)",
+                key=f"adj_skip_{nct}_{axis}",
+            ):
+                # Move to next by NOT recording — the queue auto-advances
+                # because outstanding[0] is recomputed each render.
+                # But we need to actually skip this one in the current
+                # render — use a session-level skip set.
+                skipped = st.session_state.setdefault("adj_skipped_keys", set())
+                skipped.add(_adj_key(d))
+                st.rerun()
+        with _bc2:
+            if st.button(
+                "Record + next →",
+                key=f"adj_record_{nct}_{axis}",
+                type="primary", use_container_width=True,
+            ):
+                if not gold:
+                    st.error("Pick a gold-standard label first.")
+                    return
+                adj[_adj_key(d)] = {
+                    "nct_id": nct, "axis": axis,
+                    "gold_label": gold,
+                    "rater_a": d["rater_a"], "label_a": d["label_a"],
+                    "rater_b": d["rater_b"], "label_b": d["label_b"],
+                    "rationale": rationale.strip(),
+                    "adjudicated_by": rater_id,
+                    "adjudicated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                _save_adjudicated(adj)
+                st.toast(f"Adjudicated {nct} / {axis} → {gold}",
+                         icon="⚖")
+                st.rerun()
+
+        if skipped_keys:
+            st.caption(f"Skipped in this session: {len(skipped_keys)} "
+                       "(will resurface on next session)")
 
 
 # ---------------------------------------------------------------------------

@@ -5440,6 +5440,163 @@ with tab_pub:
             "fig9_antigen_branch_matrix.csv", "text/csv",
         )
 
+    # ---------------------------------------------------------------------------
+    # FIG 10 — Solid-tumour antigen timeline
+    # ---------------------------------------------------------------------------
+    # Strip plot, x = StartYear of first CAR-T trial in onc using that
+    # (antigen, solid-disease-category) pair, y = antigen sorted by year of
+    # first appearance. Faceted by solid-tumour DiseaseCategory. Tracks the
+    # field's expansion frontier — when each antigen × indication barrier fell.
+    #
+    # Pipeline-unique: requires the closed-vocab antigen list × Tier-3 disease
+    # entity × StartYear, joined into a "first appearance per (antigen,
+    # category)" matrix. The editorial-grade narrative ("the field crossed
+    # each barrier in this order") that nothing else can produce.
+
+    _pub_header(
+        "10", "Solid-tumour antigen × indication frontier",
+        "First clinical appearance per (antigen × disease category) pair "
+        "in the solid-tumour cohort. Each marker is the StartYear of the "
+        "first CAR-T trial registering that combination on CT.gov. "
+        "Antigens sorted by year of first solid-tumour appearance; "
+        "disease categories color-coded.",
+    )
+
+    _solid_df = df_filt[df_filt["Branch"] == "Solid-onc"].copy()
+    _solid_df = _solid_df[~_solid_df["TargetCategory"].isin(_PLATFORM_LABELS)]
+    _solid_df = _solid_df[~_solid_df["TargetCategory"].isin(
+        ["CAR-T_unspecified", "Other_or_unknown"]
+    )]
+    _solid_df = _solid_df.dropna(subset=["StartYear", "DiseaseCategory"])
+
+    if _solid_df.empty:
+        st.info("Insufficient solid-tumour data for the antigen-frontier view.")
+    else:
+        # First-appearance matrix: (antigen, category) → first StartYear
+        _first = (
+            _solid_df.groupby(["TargetCategory", "DiseaseCategory"])["StartYear"]
+            .min().reset_index()
+            .rename(columns={"StartYear": "FirstYear"})
+        )
+        # Total trials per (antigen, category) → marker size
+        _counts = (
+            _solid_df.groupby(["TargetCategory", "DiseaseCategory"])
+            .size().reset_index(name="Trials")
+        )
+        _first = _first.merge(_counts, on=["TargetCategory", "DiseaseCategory"])
+
+        # Sort antigens by year of first solid appearance (ascending)
+        _antigen_first = (
+            _first.groupby("TargetCategory")["FirstYear"].min()
+            .sort_values().index.tolist()
+        )
+        _first["TargetCategory"] = pd.Categorical(
+            _first["TargetCategory"], categories=_antigen_first, ordered=True,
+        )
+        _first = _first.sort_values("TargetCategory")
+
+        # Build the strip plot — one trace per disease category for color legend
+        _solid_cats = sorted(_first["DiseaseCategory"].unique())
+        # NEJM-grade categorical palette (no neon, no rainbow — earth + jewel tones)
+        _cat_palette = [
+            "#0b3d91", "#b45309", "#0f766e", "#7c3aed", "#be123c",
+            "#15803d", "#a16207", "#1e40af", "#7e22ce", "#9f1239",
+            "#0e7490", "#854d0e",
+        ]
+        _cat_color_map = {
+            cat: _cat_palette[i % len(_cat_palette)]
+            for i, cat in enumerate(_solid_cats)
+        }
+
+        fig10 = go.Figure()
+        for cat in _solid_cats:
+            sub = _first[_first["DiseaseCategory"] == cat]
+            fig10.add_trace(go.Scatter(
+                x=sub["FirstYear"],
+                y=sub["TargetCategory"].astype(str),
+                mode="markers",
+                marker=dict(
+                    size=np.clip(sub["Trials"].values * 2 + 8, 8, 32),
+                    color=_cat_color_map[cat],
+                    line=dict(width=1, color="white"),
+                    opacity=0.85,
+                ),
+                name=cat,
+                hovertemplate=(
+                    f"<b>{cat}</b><br>"
+                    "Antigen: %{y}<br>"
+                    "First trial: %{x:.0f}<br>"
+                    "Total trials: %{marker.size}<extra></extra>"
+                ),
+            ))
+
+        # Compute year-axis range from data
+        _min_yr = int(_first["FirstYear"].min())
+        _max_yr = int(_first["FirstYear"].max())
+        fig10.update_layout(
+            **PUB_BASE,
+            height=max(360, len(_antigen_first) * 28 + 120),
+            margin=dict(l=140, r=40, t=40, b=80),
+            xaxis=dict(
+                title=dict(text="Year of first CAR-T trial in solid tumour",
+                           font=dict(size=_LAB_SZ, color=_AX_COLOR)),
+                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                range=[_min_yr - 1, _max_yr + 1],
+                showgrid=True, gridcolor=_GRID_CLR,
+                dtick=2,
+            ),
+            yaxis=dict(
+                title=dict(text="Antigen (sorted by first appearance)",
+                           font=dict(size=_LAB_SZ, color=_AX_COLOR)),
+                tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
+                showgrid=False,
+                autorange="reversed",
+            ),
+            legend=dict(
+                title=dict(text="Disease category",
+                           font=dict(size=_LAB_SZ, color=_AX_COLOR)),
+                font=dict(size=10, color=_AX_COLOR),
+                orientation="v", x=1.02, y=1.0,
+            ),
+            showlegend=True,
+        )
+        st.plotly_chart(fig10, width="stretch", config=PUB_EXPORT)
+
+        # Editorial caption — auto-derives the year-by-year frontier
+        _frontier_summary = []
+        for yr in sorted(_first["FirstYear"].unique())[:6]:
+            antigens_that_year = sorted(
+                _first[_first["FirstYear"] == yr]["TargetCategory"]
+                .astype(str).unique()
+            )
+            if antigens_that_year:
+                _frontier_summary.append(
+                    f"<b>{int(yr)}</b>: {', '.join(antigens_that_year[:5])}"
+                    + (f" (+{len(antigens_that_year) - 5} more)"
+                       if len(antigens_that_year) > 5 else "")
+                )
+        st.markdown(
+            '<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
+            'Marker size proportional to total trial count for that '
+            '(antigen × indication) pair. Frontier expansion: '
+            + " · ".join(_frontier_summary)
+            + ".</div>",
+            unsafe_allow_html=True,
+        )
+        _pub_caption(len(_solid_df))
+
+        # CSV export
+        _fig10_csv = _first.copy()
+        _fig10_csv["TargetCategory"] = _fig10_csv["TargetCategory"].astype(str)
+        st.download_button(
+            "Fig 10 data (CSV)",
+            _csv_with_provenance(
+                _fig10_csv,
+                "Fig 10 — Solid-tumour antigen × indication frontier",
+            ),
+            "fig10_solid_antigen_frontier.csv", "text/csv",
+        )
+
 
 # ---------------------------------------------------------------------------
 # TAB: Methods & Appendix

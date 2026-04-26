@@ -4997,6 +4997,85 @@ with tab_pub:
     c3.metric("Solid top antigen", f"{top_s['Target']} ({top_s['Trials']})" if top_s is not None else "—")
     c4.metric("Distinct solid antigens", solid_diverse)
 
+    # ------------------------------------------------------------------
+    # Approved-product overlay panel — onc-only (rheum has zero approvals).
+    # Shows the reader where the field is past validation vs still
+    # exploratory. The "approved antigen plus N follow-on trials"
+    # pattern is itself an insight: approval doesn't close research,
+    # it opens a new wave of refinements.
+    # ------------------------------------------------------------------
+    _approved_targets = sorted({p["target"] for p in APPROVED_PRODUCTS
+                                 if p.get("target")})
+    _approval_rows = []
+    for tgt in _approved_targets:
+        fda_n = sum(
+            1 for p in APPROVED_PRODUCTS
+            if p["target"] == tgt and p["regulator"] == "FDA"
+        )
+        ema_n = sum(
+            1 for p in APPROVED_PRODUCTS
+            if p["target"] == tgt and p["regulator"] == "EMA"
+        )
+        nmpa_n = sum(
+            1 for p in APPROVED_PRODUCTS
+            if p["target"] == tgt and p["regulator"] == "NMPA"
+        )
+        # Current ongoing trial counts (from the filtered data — respects sidebar)
+        current_h = int(heme_tgt.loc[heme_tgt["Target"] == tgt, "Trials"].sum()) if not heme_tgt.empty else 0
+        current_s = int(solid_tgt.loc[solid_tgt["Target"] == tgt, "Trials"].sum()) if not solid_tgt.empty else 0
+        # Earliest approval year for context
+        first_year = min(
+            (p["year"] for p in APPROVED_PRODUCTS if p["target"] == tgt),
+            default=None,
+        )
+        _approval_rows.append({
+            "Antigen": tgt,
+            "First approval": first_year,
+            "FDA": fda_n,
+            "EMA": ema_n,
+            "NMPA": nmpa_n,
+            "Trials in current view": current_h + current_s,
+        })
+
+    if _approval_rows:
+        st.markdown(
+            '<div class="pub-fig-caption" style="margin-top: 1rem;">'
+            '<b>Approved CAR-T products by antigen.</b> '
+            'CD19 and BCMA are the only antigens with regulatory '
+            'approval to date (last reviewed '
+            f'{APPROVED_PRODUCTS_LAST_REVIEWED}). Trial counts in the '
+            'rightmost column reflect the current sidebar filter — '
+            'ongoing investigation continues in earlier-line, '
+            'longer-follow-up, and head-to-head settings well after '
+            'first approval.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.dataframe(
+            pd.DataFrame(_approval_rows),
+            hide_index=True, width="stretch",
+            column_config={
+                "First approval": st.column_config.NumberColumn(
+                    "First approval", format="%d",
+                    help="Earliest approval year across all regulators.",
+                ),
+                "FDA": st.column_config.NumberColumn(
+                    "FDA approvals", format="%d",
+                ),
+                "EMA": st.column_config.NumberColumn(
+                    "EMA approvals", format="%d",
+                ),
+                "NMPA": st.column_config.NumberColumn(
+                    "NMPA approvals", format="%d",
+                ),
+                "Trials in current view": st.column_config.NumberColumn(
+                    "Trials in current view", format="%d",
+                    help="Total ongoing CAR-T trials targeting this "
+                         "antigen in the currently-filtered cohort.",
+                ),
+            },
+        )
+
     fig6_csv = pd.concat(
         [heme_tgt.assign(Branch="Heme-onc"), solid_tgt.assign(Branch="Solid-onc")],
         ignore_index=True,

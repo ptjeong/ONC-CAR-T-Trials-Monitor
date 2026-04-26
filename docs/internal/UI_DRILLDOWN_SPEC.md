@@ -1,6 +1,15 @@
-# Per-trial drilldown UI — canonical spec v1.0
+# Per-trial drilldown UI — canonical spec v1.1
 
 Status: **active** as of 2026-04-26.
+
+Changelog:
+- **v1.1** (2026-04-26): codify `compute_confidence_factors` return
+  schema explicitly (resolves rheum's round-4 quibble — both apps
+  now use the nested `{factors: {axis: {score, driver}}}` shape, no
+  parallel `drivers` list with redundant fields). Additive change;
+  no breaking semantics for existing renderers.
+- **v1.0** (2026-04-26): initial canonical spec; both apps
+  conforming.
 Applies to: `onc-car-t-trials-monitor` AND `rheum-car-t-trials-monitor`.
 Both apps declare conformance to this spec via `_render_trial_drilldown`.
 
@@ -140,25 +149,61 @@ are surfaced from the pipeline's existing source-tag columns
 The full per-axis explanation lives in the "How was this classified?"
 expander; the inline tag is the at-a-glance hint.
 
-## Confidence model
+## Confidence model — canonical schema (v1.1)
 
 Both apps surface the multi-factor confidence model
-(`compute_confidence_factors(row)`) inside the rationale expander:
+(`compute_confidence_factors(row)`) inside the rationale expander.
+
+**Canonical return shape** — both apps MUST emit exactly this:
 
 ```python
 {
-  "score": 0.72,
-  "level": "medium",
-  "factors": {
-    "Branch":          {"score": 1.00, "driver": "Clean single-branch"},
-    "DiseaseCategory": {"score": 1.00, "driver": "Specific category match"},
-    "DiseaseEntity":   {"score": 0.55, "driver": "Basket-level fallback"},
-    "TargetCategory":  {"score": 1.00, "driver": "Antigen identified: CD19"},
-    "ProductType":     {"score": 0.50, "driver": "Defaulted to autologous"},
-  },
-  "drivers": [(axis, driver), ...]
+  "score":   float,           # composite ∈ [0, 1], unweighted mean of factor scores
+  "level":   str,             # "high" | "medium" | "low" — bucket calibrated to legacy
+                              # composite ≥ 0.85 → "high", ≥ 0.55 → "medium", < 0.55 → "low"
+  "factors": dict[str, dict], # see below — NESTED, not flat
+  "drivers": list[tuple[str, str]],   # k-worst (axis, driver) pairs, default k=3
 }
 ```
+
+`factors` is a NESTED dict — one entry per axis, each value is a sub-dict:
+
+```python
+"factors": {
+  "Branch":          {"score": 1.00, "driver": "Clean single-branch"},
+  "DiseaseCategory": {"score": 1.00, "driver": "Specific category match"},
+  "DiseaseEntity":   {"score": 0.55, "driver": "Basket-level fallback"},
+  "TargetCategory":  {"score": 1.00, "driver": "Antigen identified: CD19"},
+  "ProductType":     {"score": 0.50, "driver": "Defaulted to autologous"},
+}
+```
+
+`drivers` is a pre-computed convenience: the `k` axes with the lowest
+sub-scores (default `k=3`), as `(axis_name, driver_text)` pairs.
+Renderers use this to populate the "What's holding the score down"
+caption without re-sorting `factors` themselves.
+
+### Why nested, not flat
+
+Rheum's pre-v1.1 implementation had a flat shape:
+`{factors: {axis: float}}` plus a parallel `drivers: [(axis, score, reason)]`
+list. Both shapes carry the same information, but the nested form is
+canonical because:
+
+1. **Single source of truth per axis.** Nested `factors[axis]["driver"]`
+   is the ONLY place the per-axis driver text lives. Flat-with-parallel
+   duplicates it (driver appears in both `drivers` list and is implied
+   by axis identity in `factors`).
+2. **Trivially serializable.** Nested dicts round-trip through JSON
+   without tuple-list coercion gymnastics.
+3. **Cross-app consumers** (any future `cart-trials-core` package, or
+   the methods-paper analysis scripts) get a single shape to bind
+   against.
+
+Rheum's flat-shape implementation should flip on next snapshot regen
+or whenever `compute_confidence_factors` is touched. Pure refactor —
+no UI consumer change required since renderers already extract
+`factors[axis]["driver"]` directly.
 
 The legacy 3-bucket `ClassificationConfidence` (high/medium/low) is
 preserved bit-for-bit in both apps for snapshot back-compat. The
@@ -166,7 +211,7 @@ multi-factor model lives alongside it as a per-axis read-only enrichment.
 
 ## Versioning
 
-Current version: **v1.0** (2026-04-26).
+Current version: **v1.1** (2026-04-26).
 
 When this spec changes:
 1. Bump version in this file's header
@@ -180,5 +225,12 @@ field in the metadata grid), bump the minor (v1.1).
 
 ## Reference implementations
 
-- `onc-car-t-trials-monitor` `app.py:_render_trial_drilldown` @ v1.0 conforming
-- `rheum-car-t-trials-monitor` `app.py:_render_trial_drilldown` @ pending v1.0 port (currently inline; see cross-app sync brief)
+- `onc-car-t-trials-monitor` `app.py:_render_trial_drilldown` @ commit `b259463`,
+  `pipeline.compute_confidence_factors` @ commit `78e809b` — **v1.1 conforming**.
+  Verified output shape matches the canonical schema above.
+- `rheum-car-t-trials-monitor` `app.py:_render_trial_drilldown` @ commit `4cce635`
+  — **v1.0 conforming, pending v1.1 micro-update**: flip
+  `compute_confidence_factors` from flat `{axis: float}` to nested
+  `{axis: {score, driver}}` per the canonical schema above. Pure
+  refactor; UI consumers already use the nested form via the parallel
+  drivers list.

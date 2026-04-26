@@ -2003,38 +2003,55 @@ with st.sidebar.expander("Data quality / missing classifications", expanded=Fals
 
 mask = pd.Series(True, index=df.index)
 
-if branch_sel:
+# DEFENSIVE FILTER PATTERN — only narrow when the user has actually
+# selected a SUBSET. Two reasons:
+#   1. NaN-exclusion bug: `df[col].isin(all_options)` returns False for
+#      NaN values, so trials with no value for that column get silently
+#      excluded even when the user's intent is "don't filter on this".
+#      Hit production on the Country filter (139 NaN-Countries trials
+#      were vanishing from every chart and CSV export). Same risk on
+#      every .isin() filter.
+#   2. Performance: a vacuous full-vocab .isin check is wasted CPU on
+#      every rerun.
+# Pattern: `if sel and len(sel) < len(options): mask &= df[col].isin(sel)`.
+
+if branch_sel and len(branch_sel) < len(branch_options_all):
     mask &= df["Branch"].isin(branch_sel)
-if category_sel:
+if category_sel and len(category_sel) < len(category_options_all):
     mask &= df["DiseaseCategory"].isin(category_sel)
-if entity_sel:
+if entity_sel and len(entity_sel) < len(entity_options_all):
     entity_set = set(entity_sel)
     primary_match = df["DiseaseEntity"].isin(entity_set)
     list_match = df["DiseaseEntities"].fillna("").apply(
         lambda s: any(e.strip() in entity_set for e in str(s).split("|") if e.strip())
     )
     mask &= (primary_match | list_match)
-if design_sel:
+if design_sel and len(design_sel) < len(design_options):
     mask &= df["TrialDesign"].isin(design_sel)
-if phase_sel:
+if phase_sel and len(phase_sel) < len(phase_options):
     selected_phase_norm = [k for k, v in PHASE_LABELS.items() if v in phase_sel]
     mask &= df["PhaseNormalized"].isin(selected_phase_norm)
-if target_sel:
+if target_sel and len(target_sel) < len(target_options):
     mask &= df["TargetCategory"].isin(target_sel) | df["TargetCategory"].isin(_PLATFORM_LABELS)
-if status_sel:
+if status_sel and len(status_sel) < len(status_options):
     mask &= df["OverallStatus"].isin(status_sel)
-if product_sel:
+if product_sel and len(product_sel) < len(product_options):
     mask &= df["ProductType"].isin(product_sel)
-if modality_sel:
+if modality_sel and len(modality_sel) < len(modality_options):
     mask &= df["Modality"].isin(modality_sel)
-if country_sel:
+if country_sel and len(country_sel) < len(country_options):
+    # The most-bitten case before this audit — CT.gov doesn't always
+    # populate the locations module, so 139 NaN-Countries trials were
+    # vanishing from every view by default. Same defensive pattern.
     country_pattern = "|".join([re.escape(c) for c in country_sel])
-    mask &= df["Countries"].fillna("").str.contains(country_pattern, case=False, na=False, regex=True)
-if age_sel:
+    mask &= df["Countries"].fillna("").str.contains(
+        country_pattern, case=False, na=False, regex=True,
+    )
+if age_sel and len(age_sel) < len(age_options):
     mask &= df["AgeGroup"].isin(age_sel)
-if sponsor_sel:
+if sponsor_sel and len(sponsor_sel) < len(sponsor_options):
     mask &= df["SponsorType"].isin(sponsor_sel)
-if conf_sel:
+if conf_sel and len(conf_sel) < len(conf_present):
     mask &= df["ClassificationConfidence"].isin(conf_sel)
 
 _df_filt = df[mask].copy()

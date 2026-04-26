@@ -5284,6 +5284,162 @@ with tab_pub:
     else:
         st.info("Insufficient disease-target data for heatmap.")
 
+    # ---------------------------------------------------------------------------
+    # FIG 9 — Antigen × Branch heatmap with phase encoding
+    # ---------------------------------------------------------------------------
+    # Three-row × N-antigen matrix (Heme / Solid / Mixed). Cell value = trial
+    # count; cell text = "N · ph X" where X is the furthest phase reached.
+    # Designed to answer the question Fig 8 only hints at via row-coloring:
+    # "which antigens are heme-restricted, which are solid-restricted, which
+    # cross both branches".
+    #
+    # Pipeline-unique because it requires the closed-vocab antigen list AND
+    # the binary heme/solid Branch split AND the ordinal Phase mapping.
+
+    _pub_header(
+        "9", "Antigen × Branch matrix with phase encoding",
+        "Trial counts per (antigen × branch) cell in the current filter, "
+        "annotated with the furthest phase reached. Shows which antigens "
+        "are restricted to heme, restricted to solid, or crossing both "
+        "branches. Antigens sorted by total trial count; platform labels "
+        "(CAR-NK / CAR-Treg / CAAR-T / CAR-γδ T) excluded so the matrix "
+        "shows specific antigens only.",
+    )
+
+    # Build the matrix
+    _ab_df = df_filt.copy()
+    _ab_df = _ab_df[~_ab_df["TargetCategory"].isin(_PLATFORM_LABELS)]
+    _ab_df = _ab_df[~_ab_df["TargetCategory"].isin(
+        ["CAR-T_unspecified", "Other_or_unknown"]
+    )]
+    if _ab_df.empty:
+        st.info("Insufficient antigen-branch data for heatmap.")
+    else:
+        _branch_order = ["Heme-onc", "Solid-onc", "Mixed"]
+        _ab_df = _ab_df[_ab_df["Branch"].isin(_branch_order)]
+        # Top-N antigens by total trial count
+        _top_ab_targets = (
+            _ab_df["TargetCategory"].value_counts().head(25).index.tolist()
+        )
+        _ab_df = _ab_df[_ab_df["TargetCategory"].isin(_top_ab_targets)]
+
+        # Pivot for trial counts
+        _ab_counts = (
+            _ab_df.groupby(["Branch", "TargetCategory"], observed=True)
+            .size().unstack(fill_value=0)
+            .reindex(index=_branch_order, columns=_top_ab_targets, fill_value=0)
+        )
+        # Furthest phase per (Branch, TargetCategory) — used for cell labels
+        _phase_rank = {p: i for i, p in enumerate(PHASE_ORDER) if p != "Unknown"}
+        def _max_phase(grp: pd.DataFrame) -> str:
+            ranks = [_phase_rank.get(p, -1) for p in grp["PhaseNormalized"]]
+            valid = [r for r in ranks if r >= 0]
+            if not valid:
+                return ""
+            top = max(valid)
+            for p, r in _phase_rank.items():
+                if r == top:
+                    return PHASE_LABELS.get(p, p).replace("Phase ", "ph ")
+            return ""
+        _phase_pivot = (
+            _ab_df.groupby(["Branch", "TargetCategory"], observed=True)
+            .apply(_max_phase, include_groups=False)
+            .unstack(fill_value="")
+            .reindex(index=_branch_order, columns=_top_ab_targets, fill_value="")
+        )
+
+        # Cell text: "N · ph X" (omit phase if N == 0)
+        _ab_text = np.empty_like(_ab_counts.values, dtype=object)
+        for i in range(_ab_counts.shape[0]):
+            for j in range(_ab_counts.shape[1]):
+                n = int(_ab_counts.iat[i, j])
+                ph = _phase_pivot.iat[i, j]
+                if n == 0:
+                    _ab_text[i, j] = ""
+                elif ph:
+                    _ab_text[i, j] = f"{n}<br><span style='font-size:9px'>{ph}</span>"
+                else:
+                    _ab_text[i, j] = str(n)
+
+        _z = _ab_counts.values.astype(float)
+        _z_masked = np.where(_z == 0, np.nan, _z)
+
+        fig9 = go.Figure(data=go.Heatmap(
+            z=_z_masked,
+            x=_top_ab_targets,
+            y=_branch_order,
+            text=_ab_text,
+            texttemplate="%{text}",
+            textfont=dict(size=11, color="#0b1220"),
+            colorscale=[[0, "#dbeafe"], [0.4, "#93c5fd"],
+                         [0.7, "#1d4ed8"], [1, "#0b3d91"]],
+            colorbar=dict(
+                title=dict(text="Trials", font=dict(size=11, color=_AX_COLOR)),
+                tickfont=dict(size=10, color=_AX_COLOR),
+                thickness=14, len=0.55,
+            ),
+            hovertemplate="Branch: %{y}<br>Antigen: %{x}<br>Trials: %{z}<extra></extra>",
+            hoverongaps=False,
+        ))
+        fig9.update_layout(
+            **PUB_BASE,
+            height=320,
+            margin=dict(l=110, r=40, t=40, b=120),
+            xaxis=dict(
+                tickangle=-45, tickfont=dict(size=11, color=_AX_COLOR),
+                showgrid=False,
+            ),
+            yaxis=dict(
+                tickfont=dict(size=12, color=_AX_COLOR), showgrid=False,
+            ),
+        )
+        st.plotly_chart(fig9, width="stretch", config=PUB_EXPORT)
+
+        # Quick summary callout — "X heme-locked / Y solid-locked / Z crossing"
+        _heme_locked = []
+        _solid_locked = []
+        _crossing = []
+        for tgt in _top_ab_targets:
+            heme_n = int(_ab_counts.at["Heme-onc", tgt])
+            solid_n = int(_ab_counts.at["Solid-onc", tgt])
+            mixed_n = int(_ab_counts.at["Mixed", tgt]) if "Mixed" in _ab_counts.index else 0
+            if heme_n > 0 and solid_n == 0 and mixed_n == 0:
+                _heme_locked.append(tgt)
+            elif solid_n > 0 and heme_n == 0 and mixed_n == 0:
+                _solid_locked.append(tgt)
+            elif heme_n > 0 and solid_n > 0:
+                _crossing.append(tgt)
+
+        st.markdown(
+            '<div class="pub-fig-caption" style="margin-top: 0.1rem;">'
+            '<b>White cells = no trials</b> (every shaded cell labelled with '
+            'count and furthest phase reached). '
+            f'Heme-restricted antigens (top 25): {", ".join(_heme_locked) or "—"}. '
+            f'Solid-restricted antigens: {", ".join(_solid_locked) or "—"}. '
+            f'Crossing both branches: {", ".join(_crossing) or "—"}.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _pub_caption(len(df_filt))
+
+        # CSV export
+        _fig9_csv = (
+            _ab_counts.reset_index().melt(
+                id_vars="Branch", var_name="Antigen", value_name="Trials",
+            )
+        )
+        _fig9_csv = _fig9_csv[_fig9_csv["Trials"] > 0]
+        # Add furthest phase as a column
+        _fig9_csv["FurthestPhase"] = _fig9_csv.apply(
+            lambda r: _phase_pivot.at[r["Branch"], r["Antigen"]],
+            axis=1,
+        )
+        st.download_button(
+            "Fig 9 data (CSV)",
+            _csv_with_provenance(_fig9_csv, "Fig 9 — Antigen × Branch matrix"),
+            "fig9_antigen_branch_matrix.csv", "text/csv",
+        )
+
 
 # ---------------------------------------------------------------------------
 # TAB: Methods & Appendix

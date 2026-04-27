@@ -94,6 +94,18 @@ AXES_REQUIRE_ACTIVE_PICK = {
 }
 PLATFORM_DEFAULT = "CAR-T"
 
+# Disease categories that ARE baskets by definition. When the rater picks
+# any of these for DiseaseCategory, the DiseaseEntity widget switches to
+# multi-select — same as if they had picked TrialDesign=Multi-disease.
+# Both signals carry the same semantic meaning ("this trial spans ≥ 2
+# disease entities") so either should trigger the multi-select.
+BASKET_DISEASE_CATEGORIES = {
+    "Basket/Multidisease",
+    "Heme basket",
+    "Advanced solid tumors",
+    "Solid basket",
+}
+
 # Human-readable labels — replaces the camelCase axis keys when shown
 # to raters. Keeps the storage schema (_pipeline keys, JSON keys) on
 # the canonical CamelCase form.
@@ -994,16 +1006,22 @@ def _render_axis_input(
     label = AXIS_LABEL.get(axis, axis)
     helptext = AXIS_HELP[axis]
 
-    # Cross-axis logic: DiseaseEntity goes multi-select when the
-    # rater has flagged Multi-disease. Streamlit reruns on each
-    # widget change, so by the time DiseaseEntity renders, the
-    # TrialDesign session_state value is already up to date for
-    # this rerun cycle.
+    # Cross-axis logic: DiseaseEntity goes multi-select when EITHER
+    # signal indicates a basket trial:
+    #   1. TrialDesign = "Multi-disease"  (rater explicitly flagged)
+    #   2. DiseaseCategory ∈ BASKET_DISEASE_CATEGORIES (basket category
+    #      picked — Basket/Multidisease, Heme basket, etc.)
+    # Both carry the same semantic meaning. Either should trigger the
+    # multi-select. Streamlit reruns on each widget change, so by the
+    # time DiseaseEntity re-renders, both signals' session_state
+    # values are up to date.
     is_multi_disease = False
     if axis == "DiseaseEntity" and nct:
-        td_key = f"input_{nct}_TrialDesign"
+        td_val = st.session_state.get(f"input_{nct}_TrialDesign")
+        dc_val = st.session_state.get(f"input_{nct}_DiseaseCategory")
         is_multi_disease = (
-            st.session_state.get(td_key) == "Multi-disease"
+            td_val == "Multi-disease"
+            or dc_val in BASKET_DISEASE_CATEGORIES
         )
 
     if options == "_dynamic":
@@ -1038,13 +1056,27 @@ def _render_axis_input(
 
         # Multi-disease basket → multi-select for DiseaseEntity
         if is_multi_disease:
+            # Use a separate widget key for the multi-select so the
+            # single-select state (a string) and multi-select state
+            # (a list) don't conflict — Streamlit raises if the same
+            # key is reused with a different widget type.
+            multi_key = f"{key}_multi"
+            # Seed the multi-select with the rater's previous single
+            # pick if they had one, so switching to multi-mode doesn't
+            # erase their existing answer.
+            if multi_key not in st.session_state:
+                prev_single = st.session_state.get(key)
+                if prev_single and prev_single not in (
+                    "Other (specify)", "Unsure", "",
+                ):
+                    st.session_state[multi_key] = [prev_single]
             picks = st.multiselect(
                 f"{label} · select every entity the basket enrols",
                 options=canonical_choices,
-                key=key,
-                help=(helptext + " — type to search the canonical "
-                       "vocab, or type a new entity and press Enter "
-                       "to add it inline."),
+                key=multi_key,
+                help=(helptext + " — basket trial: pick every entity "
+                       "the cohort spans. Type to search or add a new "
+                       "entity inline."),
                 placeholder="Type to search or add an entity…",
                 accept_new_options=True,
             )

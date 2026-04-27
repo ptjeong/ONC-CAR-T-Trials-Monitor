@@ -93,14 +93,21 @@ AXIS_LABEL = {
     "SponsorType": "Sponsor type",
 }
 
-# Layout per user spec: 3 horizontal layers
-#   row 1: branch (full row, horizontal radios)
-#   row 2: disease category | trial design | disease entity
-#   row 3: product type | target category | sponsor type
+# Layout — three semantic layers that mirror how a clinician
+# actually reads a trial:
+#   row 1: SCOPE      — Branch · Trial design (heme/solid, single/multi)
+#   row 2: DISEASE    — Disease category · Disease entity (drill broad→leaf)
+#   row 3: INTERVENTION — Target · Product type · Sponsor type
+#
+# Trial design lives in row 1 so the rater answers "single or
+# multi-disease?" BEFORE the entity widget renders. Entity then
+# auto-switches to multi-select when Multi-disease is flagged
+# (see _render_axis_input). Without this ordering the entity widget
+# would change shape MID-row, which is jarring.
 AXIS_LAYOUT = [
-    ["Branch"],
-    ["DiseaseCategory", "TrialDesign", "DiseaseEntity"],
-    ["ProductType", "TargetCategory", "SponsorType"],
+    ["Branch", "TrialDesign"],
+    ["DiseaseCategory", "DiseaseEntity"],
+    ["TargetCategory", "ProductType", "SponsorType"],
 ]
 
 AXIS_HELP = {
@@ -978,48 +985,40 @@ def _render_axis_input(
 
     if options is None:
         # Free-text-with-suggestions axis (DiseaseEntity, TargetCategory)
+        # Both single-select and multi-select use Streamlit's
+        # accept_new_options=True so the rater can:
+        #   - type to search the canonical vocab (filters live)
+        #   - type a new value + Enter to add it inline
+        # No more "Other (specify)" → secondary text input fallback.
         vocab = sample.get("autocomplete_vocab", {}).get(axis, [])
+        canonical_choices = sorted(vocab) + ["Unsure"]
 
         # Multi-disease basket → multi-select for DiseaseEntity
         if is_multi_disease:
-            choices_ms = sorted(vocab) + ["Other (specify)", "Unsure"]
             picks = st.multiselect(
-                f"{label} · select all entities the basket enrols",
-                options=choices_ms,
+                f"{label} · select every entity the basket enrols",
+                options=canonical_choices,
                 key=key,
-                help=(helptext + " — Multi-disease basket: pick every "
-                       "entity the trial enrols."),
-                placeholder="Select 2 or more entities…",
+                help=(helptext + " — type to search the canonical "
+                       "vocab, or type a new entity and press Enter "
+                       "to add it inline."),
+                placeholder="Type to search or add an entity…",
+                accept_new_options=True,
             )
-            # If "Other (specify)" picked, expose a text input for free text
-            others = []
-            if "Other (specify)" in picks:
-                other_val = st.text_input(
-                    f"Other {label.lower()} entities (comma-separated)",
-                    key=f"{key}_other_multi",
-                    placeholder="Entity 1, Entity 2",
-                ).strip()
-                if other_val:
-                    others = [o.strip() for o in other_val.split(",")
-                               if o.strip()]
-                picks = [p for p in picks if p != "Other (specify)"]
-            all_entities = picks + others
             # Pipe-join for storage (matches DiseaseEntities pipeline format)
-            return "|".join(all_entities)
+            return "|".join(p for p in picks if p)
 
-        # Single-select default
-        choices = [""] + sorted(vocab) + ["Other (specify)", "Unsure"]
+        # Single-select default — also searchable + keyboard-inputtable
         choice = st.selectbox(
-            label, options=choices, key=key,
-            help=helptext, index=0,
-            format_func=lambda x: "(pick from canonical list, or Other)" if not x else x,
+            label,
+            options=canonical_choices,
+            key=key,
+            help=(helptext + " — type to search the canonical vocab, "
+                   "or type a new value and press Enter to add it."),
+            index=None,
+            placeholder="Type to search or add a value…",
+            accept_new_options=True,
         )
-        if choice == "Other (specify)":
-            other = st.text_input(
-                f"Specify {label.lower()}", key=f"{key}_other",
-                placeholder="Type the value you'd use",
-            ).strip()
-            return other or ""
         return choice or ""
 
     # Enumerable axis — horizontal radio for tightness

@@ -310,8 +310,26 @@ st.markdown("""
         white-space: pre-wrap;
     }
 
-    /* ───── Inputs — borderless, type-driven ───── */
-    /* Axis section divider line */
+    /* ───── Axis layers — subtle 3-tier demarcation ─────
+       Middle layer (row 2) gets a faint slate tint so the eye reads
+       three distinct stages: identification → disease classification →
+       mechanism. Outer rows stay pure white. The shading is barely
+       perceptible (#fafbfc on white) — enough to anchor each row as
+       its own visual unit without breaking the calm aesthetic. */
+    [data-testid="stKey-axis_row_1"] {
+        background: #fafbfc;
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin: 4px 0 4px 0;
+    }
+    [data-testid="stKey-axis_row_0"],
+    [data-testid="stKey-axis_row_2"] {
+        padding: 14px 16px;
+        margin: 4px 0 4px 0;
+    }
+
+    /* Axis section divider line (legacy — kept in case _render_rater
+       still references it; safe to keep) */
     .axis-divider {
         border: none;
         border-top: 1px solid #f0f0f0;
@@ -907,16 +925,36 @@ def _format_trial_for_rater(trial: dict) -> None:
     # pixel below this point belongs to the rating widgets.
 
 
-def _render_axis_input(axis: str, sample: dict, key: str) -> str:
+def _render_axis_input(
+    axis: str, sample: dict, key: str, *, nct: str | None = None,
+) -> str:
     """Render a single axis input. Returns the chosen value (or "").
 
     Uses the friendly AXIS_LABEL (e.g. "Disease category") for the
     visible label; the canonical CamelCase axis key is preserved
     for storage / analysis.
+
+    Special: when axis is "DiseaseEntity" AND the rater has marked
+    TrialDesign as "Multi-disease", DiseaseEntity becomes a
+    MULTI-select so the rater can pick every entity the basket
+    enrols. Multi-select values are pipe-joined for storage,
+    matching the existing DiseaseEntities pipeline column format.
     """
     options = AXIS_OPTIONS.get(axis)
     label = AXIS_LABEL.get(axis, axis)
     helptext = AXIS_HELP[axis]
+
+    # Cross-axis logic: DiseaseEntity goes multi-select when the
+    # rater has flagged Multi-disease. Streamlit reruns on each
+    # widget change, so by the time DiseaseEntity renders, the
+    # TrialDesign session_state value is already up to date for
+    # this rerun cycle.
+    is_multi_disease = False
+    if axis == "DiseaseEntity" and nct:
+        td_key = f"input_{nct}_TrialDesign"
+        is_multi_disease = (
+            st.session_state.get(td_key) == "Multi-disease"
+        )
 
     if options == "_dynamic":
         # DiseaseCategory — populated from the sample's pipeline labels
@@ -941,6 +979,35 @@ def _render_axis_input(axis: str, sample: dict, key: str) -> str:
     if options is None:
         # Free-text-with-suggestions axis (DiseaseEntity, TargetCategory)
         vocab = sample.get("autocomplete_vocab", {}).get(axis, [])
+
+        # Multi-disease basket → multi-select for DiseaseEntity
+        if is_multi_disease:
+            choices_ms = sorted(vocab) + ["Other (specify)", "Unsure"]
+            picks = st.multiselect(
+                f"{label} · select all entities the basket enrols",
+                options=choices_ms,
+                key=key,
+                help=(helptext + " — Multi-disease basket: pick every "
+                       "entity the trial enrols."),
+                placeholder="Select 2 or more entities…",
+            )
+            # If "Other (specify)" picked, expose a text input for free text
+            others = []
+            if "Other (specify)" in picks:
+                other_val = st.text_input(
+                    f"Other {label.lower()} entities (comma-separated)",
+                    key=f"{key}_other_multi",
+                    placeholder="Entity 1, Entity 2",
+                ).strip()
+                if other_val:
+                    others = [o.strip() for o in other_val.split(",")
+                               if o.strip()]
+                picks = [p for p in picks if p != "Other (specify)"]
+            all_entities = picks + others
+            # Pipe-join for storage (matches DiseaseEntities pipeline format)
+            return "|".join(all_entities)
+
+        # Single-select default
         choices = [""] + sorted(vocab) + ["Other (specify)", "Unsure"]
         choice = st.selectbox(
             label, options=choices, key=key,
@@ -1032,23 +1099,26 @@ def _render_rater(rater_id: str) -> None:
     #   row 1: Branch (full row, 5 horizontal radios fit in ~1100px)
     #   row 2: Disease category | Trial design | Disease entity
     #   row 3: Product type | Target category | Sponsor type
-    # Each row gets its own st.columns() with widths sized to the
-    # axes it contains. Single-axis rows render full-width.
-    user_labels: dict[str, str] = {}
-    for row in AXIS_LAYOUT:
-        if len(row) == 1:
-            # Full-width row (Branch in row 1) — horizontal radios
-            # have all the space they need to lay out cleanly.
-            user_labels[row[0]] = _render_axis_input(
-                row[0], sample, key=f"input_{nct}_{row[0]}",
-            )
-        else:
-            cols = st.columns(len(row))
-            for col, axis in zip(cols, row):
-                with col:
-                    user_labels[axis] = _render_axis_input(
-                        axis, sample, key=f"input_{nct}_{axis}",
-                    )
+    # Each row is wrapped in a keyed st.container so CSS can
+    # demarcate the middle layer with a subtle background tint
+    # (see [data-testid="stKey-axis_row_1"] in the stylesheet).
+    user_labels: dict[str, str | list[str]] = {}
+    for i, row in enumerate(AXIS_LAYOUT):
+        with st.container(key=f"axis_row_{i}"):
+            if len(row) == 1:
+                # Full-width row (Branch in row 1)
+                user_labels[row[0]] = _render_axis_input(
+                    row[0], sample, key=f"input_{nct}_{row[0]}",
+                    nct=nct,
+                )
+            else:
+                cols = st.columns(len(row))
+                for col, axis in zip(cols, row):
+                    with col:
+                        user_labels[axis] = _render_axis_input(
+                            axis, sample, key=f"input_{nct}_{axis}",
+                            nct=nct,
+                        )
 
     # Inline notes + submit row — was 2 separate rows, now 1
     _n_col, _skip_col, _submit_col = st.columns([0.55, 0.18, 0.27])

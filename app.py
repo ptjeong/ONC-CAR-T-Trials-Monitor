@@ -6196,14 +6196,6 @@ with tab_methods:
 
     if prisma_counts:
         st.subheader("Figure 11 — PRISMA selection flow")
-        st.markdown(
-            '<p class="small-note">Per-stage trial flow through the '
-            'selection pipeline. Kept-flow rows show the running total; '
-            'indented italic rows show what was excluded at each stage. '
-            'Dataset audit trail at granularity rarely reported in '
-            'published CAR-T reviews.</p>',
-            unsafe_allow_html=True,
-        )
 
         n_fetched_p = int(prisma_counts.get("n_fetched", 0) or 0)
         n_dups_p = int(prisma_counts.get("n_duplicates_removed", 0) or 0)

@@ -73,11 +73,35 @@ AXIS_OPTIONS = {
     "Branch": ["Heme-onc", "Solid-onc", "Mixed", "Unknown", "Unsure"],
     "DiseaseCategory": "_dynamic",   # populated from sample at load time
     "DiseaseEntity": None,            # free text + autocomplete
+    "TrialDesign": ["Single disease", "Multi-disease", "Unsure"],
     "TargetCategory": None,           # free text + autocomplete
     "ProductType": ["Autologous", "Allogeneic/Off-the-shelf", "In vivo",
                     "Unclear", "Unsure"],
     "SponsorType": ["Industry", "Academic", "Government", "Other", "Unsure"],
 }
+
+# Human-readable labels — replaces the camelCase axis keys when shown
+# to raters. Keeps the storage schema (_pipeline keys, JSON keys) on
+# the canonical CamelCase form.
+AXIS_LABEL = {
+    "Branch": "Branch",
+    "DiseaseCategory": "Disease category",
+    "DiseaseEntity": "Disease entity",
+    "TrialDesign": "Trial design",
+    "TargetCategory": "Target category",
+    "ProductType": "Product type",
+    "SponsorType": "Sponsor type",
+}
+
+# Layout per user spec: 3 horizontal layers
+#   row 1: branch (full row, horizontal radios)
+#   row 2: disease category | trial design | disease entity
+#   row 3: product type | target category | sponsor type
+AXIS_LAYOUT = [
+    ["Branch"],
+    ["DiseaseCategory", "TrialDesign", "DiseaseEntity"],
+    ["ProductType", "TargetCategory", "SponsorType"],
+]
 
 AXIS_HELP = {
     "Branch": "The trial's primary indication: hematologic, solid, mixed, "
@@ -86,6 +110,8 @@ AXIS_HELP = {
                        "Pick the dominant category if multiple apply.",
     "DiseaseEntity": "Most specific disease leaf (e.g. DLBCL, GBM, HCC). "
                      "Use the trial's terminology where possible.",
+    "TrialDesign": "Single disease = enrols one diagnosis only. "
+                   "Multi-disease = a basket trial spanning ≥ 2 diagnoses.",
     "TargetCategory": "The CAR antigen or, for non-antigen platforms, the "
                       "construct family (e.g. CD19, BCMA, CAR-NK, CAAR-T).",
     "ProductType": "Autologous = patient-derived, Allogeneic = "
@@ -135,17 +161,34 @@ st.markdown("""
        Submit lives where the eye lands after the last input.
        ─────────────────────────────────────────────────────────────────── */
 
-    /* System font — matches Apple/Linear/Vercel native feel. */
-    html, body, [class*="st-"] {
+    /* System font on body content. Scoped narrowly so Streamlit's
+       icon font (Material Symbols Outlined, used for expander
+       chevrons + similar) is NOT overridden. The previous
+       [class*="st-"] selector was too greedy and caused icon
+       names ("arrow_right") to render as raw text. */
+    html, body {
         font-family: -apple-system, BlinkMacSystemFont, "Inter",
                      "SF Pro Text", "Segoe UI", Roboto,
-                     "Helvetica Neue", Arial, sans-serif !important;
+                     "Helvetica Neue", Arial, sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
     }
+    .stApp, .stMarkdown, .stText, .stDataFrame,
+    [data-testid="stMarkdownContainer"] {
+        font-family: -apple-system, BlinkMacSystemFont, "Inter",
+                     "SF Pro Text", "Segoe UI", Roboto,
+                     "Helvetica Neue", Arial, sans-serif;
+    }
+    /* Explicitly preserve Streamlit's icon font so expanders + tabs
+       continue to render their chevrons/arrows correctly. */
+    .material-symbols-outlined,
+    [class*="material-symbols"],
+    span[data-testid*="icon"] {
+        font-family: 'Material Symbols Outlined', 'Material Icons' !important;
+    }
 
     .block-container {
-        max-width: 760px;
+        max-width: 1100px;
         padding-top: 0.6rem;
         padding-bottom: 4rem;
     }
@@ -867,16 +910,13 @@ def _format_trial_for_rater(trial: dict) -> None:
 def _render_axis_input(axis: str, sample: dict, key: str) -> str:
     """Render a single axis input. Returns the chosen value (or "").
 
-    Three input modes by axis type:
-      - Enumerable (Branch / ProductType / SponsorType): radio buttons
-      - Categorical with many levels (DiseaseCategory): dropdown +
-        "Other (specify)" text fallback
-      - Free-text-with-suggestions (DiseaseEntity / TargetCategory):
-        selectbox of the canonical vocabulary + "Other (specify)" text
-        fallback. Standardizes spelling so κ doesn't get artificially
-        deflated by 'DLBCL' vs 'Diffuse large B-cell lymphoma'.
+    Uses the friendly AXIS_LABEL (e.g. "Disease category") for the
+    visible label; the canonical CamelCase axis key is preserved
+    for storage / analysis.
     """
     options = AXIS_OPTIONS.get(axis)
+    label = AXIS_LABEL.get(axis, axis)
+    helptext = AXIS_HELP[axis]
 
     if options == "_dynamic":
         # DiseaseCategory — populated from the sample's pipeline labels
@@ -886,13 +926,13 @@ def _render_axis_input(axis: str, sample: dict, key: str) -> str:
         } - {""})
         options = cats + ["Other (specify)", "Unsure"]
         choice = st.selectbox(
-            axis, options=[""] + options, key=key,
-            help=AXIS_HELP[axis], index=0,
+            label, options=[""] + options, key=key,
+            help=helptext, index=0,
             format_func=lambda x: "(pick one)" if not x else x,
         )
         if choice == "Other (specify)":
             other = st.text_input(
-                f"Specify {axis}", key=f"{key}_other",
+                f"Specify {label.lower()}", key=f"{key}_other",
                 placeholder="Type the category you'd use",
             ).strip()
             return other or ""
@@ -903,14 +943,13 @@ def _render_axis_input(axis: str, sample: dict, key: str) -> str:
         vocab = sample.get("autocomplete_vocab", {}).get(axis, [])
         choices = [""] + sorted(vocab) + ["Other (specify)", "Unsure"]
         choice = st.selectbox(
-            axis, options=choices, key=key,
-            help=AXIS_HELP[axis], index=0,
-            format_func=lambda x: ("(pick from canonical list, "
-                                    "or 'Other' to type)" if not x else x),
+            label, options=choices, key=key,
+            help=helptext, index=0,
+            format_func=lambda x: "(pick from canonical list, or Other)" if not x else x,
         )
         if choice == "Other (specify)":
             other = st.text_input(
-                f"Specify {axis}", key=f"{key}_other",
+                f"Specify {label.lower()}", key=f"{key}_other",
                 placeholder="Type the value you'd use",
             ).strip()
             return other or ""
@@ -918,8 +957,8 @@ def _render_axis_input(axis: str, sample: dict, key: str) -> str:
 
     # Enumerable axis — horizontal radio for tightness
     return st.radio(
-        axis, options=options, key=key, horizontal=True,
-        help=AXIS_HELP[axis], index=None,
+        label, options=options, key=key, horizontal=True,
+        help=helptext, index=None,
     ) or ""
 
 
@@ -989,23 +1028,27 @@ def _render_rater(rater_id: str) -> None:
     if timer_key not in st.session_state:
         st.session_state[timer_key] = time.time()
 
-    # Three-column axis layout (was two) — saves vertical space.
-    # The "Classify..." subtitle + Pipeline-labels-hidden caption from
-    # the previous draft are dropped: redundant once raters have done
-    # 1-2 trials. Onboarding text moves to a "How this works" expander
-    # at the bottom.
-    axes = list(AXIS_OPTIONS.keys())
-    col_a, col_b, col_c = st.columns(3)
+    # Axis layout — 3 horizontal layers per AXIS_LAYOUT spec:
+    #   row 1: Branch (full row, 5 horizontal radios fit in ~1100px)
+    #   row 2: Disease category | Trial design | Disease entity
+    #   row 3: Product type | Target category | Sponsor type
+    # Each row gets its own st.columns() with widths sized to the
+    # axes it contains. Single-axis rows render full-width.
     user_labels: dict[str, str] = {}
-    for col, ax_pair in zip(
-        (col_a, col_b, col_c),
-        ([axes[0], axes[3]], [axes[1], axes[4]], [axes[2], axes[5]]),
-    ):
-        with col:
-            for axis in ax_pair:
-                user_labels[axis] = _render_axis_input(
-                    axis, sample, key=f"input_{nct}_{axis}",
-                )
+    for row in AXIS_LAYOUT:
+        if len(row) == 1:
+            # Full-width row (Branch in row 1) — horizontal radios
+            # have all the space they need to lay out cleanly.
+            user_labels[row[0]] = _render_axis_input(
+                row[0], sample, key=f"input_{nct}_{row[0]}",
+            )
+        else:
+            cols = st.columns(len(row))
+            for col, axis in zip(cols, row):
+                with col:
+                    user_labels[axis] = _render_axis_input(
+                        axis, sample, key=f"input_{nct}_{axis}",
+                    )
 
     # Inline notes + submit row — was 2 separate rows, now 1
     _n_col, _skip_col, _submit_col = st.columns([0.55, 0.18, 0.27])

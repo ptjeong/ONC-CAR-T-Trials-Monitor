@@ -74,11 +74,25 @@ AXIS_OPTIONS = {
     "DiseaseCategory": "_dynamic",   # populated from sample at load time
     "DiseaseEntity": None,            # free text + autocomplete
     "TrialDesign": ["Single disease", "Multi-disease", "Unsure"],
+    # Platform — what KIND of cell therapy. Pre-selected to CAR-T as
+    # the modal class (~85% of the dataset). Documented bias trade-off
+    # in the methods section: raters can change it freely, but the
+    # κ on this axis is reported with the pre-selection caveat.
+    "Platform": ["CAR-T", "CAR-NK", "CAAR-T", "CAR-γδ T", "CAR-Treg", "Unsure"],
     "TargetCategory": None,           # free text + autocomplete
     "ProductType": ["Autologous", "Allogeneic/Off-the-shelf", "In vivo",
                     "Unclear", "Unsure"],
     "SponsorType": ["Industry", "Academic", "Government", "Other", "Unsure"],
 }
+
+# Axes where the rater MUST actively pick a value (no pre-selection).
+# Platform is deliberately not in this set — it's pre-selected to CAR-T
+# for ergonomics. Pre-selection bias on Platform is disclosed in methods.
+AXES_REQUIRE_ACTIVE_PICK = {
+    "Branch", "DiseaseCategory", "DiseaseEntity", "TrialDesign",
+    "TargetCategory", "ProductType", "SponsorType",
+}
+PLATFORM_DEFAULT = "CAR-T"
 
 # Human-readable labels — replaces the camelCase axis keys when shown
 # to raters. Keeps the storage schema (_pipeline keys, JSON keys) on
@@ -88,6 +102,7 @@ AXIS_LABEL = {
     "DiseaseCategory": "Disease category",
     "DiseaseEntity": "Disease entity",
     "TrialDesign": "Trial design",
+    "Platform": "Platform",
     "TargetCategory": "Target category",
     "ProductType": "Product type",
     "SponsorType": "Sponsor type",
@@ -95,17 +110,18 @@ AXIS_LABEL = {
 
 # Layout — three semantic layers that mirror how a clinician
 # actually reads a trial:
-#   row 1: SCOPE      — Branch · Trial design (heme/solid, single/multi)
+#   row 1: SCOPE      — Branch · Trial design · Platform
+#                       (heme/solid, single/multi, CAR-T/CAR-NK/etc)
 #   row 2: DISEASE    — Disease category · Disease entity (drill broad→leaf)
 #   row 3: INTERVENTION — Target · Product type · Sponsor type
 #
 # Trial design lives in row 1 so the rater answers "single or
 # multi-disease?" BEFORE the entity widget renders. Entity then
 # auto-switches to multi-select when Multi-disease is flagged
-# (see _render_axis_input). Without this ordering the entity widget
-# would change shape MID-row, which is jarring.
+# (see _render_axis_input). Same logic for Platform: foundational
+# scope question, answered up front before drilling.
 AXIS_LAYOUT = [
-    ["Branch", "TrialDesign"],
+    ["Branch", "TrialDesign", "Platform"],
     ["DiseaseCategory", "DiseaseEntity"],
     ["TargetCategory", "ProductType", "SponsorType"],
 ]
@@ -119,6 +135,12 @@ AXIS_HELP = {
                      "Use the trial's terminology where possible.",
     "TrialDesign": "Single disease = enrols one diagnosis only. "
                    "Multi-disease = a basket trial spanning ≥ 2 diagnoses.",
+    "Platform": "What kind of cell therapy: CAR-T (default — αβ T cells, "
+                "the modal class), CAR-NK (natural-killer cells), CAAR-T "
+                "(chimeric autoantibody receptor T), CAR-γδ T (gamma-delta "
+                "T), or CAR-Treg (regulatory T cells). Pre-selected to "
+                "CAR-T because ~85% of trials in the dataset are CAR-T; "
+                "change as needed.",
     "TargetCategory": "The CAR antigen or, for non-antigen platforms, the "
                       "construct family (e.g. CD19, BCMA, CAR-NK, CAAR-T).",
     "ProductType": "Autologous = patient-derived, Allogeneic = "
@@ -1021,7 +1043,20 @@ def _render_axis_input(
         )
         return choice or ""
 
-    # Enumerable axis — horizontal radio for tightness
+    # Enumerable axis — horizontal radio for tightness.
+    # Most axes have no pre-selection (index=None) — rater must
+    # actively pick. Platform is the exception: pre-selected to
+    # CAR-T (modal class) for ergonomics, with the bias trade-off
+    # disclosed in methods.
+    if axis == "Platform":
+        default_idx = (
+            options.index(PLATFORM_DEFAULT)
+            if PLATFORM_DEFAULT in options else 0
+        )
+        return st.radio(
+            label, options=options, key=key, horizontal=True,
+            help=helptext, index=default_idx,
+        ) or PLATFORM_DEFAULT
     return st.radio(
         label, options=options, key=key, horizontal=True,
         help=helptext, index=None,

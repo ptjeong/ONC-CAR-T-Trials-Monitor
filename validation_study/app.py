@@ -108,23 +108,44 @@ AXIS_LABEL = {
     "SponsorType": "Sponsor type",
 }
 
-# Layout — three semantic layers that mirror how a clinician
-# actually reads a trial:
-#   row 1: SCOPE      — Branch · Trial design · Platform
-#                       (heme/solid, single/multi, CAR-T/CAR-NK/etc)
-#   row 2: DISEASE    — Disease category · Disease entity (drill broad→leaf)
-#   row 3: INTERVENTION — Target · Product type · Sponsor type
+# Layout — order matches the rater's natural reading flow.
+# Empirical analysis of 12 sample titles (NCT04796441, NCT02846584,
+# NCT05066646, NCT05587543, NCT04503980, NCT04237428, NCT06090864,
+# NCT06010862, NCT07193628, NCT04420754, NCT06355908, NCT05990621):
+# 11 of 12 follow the pattern
+#   "[Antigen] + [Cell type] in/for [Disease]"
+# So the rater's eye captures, in order:
+#   target → platform → disease entity → (then derives category, branch)
+#   → trial design (from conditions count) → product type → sponsor
+# Click order is reordered to MATCH this:
 #
-# Trial design lives in row 1 so the rater answers "single or
-# multi-disease?" BEFORE the entity widget renders. Entity then
-# auto-switches to multi-select when Multi-disease is flagged
-# (see _render_axis_input). Same logic for Platform: foundational
-# scope question, answered up front before drilling.
+#   row 1: OBSERVATIONS   — Target · Platform · Trial design
+#                           (what's directly visible in the title)
+#   row 2: DISEASE DRILL  — Disease entity · Disease category · Branch
+#                           (leaf → broad; rater types what they read,
+#                            then derives the wider buckets)
+#   row 3: SUMMARY DETAILS — Product type · Sponsor type
+#                           (read once in the brief summary / metadata)
+#
+# Trial design stays in row 1 (also an observation — basket count
+# from conditions list) so it's answered BEFORE the entity widget
+# in row 2, preserving the multi-select-on-basket behavior.
+#
+# Branch in row 2 right cell needs a wider column for its 5
+# horizontal radio options — see AXIS_ROW_WIDTHS.
 AXIS_LAYOUT = [
-    ["Branch", "TrialDesign", "Platform"],
-    ["DiseaseCategory", "DiseaseEntity"],
-    ["TargetCategory", "ProductType", "SponsorType"],
+    ["TargetCategory", "Platform", "TrialDesign"],
+    ["DiseaseEntity", "DiseaseCategory", "Branch"],
+    ["ProductType", "SponsorType"],
 ]
+
+# Per-row column-width overrides — None means equal columns.
+# Tuned to give horizontal-radio axes (Branch, Platform) enough room.
+AXIS_ROW_WIDTHS: dict[int, list[float] | None] = {
+    0: [0.30, 0.40, 0.30],   # Target dropdown | Platform 6 radios | TrialDesign 3 radios
+    1: [0.32, 0.30, 0.38],   # Entity dropdown | Category dropdown | Branch 5 radios
+    2: [0.50, 0.50],          # Product 5 radios | Sponsor 5 radios
+}
 
 AXIS_HELP = {
     "Branch": "The trial's primary indication: hematologic, solid, mixed, "
@@ -1129,24 +1150,21 @@ def _render_rater(rater_id: str) -> None:
     if timer_key not in st.session_state:
         st.session_state[timer_key] = time.time()
 
-    # Axis layout — 3 horizontal layers per AXIS_LAYOUT spec:
-    #   row 1: Branch (full row, 5 horizontal radios fit in ~1100px)
-    #   row 2: Disease category | Trial design | Disease entity
-    #   row 3: Product type | Target category | Sponsor type
-    # Each row is wrapped in a keyed st.container so CSS can
-    # demarcate the middle layer with a subtle background tint
-    # (see [data-testid="stKey-axis_row_1"] in the stylesheet).
+    # Axis layout — reading-flow order, see AXIS_LAYOUT comment.
+    # Each row wrapped in a keyed st.container so CSS can tint the
+    # middle layer (data-testid="stKey-axis_row_1"). Per-row column
+    # widths come from AXIS_ROW_WIDTHS (None = equal).
     user_labels: dict[str, str | list[str]] = {}
     for i, row in enumerate(AXIS_LAYOUT):
         with st.container(key=f"axis_row_{i}"):
             if len(row) == 1:
-                # Full-width row (Branch in row 1)
                 user_labels[row[0]] = _render_axis_input(
                     row[0], sample, key=f"input_{nct}_{row[0]}",
                     nct=nct,
                 )
             else:
-                cols = st.columns(len(row))
+                widths = AXIS_ROW_WIDTHS.get(i)
+                cols = st.columns(widths if widths else len(row))
                 for col, axis in zip(cols, row):
                     with col:
                         user_labels[axis] = _render_axis_input(

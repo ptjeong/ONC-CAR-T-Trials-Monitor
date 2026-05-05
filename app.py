@@ -145,10 +145,19 @@ APPROVED_PRODUCTS = [
     {"year": 2021, "name": "ide-cel (Abecma)",     "target": "BCMA", "regulator": "FDA"},
     {"year": 2022, "name": "cilta-cel (Carvykti)", "target": "BCMA", "regulator": "FDA"},
     {"year": 2024, "name": "obe-cel (Aucatzyl)",   "target": "CD19", "regulator": "FDA"},
+    # FDA label-expansion (sBLA, not new product) — added 2026-05-05 from
+    # ASGCT Q1 2026 report. Yescarta extended to PCNSL Feb 6, 2026.
+    {"year": 2026, "name": "axi-cel (Yescarta) — PCNSL sBLA",
+                                                   "target": "CD19", "regulator": "FDA"},
     # NMPA approvals (China — listed in caption only, no chart line)
     {"year": 2021, "name": "relma-cel (Carteyva)", "target": "CD19", "regulator": "NMPA"},
     {"year": 2023, "name": "eque-cel (Fucaso)",    "target": "BCMA", "regulator": "NMPA"},
     {"year": 2024, "name": "zevor-cel",            "target": "BCMA", "regulator": "NMPA"},
+    # NMPA additions 2026-05-05 from ASGCT Q1 2026 cross-check —
+    # were missing from the prior overlay despite being approved.
+    {"year": 2023, "name": "inati-cel (Yorwida)",       "target": "CD19", "regulator": "NMPA"},
+    {"year": 2025, "name": "renikeolunsai (Hicara)",    "target": "CD19", "regulator": "NMPA"},
+    {"year": 2025, "name": "pulkilumab (Pulidekai)",    "target": "CD19", "regulator": "NMPA"},
     # EMA approvals (EU — listed in caption only, no chart line)
     {"year": 2018, "name": "tisa-cel (Kymriah)",   "target": "CD19", "regulator": "EMA"},
     {"year": 2018, "name": "axi-cel (Yescarta)",   "target": "CD19", "regulator": "EMA"},
@@ -157,6 +166,13 @@ APPROVED_PRODUCTS = [
     {"year": 2022, "name": "liso-cel (Breyanzi)",  "target": "CD19", "regulator": "EMA"},
     {"year": 2022, "name": "cilta-cel (Carvykti)", "target": "BCMA", "regulator": "EMA"},
     {"year": 2025, "name": "obe-cel (Aucatzyl)",   "target": "CD19", "regulator": "EMA"},
+    # EMA addition 2026-05-05 — Qartemi was approved in Spain (EU member
+    # state, EMA-routable) AND India (CDSCO) per ASGCT Q1 2026.
+    {"year": 2025, "name": "varni-cel (Qartemi)",  "target": "CD19", "regulator": "EMA"},
+    # CDSCO (India) — Qartemi was approved in India 2025. New regulator
+    # type, kept off the default pill set (only fires if user toggles
+    # it on; same caption-only treatment as NMPA / EMA).
+    {"year": 2025, "name": "varni-cel (Qartemi)",  "target": "CD19", "regulator": "CDSCO"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -4476,10 +4492,15 @@ with tab_pub:
         # FDA dot with a Heme-onc area or an NMPA dot with Solid-onc amber.
         # Marker shapes are also varied (circle / diamond / square) so the
         # distinction survives greyscale printing.
-        _REG_COLOR  = {"FDA": "#059669", "EMA": "#0891b2", "NMPA": "#dc2626"}
-        _REG_SYMBOL = {"FDA": "circle",   "EMA": "diamond",  "NMPA": "square"}
+        # CDSCO (India) added 2026-05-05 to support Qartemi (varni-cel)
+        # India approval per ASGCT Q1 2026. Distinct color (purple) +
+        # symbol (triangle-up) so it survives greyscale printing.
+        _REG_COLOR  = {"FDA": "#059669", "EMA": "#0891b2",
+                       "NMPA": "#dc2626", "CDSCO": "#7c3aed"}
+        _REG_SYMBOL = {"FDA": "circle",   "EMA": "diamond",
+                       "NMPA": "square",  "CDSCO": "triangle-up"}
 
-        _reg_labels = ["FDA", "EMA", "NMPA"]
+        _reg_labels = ["FDA", "EMA", "NMPA", "CDSCO"]
 
         # Enumerate approvals and their brand canonicalisation.
         # Everything from here through _brand_to_y is pure data prep: depends

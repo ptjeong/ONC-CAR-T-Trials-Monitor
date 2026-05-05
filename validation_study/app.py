@@ -64,8 +64,38 @@ SCHEMA_VERSION = "1.0"
 APP_VERSION = "0.5.1"  # bump when rater UX changes
 SAMPLE_PATH = APP_DIR / "sample_v1.json"
 RESPONSES_DIR = APP_DIR / "responses"
-LOCAL_BACKUP_DIR = Path("/tmp/validation_responses")
-LOCAL_BACKUP_DIR.mkdir(exist_ok=True, parents=True)
+
+# Durable submission storage (revised 2026-04-27 to address /tmp eviction).
+# Two-tier: state-JSON snapshot (rewritten on every submit) + append-only
+# audit log JSONL (one line per submit). The audit log is the recovery
+# trail — even if the state JSON is lost or corrupted, replaying the
+# JSONL rebuilds full state.
+#
+# Storage location: $HOME/.validation_responses preferred (survives
+# server restarts; writable on Streamlit Cloud + most managed hosts).
+# Fall back to /tmp if $HOME is not writable (some Docker setups).
+# Old /tmp path is also probed on load so previously-saved data
+# from before this migration isn't orphaned.
+def _resolve_backup_dir() -> Path:
+    home_dir = Path.home() / ".validation_responses"
+    try:
+        home_dir.mkdir(exist_ok=True, parents=True)
+        # Quick write probe to confirm permissions
+        probe = home_dir / ".write_probe"
+        probe.write_text("ok")
+        probe.unlink(missing_ok=True)
+        return home_dir
+    except (OSError, PermissionError):
+        fallback = Path("/tmp/validation_responses")
+        fallback.mkdir(exist_ok=True, parents=True)
+        return fallback
+
+
+LOCAL_BACKUP_DIR = _resolve_backup_dir()
+AUDIT_LOG_DIR = LOCAL_BACKUP_DIR / "audit"
+AUDIT_LOG_DIR.mkdir(exist_ok=True, parents=True)
+# Legacy /tmp path probed on load only — we read from it, never write.
+LEGACY_BACKUP_DIR = Path("/tmp/validation_responses")
 
 # Axis options — kept in sync with config.py / app.py's _FLAG_AXIS_OPTIONS.
 # "Unsure" is appended to every axis as a first-class option.
@@ -93,18 +123,6 @@ AXES_REQUIRE_ACTIVE_PICK = {
     "TargetCategory", "ProductType", "SponsorType",
 }
 PLATFORM_DEFAULT = "CAR-T"
-
-# Disease categories that ARE baskets by definition. When the rater picks
-# any of these for DiseaseCategory, the DiseaseEntity widget switches to
-# multi-select — same as if they had picked TrialDesign=Multi-disease.
-# Both signals carry the same semantic meaning ("this trial spans ≥ 2
-# disease entities") so either should trigger the multi-select.
-BASKET_DISEASE_CATEGORIES = {
-    "Basket/Multidisease",
-    "Heme basket",
-    "Advanced solid tumors",
-    "Solid basket",
-}
 
 # Human-readable labels — replaces the camelCase axis keys when shown
 # to raters. Keeps the storage schema (_pipeline keys, JSON keys) on
@@ -164,8 +182,14 @@ AXIS_HELP = {
               "or unknown.",
     "DiseaseCategory": "Mid-level disease grouping (e.g. B-NHL, GI, CNS). "
                        "Pick the dominant category if multiple apply.",
-    "DiseaseEntity": "Most specific disease leaf (e.g. DLBCL, GBM, HCC). "
-                     "Use the trial's terminology where possible.",
+    "DiseaseEntity": "Every disease the trial enrols. For a single-"
+                     "disease trial, one entity (sub-entity like DLBCL, "
+                     "GBM, HCC, OR the category name itself like AML, "
+                     "Breast, MM if the trial doesn't drill past the "
+                     "category). For a basket trial, pick every entity "
+                     "the cohort spans — components are commonly listed "
+                     "at the category level (AML, Sarcoma, Breast). "
+                     "Both categories and sub-entities are selectable.",
     "TrialDesign": "Single disease = enrols one diagnosis only. "
                    "Multi-disease = a basket trial spanning ≥ 2 diagnoses.",
     "Platform": "What kind of cell therapy: CAR-T (default — αβ T cells, "
@@ -174,8 +198,15 @@ AXIS_HELP = {
                 "T), or CAR-Treg (regulatory T cells). Pre-selected to "
                 "CAR-T because ~85% of trials in the dataset are CAR-T; "
                 "change as needed.",
-    "TargetCategory": "The CAR antigen or, for non-antigen platforms, the "
-                      "construct family (e.g. CD19, BCMA, CAR-NK, CAAR-T).",
+    "TargetCategory": "The CAR antigen — the receptor on the tumor cell "
+                      "that the construct recognizes (e.g. CD19, BCMA, "
+                      "CD123, GD2). For ligand-based CARs, record the "
+                      "RECEPTOR (on the tumor), NOT the ligand (the "
+                      "construct's binding domain): IL3 CAR → CD123, "
+                      "APRIL CAR → BCMA/TACI, BAFF CAR → BAFF-R/BCMA/"
+                      "TACI, NKG2D CAR → NKG2D-L. For non-antigen "
+                      "constructs, use the construct family (CAAR-T, "
+                      "etc.).",
     "ProductType": "Autologous = patient-derived, Allogeneic = "
                    "off-the-shelf donor, In vivo = mRNA-LNP delivery to "
                    "endogenous T cells.",
@@ -301,28 +332,6 @@ st.markdown("""
         color: #b91c1c; font-weight: 600; font-size: 10px;
         background: #fef2f2; padding: 1px 6px; border-radius: 3px;
         margin-left: 6px;
-    }
-
-    /* ───── Heatmap (collapsed by default, expand-to-reveal) ───── */
-    /* When expanded — naked grid, no card */
-    .pgrid {
-        display: grid;
-        grid-template-columns: repeat(50, 1fr);
-        gap: 3px;
-        margin: 8px 0 24px 0;
-    }
-    .pcell {
-        width: 100%; aspect-ratio: 1 / 1;
-        border-radius: 2px;
-        transition: transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .pcell.empty  { background: #f4f4f5; }
-    .pcell.older  { background: #a6b8da; }
-    .pcell.recent { background: #2c5cc7; }
-    .pcell.fresh  { background: #1e40af; }
-    .pcell:hover {
-        transform: scale(2.6); z-index: 2; position: relative;
-        cursor: default;
     }
 
     /* ───── Trial — page-as-content, no card frame ───── */
@@ -477,6 +486,15 @@ st.markdown("""
         font-weight: 600 !important;
     }
 
+    /* ───── Trial nav strip — between top bar and trial card ───── */
+    .nav-status {
+        text-align: center;
+        font-size: 12px; color: #525252;
+        font-variant-numeric: tabular-nums;
+        line-height: 38px;     /* match adjacent button height */
+        letter-spacing: 0.01em;
+    }
+
     /* ───── Footer keyboard hints ───── */
     .kbd-hints {
         font-size: 11px; color: #a3a3a3;
@@ -566,20 +584,101 @@ def _local_backup_path(rater_id: str) -> Path:
     return LOCAL_BACKUP_DIR / f"{rater_id}.json"
 
 
+def _legacy_backup_path(rater_id: str) -> Path:
+    """Pre-2026-04-27 /tmp path; read-only fallback for orphaned data."""
+    return LEGACY_BACKUP_DIR / f"{rater_id}.json"
+
+
 def _committed_responses_path(rater_id: str) -> Path:
     return RESPONSES_DIR / f"{rater_id}.json"
+
+
+def _audit_log_path(rater_id: str) -> Path:
+    """Append-only JSONL — one line per submission. Recovery trail."""
+    return AUDIT_LOG_DIR / f"{rater_id}.jsonl"
+
+
+def _append_audit_entry(rater_id: str, entry: dict) -> None:
+    """Append one JSON line to the per-rater audit log.
+
+    The log is append-only and survives state-JSON corruption. Each
+    entry captures (timestamp, NCT, full labels dict, source). If the
+    state JSON is ever lost, `_replay_audit_log()` reconstructs the
+    rater's submissions from this trail.
+    """
+    path = _audit_log_path(rater_id)
+    path.parent.mkdir(exist_ok=True, parents=True)
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
+    # Open in append mode with line buffering — atomic at the OS level
+    # for writes < PIPE_BUF (4096 bytes on Linux), which a single rating
+    # comfortably is. No tmp-then-rename needed for an append.
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _audit_log_count(rater_id: str) -> int:
+    """Return number of audit entries for this rater (zero if no log)."""
+    path = _audit_log_path(rater_id)
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8") as f:
+        return sum(1 for _ in f)
+
+
+def _replay_audit_log(rater_id: str) -> dict:
+    """Reconstruct state from the audit log. Recovery utility.
+
+    Used when the state JSON is missing/corrupted. Each NCT keeps its
+    LATEST entry (per-NCT last-write-wins), so re-rates are handled
+    correctly. Returns an empty state if no audit log exists.
+    """
+    state = _empty_state(rater_id)
+    path = _audit_log_path(rater_id)
+    if not path.exists():
+        return state
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # skip corrupt line, keep going
+            nct = entry.get("nct")
+            if not nct:
+                continue
+            state["ratings"][nct] = {
+                "labels": entry.get("labels", {}),
+                "notes": entry.get("notes", ""),
+                "duration_seconds": entry.get("duration_seconds", 0),
+                "timestamp": entry.get("timestamp", ""),
+                "skipped": entry.get("skipped", False),
+            }
+    state["last_updated"] = datetime.now(timezone.utc).isoformat()
+    return state
 
 
 def _load_persisted_responses(rater_id: str) -> dict:
     """Return the most recent persisted state for this rater.
 
-    Resolution: the file with the latest `last_updated` timestamp wins,
-    falling back to the committed file if the local backup is missing
-    or older. Schema-validated; bad files return empty state with a
-    warning so the rater isn't blocked.
+    Resolution priority (latest `last_updated` wins):
+      1. New durable backup (~/.validation_responses/{rater}.json)
+      2. Legacy /tmp backup (read-only, pre-2026-04-27 migration)
+      3. Committed canonical store (validation_study/responses/)
+      4. Audit-log replay (last-resort recovery trail)
+
+    Schema-validated; bad files return empty state with a warning so
+    the rater isn't blocked.
     """
     sources: list[tuple[Path, dict]] = []
-    for p in (_local_backup_path(rater_id), _committed_responses_path(rater_id)):
+    for p in (
+        _local_backup_path(rater_id),
+        _legacy_backup_path(rater_id),
+        _committed_responses_path(rater_id),
+    ):
         if not p.exists():
             continue
         try:
@@ -595,10 +694,33 @@ def _load_persisted_responses(rater_id: str) -> dict:
         sources.append((p, doc))
 
     if not sources:
+        # Last-resort: try to recover from audit log
+        replayed = _replay_audit_log(rater_id)
+        if replayed["ratings"]:
+            st.info(
+                f"Reconstructed {len(replayed['ratings'])} ratings from "
+                f"the audit log (state JSON was missing). Your work is "
+                "preserved — please click 'Download progress' to back it "
+                "up to your machine."
+            )
+            return replayed
         return _empty_state(rater_id)
 
     sources.sort(key=lambda t: t[1].get("last_updated", ""), reverse=True)
-    return sources[0][1]
+    chosen = sources[0][1]
+
+    # Cross-check against audit log — if audit has more entries than
+    # state, the state JSON may be stale or partial. Surface this so
+    # the rater can recover if needed.
+    audit_n = _audit_log_count(rater_id)
+    state_n = len(chosen.get("ratings", {}))
+    if audit_n > state_n:
+        st.warning(
+            f"Audit log has {audit_n} entries but loaded state has only "
+            f"{state_n}. There may be lost ratings — go to "
+            "Settings → Resume from audit log to recover."
+        )
+    return chosen
 
 
 def _empty_state(rater_id: str) -> dict:
@@ -616,12 +738,45 @@ def _empty_state(rater_id: str) -> dict:
     }
 
 
-def _persist(state: dict) -> None:
-    """Write state to local /tmp backup. Called on every submit."""
+def _persist(state: dict, *, audit_nct: str | None = None) -> None:
+    """Write state to durable backup + (optionally) append to audit log.
+
+    Two-tier durability:
+      1. State JSON snapshot: full state, atomic-rewritten every call
+         (~/.validation_responses/{rater}.json) — survives /tmp eviction
+      2. Audit log JSONL: one append-only line per submission
+         (~/.validation_responses/audit/{rater}.jsonl) — recovery trail
+         that survives state-JSON corruption
+
+    Pass `audit_nct` to also append the just-submitted/skipped rating
+    to the audit log. Omitting it (e.g. on bulk-resume merges) writes
+    only the state snapshot.
+    """
     state["last_updated"] = datetime.now(timezone.utc).isoformat()
     state["app_version"] = APP_VERSION
     rater_id = state.get("rater_id", "anon")
     _atomic_write_json(_local_backup_path(rater_id), state)
+    if audit_nct and audit_nct in state.get("ratings", {}):
+        rating = state["ratings"][audit_nct]
+        try:
+            _append_audit_entry(rater_id, {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "nct": audit_nct,
+                "labels": rating.get("labels", {}),
+                "notes": rating.get("notes", ""),
+                "duration_seconds": rating.get("duration_seconds", 0),
+                "skipped": rating.get("skipped", False),
+                "timestamp": rating.get("timestamp", ""),
+                "app_version": APP_VERSION,
+            })
+        except (OSError, PermissionError) as e:
+            # Audit-log failure must NOT block the submission. Surface
+            # to the rater so they know to download immediately.
+            st.warning(
+                f"Audit log write failed ({e}). Your rating is in the "
+                "main state file but the recovery trail did not update. "
+                "Please click 'Download progress' for a manual backup."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -634,7 +789,7 @@ def _top_progress_bar_html(state: dict, sample: dict,
 
     Layout: thin 4px progress fill on the left + percentage + count
     on the right. Total height ~30px including the bottom divider.
-    The full 200-cell heatmap lives in a click-to-expand below.
+    This is the rater's only progress indicator (no secondary heatmap).
     """
     n_total = len(sample["trials"])
     n_done = len(state.get("ratings", {}))
@@ -652,38 +807,6 @@ def _top_progress_bar_html(state: dict, sample: dict,
         f'  </div>'
         f'</div>'
     )
-
-
-def _progress_grid_html(state: dict, sample: dict) -> str:
-    """The full 200-cell heatmap, shown only inside the click-to-expand
-    section. Pure cell grid, no card frame.
-
-    Three intensity tiers (fresh/recent/older) give visual texture as
-    the grid fills.
-    """
-    ratings = state.get("ratings", {})
-    rated_with_ts = sorted(
-        [(nct, r.get("timestamp", "")) for nct, r in ratings.items()],
-        key=lambda t: t[1] or "",
-        reverse=True,
-    )
-    fresh_set = {nct for nct, _ in rated_with_ts[:5]}
-    recent_set = {nct for nct, _ in rated_with_ts[5:30]}
-
-    cells = []
-    for trial in sample["trials"]:
-        nct = trial["NCTId"]
-        if nct in fresh_set:
-            cls = "fresh"
-        elif nct in recent_set:
-            cls = "recent"
-        elif nct in ratings:
-            cls = "older"
-        else:
-            cls = "empty"
-        cells.append(f'<div class="pcell {cls}" title="{nct}"></div>')
-
-    return f'<div class="pgrid">{"".join(cells)}</div>'
 
 
 def _stat_tiles_html(stats: list[tuple[str, str]]) -> str:
@@ -856,6 +979,13 @@ def _format_trial_for_rater(trial: dict) -> None:
 
     # Metadata — pipe-separated muted gray, with explicit · separators
     # styled in even-fainter gray for typographic rhythm.
+    #
+    # BLIND-METHODOLOGY RULE: only raw CT.gov fields appear here.
+    # `TrialDesign` was previously rendered (commit ahead) but it is
+    # pipeline-classified at pipeline.py:1084 AND is one of the 8 axes
+    # the rater is asked to label — showing it anchors the answer.
+    # `LeadSponsorClass` IS shown because it is CT.gov's own sponsor
+    # categorization (raw field), not our `SponsorType` axis output.
     sponsor_str = trial.get("LeadSponsor") or "—"
     if trial.get("LeadSponsorClass"):
         sponsor_str = f"{sponsor_str} ({trial['LeadSponsorClass']})"
@@ -864,7 +994,6 @@ def _format_trial_for_rater(trial: dict) -> None:
         f"<strong>{trial.get('Phase') or '—'}</strong>",
         trial.get('OverallStatus') or "—",
         _html_escape(sponsor_str),
-        _html_escape(trial.get('TrialDesign') or "—"),
     ]
     if trial.get("EnrollmentCount"):
         _meta_bits.append(f"n = {trial['EnrollmentCount']}")
@@ -996,100 +1125,164 @@ def _render_axis_input(
     visible label; the canonical CamelCase axis key is preserved
     for storage / analysis.
 
-    Special: when axis is "DiseaseEntity" AND the rater has marked
-    TrialDesign as "Multi-disease", DiseaseEntity becomes a
-    MULTI-select so the rater can pick every entity the basket
-    enrols. Multi-select values are pipe-joined for storage,
-    matching the existing DiseaseEntities pipeline column format.
+    DiseaseEntity behavior (always-multi-select, redesigned 2026-04-27):
+    Was previously a single-select that switched to multi-select only
+    on basket signals (TrialDesign=Multi-disease OR DiseaseCategory ∈
+    a basket-categories set). That gate added cognitive friction
+    — the rater had to pre-classify the trial as basket before the
+    widget rendered correctly — and broke the natural case where a
+    basket trial enrols entries at the *category* level (e.g. "AML"
+    or "Breast cancer" as part of a multi-disease cohort). Now:
+      - Always rendered as multi-select
+      - Vocab includes BOTH canonical sub-entities AND the disease
+        categories from the sample (so "AML", "Breast", "MM" appear
+        as picks alongside "R/R AML", "TNBC", "R/R MM")
+      - Pre-filled with [picked_category] on first render so the
+        common "category-as-entity" case is zero-click
+      - Pipe-joined for storage (matches DiseaseEntities pipeline format)
     """
     options = AXIS_OPTIONS.get(axis)
     label = AXIS_LABEL.get(axis, axis)
     helptext = AXIS_HELP[axis]
 
-    # Cross-axis logic: DiseaseEntity goes multi-select when EITHER
-    # signal indicates a basket trial:
-    #   1. TrialDesign = "Multi-disease"  (rater explicitly flagged)
-    #   2. DiseaseCategory ∈ BASKET_DISEASE_CATEGORIES (basket category
-    #      picked — Basket/Multidisease, Heme basket, etc.)
-    # Both carry the same semantic meaning. Either should trigger the
-    # multi-select. Streamlit reruns on each widget change, so by the
-    # time DiseaseEntity re-renders, both signals' session_state
-    # values are up to date.
-    is_multi_disease = False
-    if axis == "DiseaseEntity" and nct:
-        td_val = st.session_state.get(f"input_{nct}_TrialDesign")
-        dc_val = st.session_state.get(f"input_{nct}_DiseaseCategory")
-        is_multi_disease = (
-            td_val == "Multi-disease"
-            or dc_val in BASKET_DISEASE_CATEGORIES
-        )
-
     if options == "_dynamic":
-        # DiseaseCategory — populated from the sample's pipeline labels
+        # DiseaseCategory — always-multi-select with accept_new_options.
+        # Was a single-select dropdown until 2026-04-27; refactored when
+        # cross-category basket trials (GD2-targeted basket spanning
+        # Pediatric solid + Sarcoma + Breast + a melanoma) revealed
+        # the single-pick was reductive — forced the rater to mash a
+        # multi-category trial into one bucket, losing the structure.
         cats = sorted({
             t["_pipeline"].get("DiseaseCategory") or ""
             for t in sample["trials"]
         } - {""})
-        options = cats + ["Other (specify)", "Unsure"]
-        choice = st.selectbox(
-            label, options=[""] + options, key=key,
-            help=helptext, index=0,
-            format_func=lambda x: "(pick one)" if not x else x,
+        canonical_choices = cats + ["Unsure"]
+        multi_key = f"{key}_multi"
+
+        # ---- Auto-sync: entity → category (forward propagation) ----
+        # When the rater adds a sub-entity (e.g. "Neuroblastoma"), its
+        # parent category ("Pediatric solid") is auto-added to the
+        # category multi-select. Uses the sample's pipeline-classified
+        # entity→category lookup as the source of truth.
+        # Removal is one-way only — if the rater removes a category,
+        # it stays removed even when an implied entity is still picked.
+        # `seen_ents` tracks which entities were processed last render,
+        # so the same entity isn't re-propagated into a category the
+        # rater explicitly removed.
+        if nct:
+            ent_to_cat = {}
+            for t in sample["trials"]:
+                c = t["_pipeline"].get("DiseaseCategory")
+                e = t["_pipeline"].get("DiseaseEntity")
+                if c and e:
+                    ent_to_cat[e] = c
+            ent_picks = (st.session_state.get(
+                f"input_{nct}_DiseaseEntity_multi") or [])
+            seen_key = f"input_{nct}_DiseaseEntity_seen_for_catsync"
+            seen_ents = set(st.session_state.get(seen_key, []))
+            new_ents = set(ent_picks) - seen_ents
+            if new_ents:
+                cat_state = list(st.session_state.get(multi_key, []) or [])
+                for e in new_ents:
+                    parent = ent_to_cat.get(e)
+                    if parent and parent not in cat_state:
+                        cat_state.append(parent)
+                st.session_state[multi_key] = cat_state
+            st.session_state[seen_key] = list(ent_picks)
+
+        picks = st.multiselect(
+            f"{label} · pick every category the trial spans",
+            options=canonical_choices,
+            key=multi_key,
+            help=(helptext + " — multi-select. Categories are auto-"
+                   "added when you pick a sub-entity (e.g. picking "
+                   "'Neuroblastoma' as entity also adds 'Pediatric "
+                   "solid' as category). Type to search or add a new "
+                   "category inline."),
+            placeholder="Type to search or add a category…",
+            accept_new_options=True,
         )
-        if choice == "Other (specify)":
-            other = st.text_input(
-                f"Specify {label.lower()}", key=f"{key}_other",
-                placeholder="Type the category you'd use",
-            ).strip()
-            return other or ""
-        return choice or ""
+        return "|".join(p for p in picks if p)
 
     if options is None:
-        # Free-text-with-suggestions axis (DiseaseEntity, TargetCategory)
-        # Both single-select and multi-select use Streamlit's
-        # accept_new_options=True so the rater can:
+        # Free-text-with-suggestions axes: DiseaseEntity (always-multi)
+        # and TargetCategory (single-select). Streamlit's
+        # accept_new_options=True lets the rater:
         #   - type to search the canonical vocab (filters live)
         #   - type a new value + Enter to add it inline
-        # No more "Other (specify)" → secondary text input fallback.
-        vocab = sample.get("autocomplete_vocab", {}).get(axis, [])
-        canonical_choices = sorted(vocab) + ["Unsure"]
+        vocab = list(sample.get("autocomplete_vocab", {}).get(axis, []))
 
-        # Multi-disease basket → multi-select for DiseaseEntity
-        if is_multi_disease:
-            # Use a separate widget key for the multi-select so the
-            # single-select state (a string) and multi-select state
-            # (a list) don't conflict — Streamlit raises if the same
-            # key is reused with a different widget type.
+        # ---- DiseaseEntity: always-multi with unified category+entity vocab ----
+        if axis == "DiseaseEntity":
+            # Build vocab = (categories ∪ sub-entities). Categories are
+            # added because basket trials often list components at the
+            # category level ("AML", "Breast cancer", "Sarcoma") rather
+            # than sub-entity level — without them in the vocab, the
+            # rater would have to type each as free-text addition.
+            all_categories = sorted({
+                t["_pipeline"].get("DiseaseCategory") or ""
+                for t in sample["trials"]
+            } - {""})
+            unified_vocab = sorted(set(vocab) | set(all_categories))
+            # Pin the picked categories at the top so they're the first
+            # options the rater sees (not buried alphabetically). Read
+            # from the new multi-select key (DiseaseCategory was
+            # converted from single → multi-select 2026-04-27).
+            category_top: list[str] = []
+            if nct:
+                cat_picks = (st.session_state.get(
+                    f"input_{nct}_DiseaseCategory_multi") or [])
+                category_top = [
+                    c for c in cat_picks
+                    if c and c not in ("Other (specify)", "Unsure")
+                ]
+                unified_vocab = [
+                    v for v in unified_vocab if v not in category_top
+                ]
+            canonical_choices = category_top + unified_vocab + ["Unsure"]
+
+            # Use a multi-suffixed key so the always-multi state (list)
+            # doesn't collide with any pre-existing single-select state
+            # (string) from older session caches.
             multi_key = f"{key}_multi"
-            # Seed the multi-select with the rater's previous single
-            # pick if they had one, so switching to multi-mode doesn't
-            # erase their existing answer.
-            if multi_key not in st.session_state:
-                prev_single = st.session_state.get(key)
-                if prev_single and prev_single not in (
-                    "Other (specify)", "Unsure", "",
-                ):
-                    st.session_state[multi_key] = [prev_single]
+            # ---- First-render pre-fill (single-category case only) ----
+            # When the multi-select is empty AND exactly one category
+            # is picked, pre-fill with [that category]. Zero-click
+            # for the common single-disease case (rater picks AML →
+            # entity is AML). For multi-category baskets we DON'T
+            # pre-fill — the rater is explicitly indicating multi-
+            # disease, and pre-filling all categories as entities
+            # would be wrong (rater wants sub-entities like
+            # Neuroblastoma + Osteosarcoma, not Pediatric solid +
+            # Sarcoma duplicated as entity-level picks).
+            if (multi_key not in st.session_state
+                    and len(category_top) == 1):
+                st.session_state[multi_key] = [category_top[0]]
+
             picks = st.multiselect(
-                f"{label} · select every entity the basket enrols",
+                f"{label} · pick every entity the trial enrols",
                 options=canonical_choices,
                 key=multi_key,
-                help=(helptext + " — basket trial: pick every entity "
-                       "the cohort spans. Type to search or add a new "
-                       "entity inline."),
+                help=(helptext + " — pick one entity for a single-disease "
+                       "trial, or every entity the cohort enrols for a "
+                       "basket. Categories like 'AML', 'Breast' are "
+                       "selectable as entities for the common case where "
+                       "the trial doesn't drill into a sub-entity. Type "
+                       "to search or add a new entity inline."),
                 placeholder="Type to search or add an entity…",
                 accept_new_options=True,
             )
             # Pipe-join for storage (matches DiseaseEntities pipeline format)
             return "|".join(p for p in picks if p)
 
-        # Single-select default — also searchable + keyboard-inputtable
+        # ---- TargetCategory (single-select, searchable, addable) ----
+        canonical_choices = sorted(vocab) + ["Unsure"]
         choice = st.selectbox(
             label,
             options=canonical_choices,
             key=key,
-            help=(helptext + " — type to search the canonical vocab, "
-                   "or type a new value and press Enter to add it."),
+            help=helptext + " — type to search the canonical vocab, "
+                            "or type a new value and press Enter to add it.",
             index=None,
             placeholder="Type to search or add a value…",
             accept_new_options=True,
@@ -1110,6 +1303,32 @@ def _render_axis_input(
             label, options=options, key=key, horizontal=True,
             help=helptext, index=default_idx,
         ) or PLATFORM_DEFAULT
+
+    # ---- TrialDesign auto-detection ----
+    # If the rater multi-picked categories or entities, the trial is
+    # by definition multi-disease. Auto-set TrialDesign to
+    # "Multi-disease" so the rater doesn't have to explicitly pick it.
+    # Non-destructive: only fires when TrialDesign is currently empty;
+    # if the rater explicitly picked Single disease (e.g. believes the
+    # multi picks are different stages of one disease, not multi-
+    # disease), the explicit pick is preserved.
+    if axis == "TrialDesign" and nct and not st.session_state.get(key):
+        cat_picks = (st.session_state.get(
+            f"input_{nct}_DiseaseCategory_multi") or [])
+        ent_picks = (st.session_state.get(
+            f"input_{nct}_DiseaseEntity_multi") or [])
+        distinct_cats = {
+            c for c in cat_picks
+            if c and c not in ("Other (specify)", "Unsure")
+        }
+        distinct_ents = {
+            e for e in ent_picks
+            if e and e not in ("Other (specify)", "Unsure")
+        }
+        if len(distinct_cats) > 1 or len(distinct_ents) > 1:
+            if "Multi-disease" in options:
+                st.session_state[key] = "Multi-disease"
+
     return st.radio(
         label, options=options, key=key, horizontal=True,
         help=helptext, index=None,
@@ -1128,9 +1347,9 @@ def _render_rater(rater_id: str) -> None:
 
     # ---- Sticky top progress bar — always visible, never demanding ----
     # Thin 4px progress fill + percentage + count. Save-stale warning
-    # appears INLINE only when stale (>2 min). The full 200-cell heatmap
-    # lives below in a click-to-expand "Progress detail" disclosure so
-    # the rater's primary attention stays on the trial itself.
+    # appears INLINE only when stale (>2 min). No secondary heatmap —
+    # the thin top bar is the rater's only progress indicator so their
+    # attention stays on the trial card.
     _save_meta = ""
     last_save = state.get("last_updated", "")
     try:
@@ -1168,13 +1387,83 @@ def _render_rater(rater_id: str) -> None:
         _render_done(state, rater_id)
         return
 
-    # ---- Current trial ----
-    trial = _next_unrated_trial(state, sample)
-    if trial is None:
-        _render_done(state, rater_id)
-        return
+    # ---- Current trial selection (with forward/back navigation) ----
+    # `current_trial_idx` is the rater's current position in sample
+    # order. Defaults to the first unrated trial. Forward/back buttons
+    # let the rater revisit any trial — already-rated ones are
+    # editable (widgets pre-filled from the saved labels).
+    if "current_trial_idx" not in st.session_state:
+        rated_ncts_init = set(state["ratings"].keys())
+        first_unrated_idx = next(
+            (i for i, t in enumerate(sample["trials"])
+             if t["NCTId"] not in rated_ncts_init),
+            len(sample["trials"]) - 1,  # all rated → land on last
+        )
+        st.session_state["current_trial_idx"] = first_unrated_idx
 
+    idx = max(0, min(st.session_state["current_trial_idx"],
+                     len(sample["trials"]) - 1))
+    st.session_state["current_trial_idx"] = idx  # clamp echo-back
+    trial = sample["trials"][idx]
     nct = trial["NCTId"]
+
+    # ---- Pre-fill widget state when revisiting an already-rated trial ----
+    # Streamlit preserves widget state by key across reruns within the
+    # same session, but if the rater navigates to a trial whose widgets
+    # haven't been instantiated yet (e.g. a trial rated in a previous
+    # session, just resumed), we have to seed the widget keys from the
+    # saved labels so the rater sees their prior answers.
+    _SEEDED_KEY = f"_seeded_widgets_{nct}"
+    if nct in state["ratings"] and not st.session_state.get(_SEEDED_KEY):
+        saved_labels = state["ratings"][nct].get("labels", {}) or {}
+        for axis, val in saved_labels.items():
+            base_key = f"input_{nct}_{axis}"
+            # Multi-select axes store as pipe-joined strings
+            if axis in ("DiseaseEntity", "DiseaseCategory"):
+                multi_key = f"{base_key}_multi"
+                if multi_key not in st.session_state:
+                    if isinstance(val, list):
+                        st.session_state[multi_key] = val
+                    elif isinstance(val, str) and val:
+                        st.session_state[multi_key] = [
+                            v for v in val.split("|") if v
+                        ]
+            else:
+                if base_key not in st.session_state and val:
+                    st.session_state[base_key] = val
+        # Also seed notes
+        notes_key = f"notes_{nct}"
+        saved_notes = state["ratings"][nct].get("notes", "")
+        if saved_notes and notes_key not in st.session_state:
+            st.session_state[notes_key] = saved_notes
+        st.session_state[_SEEDED_KEY] = True
+
+    # ---- Navigation strip (above the trial card) ----
+    _nav_prev, _nav_status, _nav_next = st.columns([0.18, 0.64, 0.18])
+    with _nav_prev:
+        if st.button(
+            "← Previous", disabled=(idx == 0),
+            key=f"nav_prev_{idx}", use_container_width=True,
+            help="Go back one trial without submitting. Use to review or edit prior ratings.",
+        ):
+            st.session_state["current_trial_idx"] = idx - 1
+            st.rerun()
+    with _nav_status:
+        already_rated = nct in state["ratings"]
+        marker = " · already rated · editable" if already_rated else ""
+        st.markdown(
+            f'<div class="nav-status">Trial {idx + 1} of {n_total}{marker}</div>',
+            unsafe_allow_html=True,
+        )
+    with _nav_next:
+        if st.button(
+            "Next →", disabled=(idx >= n_total - 1),
+            key=f"nav_next_{idx}", use_container_width=True,
+            help="Go forward one trial without submitting. Use to defer this trial and come back.",
+        ):
+            st.session_state["current_trial_idx"] = idx + 1
+            st.rerun()
+
     _format_trial_for_rater(trial)
 
     # Track time-on-trial — start the clock when this trial is first shown
@@ -1227,6 +1516,26 @@ def _render_rater(rater_id: str) -> None:
             use_container_width=True,
         )
 
+    def _advance_to_next_unrated() -> None:
+        """Move current_trial_idx to the next unrated trial after the
+        current one (search forward, then wrap to find any unrated).
+        Used by Submit/Skip after recording a rating, so the rater
+        always lands on something productive next.
+        """
+        rated = set(state["ratings"].keys())
+        n = len(sample["trials"])
+        # Forward search from idx+1
+        for i in range(idx + 1, n):
+            if sample["trials"][i]["NCTId"] not in rated:
+                st.session_state["current_trial_idx"] = i
+                return
+        # Wrap to find any unrated (rater navigated mid-pass)
+        for i in range(0, n):
+            if sample["trials"][i]["NCTId"] not in rated:
+                st.session_state["current_trial_idx"] = i
+                return
+        # All rated — leave idx where it is; _render_done handles next render
+
     if skip:
         # Record the skip (still durable; lets us report skip rate)
         state["ratings"][nct] = {
@@ -1236,8 +1545,9 @@ def _render_rater(rater_id: str) -> None:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "skipped": True,
         }
-        _persist(state)
+        _persist(state, audit_nct=nct)
         st.session_state.pop(timer_key, None)
+        _advance_to_next_unrated()
         st.rerun()
 
     if submit:
@@ -1254,8 +1564,9 @@ def _render_rater(rater_id: str) -> None:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "skipped": False,
         }
-        _persist(state)
+        _persist(state, audit_nct=nct)
         st.session_state.pop(timer_key, None)
+        _advance_to_next_unrated()
 
         # Auto-prompt for backup every 10 ratings
         if (n_done + 1) % 10 == 0:
@@ -1274,15 +1585,6 @@ def _render_rater(rater_id: str) -> None:
         unsafe_allow_html=True,
     )
 
-    # ---- Click-to-expand: full progress heatmap ----
-    # The 200-cell grid lives here, OUT of the primary attention zone.
-    # The thin top progress bar is sufficient for glanceable feedback;
-    # the full heatmap is for the moments the rater wants to step
-    # back and see their session arc.
-    with st.expander("Progress detail", expanded=False):
-        st.markdown(_progress_grid_html(state, sample),
-                    unsafe_allow_html=True)
-
     # ---- Footer (collapsed by default to preserve single-page view) ----
     with st.expander("Settings · session pace · backup · resume",
                       expanded=False):
@@ -1293,8 +1595,8 @@ def _render_footer(state: dict, rater_id: str) -> None:
     """Bottom-of-page utilities: median time, email backup, resume upload.
 
     Lives inside a collapsed expander so the rater session is single-page
-    by default. The above-the-fold view is purely the heatmap card +
-    trial card + classification widgets.
+    by default. The above-the-fold view is purely the thin top
+    progress bar + trial card + classification widgets.
     """
     durations = [r.get("duration_seconds", 0) for r in state["ratings"].values()
                  if not r.get("skipped")]

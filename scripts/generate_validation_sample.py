@@ -48,7 +48,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd  # noqa: E402
 
-from pipeline import load_snapshot  # noqa: E402
+from pipeline import (  # noqa: E402
+    load_snapshot,
+    _assign_target_with_source,
+    _assign_product_type,
+    _sponsor_type,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = REPO_ROOT / "validation_study"
@@ -249,6 +254,26 @@ def main() -> int:
     df, _df_sites, _meta = load_snapshot(args.snapshot)
     print(f"  {len(df):,} trials in snapshot.")
 
+    # ---- Refresh classifier-derived labels in-memory ----
+    # `load_snapshot` reads the pre-computed labels from the snapshot CSV,
+    # which was built when the snapshot was originally captured. If
+    # `config.py` (target term-lists, ligand aliases) or
+    # `llm_overrides.json` has changed since, those updates are stale on
+    # disk. Re-run the per-row classifier here so the manifest reflects
+    # the current pipeline rules without touching the on-disk snapshot.
+    # Cheap (~200 trials × O(1) regex per axis); avoids a full re-fetch.
+    print("  re-applying classifier (TargetCategory, ProductType, SponsorType) "
+          "with current config + overrides …")
+    target_results = df.apply(
+        lambda r: _assign_target_with_source(r.to_dict()), axis=1
+    )
+    df["TargetCategory"] = target_results.apply(lambda t: t[0])
+    product_results = df.apply(
+        lambda r: _assign_product_type(r.to_dict()), axis=1
+    )
+    df["ProductType"] = product_results.apply(lambda t: t[0])
+    df["SponsorType"] = df.apply(lambda r: _sponsor_type(r.to_dict()), axis=1)
+
     print(f"Sampling N={args.n} stratified (seed={args.seed}) …")
     sample_df = _stratified_sample(df, args.n, args.seed)
     print(f"  drew {len(sample_df)} trials.")
@@ -337,11 +362,20 @@ def main() -> int:
     try:
         from config import (
             HEME_TARGET_TERMS, SOLID_TARGET_TERMS, ENTITY_TERMS,
+            DUAL_TARGET_LABELS,
         )
+        # Target vocab = single antigens (heme + solid) ∪ dual-target
+        # labels (CD19/CD22 dual, CD19/BCMA dual, BCMA/GPRC5D dual, etc.)
+        # Dual labels were missing pre-2026-04-27 — raters had to type
+        # them as free text, which broke κ comparison vs pipeline
+        # because the pipeline emits exact strings ("BCMA/GPRC5D dual")
+        # that raters couldn't easily reproduce.
+        dual_labels = [label for (_pair, label) in DUAL_TARGET_LABELS]
         autocomplete_vocab = {
             "DiseaseEntity": sorted(ENTITY_TERMS.keys()),
             "TargetCategory": sorted(
                 set(HEME_TARGET_TERMS) | set(SOLID_TARGET_TERMS)
+                | set(dual_labels)
             ),
         }
     except Exception:

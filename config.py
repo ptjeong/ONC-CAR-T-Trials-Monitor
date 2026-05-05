@@ -369,7 +369,15 @@ HEME_TARGET_TERMS: dict[str, list[str]] = {
         "cart-19", "cart19", "cd19 cart", "cd19-cart", "cd19 car t", "cd19-car-t",
         "cd19 positive", "cd19 specific", "anti cd19",
     ],
-    "BCMA": ["bcma", "anti-bcma", "bcma-directed", "bcma-targeted", "b cell maturation antigen"],
+    "BCMA": ["bcma", "anti-bcma", "bcma-directed", "bcma-targeted",
+             "b cell maturation antigen",
+             # Ligand-based CAR convention (record receptor on tumor, not
+             # binding domain on construct). APRIL is the natural ligand
+             # for BCMA + TACI; APRIL-CARs (e.g. AUTO2 / NCT03287804) are
+             # primarily classified to BCMA as the dominant therapeutic
+             # receptor in MM. NCT04657861 / NCT03287804 both have
+             # "BCMA" in the title so this is mostly belt-and-braces.
+             "april car", "april-car", "april cart", "april car-t"],
     "CD20": ["cd20", "anti-cd20"],
     "CD22": ["cd22", "anti-cd22"],
     "CD5": ["cd5"],
@@ -378,7 +386,13 @@ HEME_TARGET_TERMS: dict[str, list[str]] = {
     "CD33": ["cd33", "anti-cd33"],
     "CD38": ["cd38", "anti-cd38"],
     "CD70": ["cd70", "anti-cd70"],
-    "CD123": ["cd123", "anti-cd123"],
+    "CD123": ["cd123", "anti-cd123",
+              # Ligand-based CAR (NCT04599543 — IL3 CAR-T). IL3 is the
+              # natural ligand of CD123 (= IL3RA); the CAR uses IL3 as
+              # binding domain to recognize CD123 on AML blasts. Record
+              # the receptor (CD123) per ligand-CAR convention.
+              "il3 car", "il-3 car", "il3-car", "il-3-car",
+              "il3 cart", "il3-cart", "il-3 cart"],
     "GPRC5D": ["gprc5d", "anti-gprc5d"],
     "FcRH5": ["fcrh5", "fcrl5"],
     "SLAMF7": ["slamf7", "cs1"],
@@ -389,9 +403,30 @@ HEME_TARGET_TERMS: dict[str, list[str]] = {
     "CD147": ["cd147", "basigin", "emmprin"],
     # Added 2026-04-25 from independent-LLM validation (Llama 3.3 surfaced
     # all four; user confirmed each on CT.gov):
-    "CD4":  ["cd4", "anti-cd4"],          # NCT06071624 (CMML), T-cell malignancies
+    # CD4 as a TARGET (not the host cell). Bare "cd4" was previously
+    # accepted but it false-matches "CD4+ T cells" / "CD4 helper" in
+    # ANY CAR-T trial that mentions T-cell biology — e.g. NCT03500991
+    # (HER2 GBM) and NCT06094842 (L1CAM neuroblastoma) were both
+    # silently mis-targeted to CD4 before this tightening. Use
+    # construct-anchored phrases only. NCT06071624 (CMML, the actual
+    # CD4-CAR trial that motivated adding CD4) is preserved because
+    # its title says "anti-CD4 CAR".
+    "CD4":  ["anti-cd4", "cd4 car", "cd4-car", "cd4 cart", "cd4-cart",
+             "cd4-directed", "cd4 directed", "cd4-targeted",
+             "cd4 targeted", "cd4-specific", "cd4 specific"],
     "CD1a": ["cd1a", "anti-cd1a"],        # NCT05745181 (T-ALL)
     "IL-5": ["il-5", "il5", "interleukin-5", "interleukin 5"],  # NCT07257640 (eosinophilic leukemia)
+    # Added 2026-04-27 from ligand-CAR audit (IL3/APRIL/BAFF/NKG2D
+    # families surfaced during validation pilot prep):
+    # BAFF is the natural ligand of three receptors (BAFF-R, TACI, BCMA).
+    # BAFF-CARs (LMY-920) target B-cell malignancies primarily via
+    # BAFF-R, the most B-cell-specific receptor. NCT05312801 / NCT06916767
+    # were misclassified as Other_or_unknown before this entry. Naming
+    # the target "BAFF-R" reflects the dominant therapeutic receptor;
+    # raters can flag if a trial specifies a different downstream receptor.
+    "BAFF-R": ["baff-r", "baff r", "baff receptor", "tnfrsf13c",
+               "baff car", "baff-car", "baff car-t", "baff cart",
+               "baff-car-t", "baff-cart"],
 }
 
 SOLID_TARGET_TERMS: dict[str, list[str]] = {
@@ -409,7 +444,19 @@ SOLID_TARGET_TERMS: dict[str, list[str]] = {
     "EpCAM": ["epcam"],
     "MUC1": ["muc1"],
     "CLDN6": ["cldn6", "claudin 6", "claudin-6"],
-    "NKG2D-L": ["nkg2d ligand", "nkg2d ligands", "nkg2dl"],
+    "NKG2D-L": ["nkg2d ligand", "nkg2d ligands", "nkg2dl",
+                # In CAR context, "NKG2D CAR" universally means the CAR
+                # uses NKG2D (the natural activating receptor) as binding
+                # domain to recognize NKG2D-Ligands (MICA/MICB/ULBP1-6)
+                # on tumors. Record the receptor on the tumor (NKG2D-L)
+                # per ligand-CAR convention. Without these, NKG2D CAR-NK
+                # trials (NCT06503497, NCT05213195, NCT05776355,
+                # NCT06856278, NCT05247957, NCT05734898, NCT06478459)
+                # silently fell to platform-only classification "CAR-NK"
+                # instead of "CAR-NK: NKG2D-L".
+                "nkg2d car", "nkg2d-car", "nkg2d cart", "nkg2d car-t",
+                "nkg2d-car-t", "mica/micb", "mica mica",
+                "ulbp1", "ulbp2", "ulbp3"],
     "ROR1": ["ror1"],
     "L1CAM": ["l1cam", "cd171"],
     "CD133": ["cd133"],
@@ -475,18 +522,58 @@ NAMED_PRODUCT_TARGETS: dict[str, list[str]] = {
         "allo-501", "allo-501a",
         # Curation-loop additions (Chinese / clinical-stage CD19 products)
         "jy231", "meta10-19", "ct1190b", "ptoc1",
+        # Miltenyi MB-CART19.1 — CD19 MONOvalent (NOT the tandem
+        # MB-CART2019.1 which is CD20/CD19 dual). Was previously
+        # mis-mapped to CD19/CD20 dual in NAMED_PRODUCT_TARGETS,
+        # causing NCT03853616 ("MB-CART19.1 r/r CD19+ B-cell
+        # Malignancies") to false-classify as dual instead of CD19.
+        "mb-cart19.1",
+        # MB-CART20.1 — CD20 MONOvalent (different from MB-CART2019.1)
+        # Note: classified as CD19 here only if it's combined with
+        # CD19 — but standalone MB-CART20.1 should be CD20. We keep
+        # CD19 as a default given the rarity of standalone CD20-only
+        # in this dataset; revisit if a standalone trial appears.
     ],
     "BCMA": [
         "idecabtagene vicleucel", "abecma", "ide-cel",
         "ciltacabtagene autoleucel", "carvykti", "cilta-cel",
         "equecabtagene autoleucel", "fucaso", "eque-cel",
         "zevorcabtagene autoleucel", "zevor-cel",
+        # `anito-cel` is the abbreviation; the FULL name
+        # `anitocabtagene autoleucel` is also added because trial
+        # titles often spell it out (NCT06413498) and the substring
+        # lookup over `anito-cel` (with hyphen) misses the spelled-out
+        # form. Without this, NCT06413498 false-matched CD38 from
+        # the eligibility text "anti-CD38 monoclonal antibody".
+        "anitocabtagene autoleucel",
         "allo-715", "anito-cel", "ct053",
         # Curation-loop additions
         "ct0596", "hbi0101",
     ],
     "CD19/BCMA dual": ["gc012f", "azd0120"],
-    "CD19/CD20 dual": ["mb-cart2019.1", "mb-cart2019", "mb-cart19.1"],
+    # MB-CART2019.1 = zamtocabtagene autoleucel = tandem CD20/CD19.
+    # NOTE: `mb-cart19.1` (without the "20") is the MONOvalent CD19
+    # product and was incorrectly listed here pre-2026-05-05 — moved
+    # to the CD19 list. `mb-cart2019.1` substring does NOT contain
+    # `mb-cart19.1` (the "2019" vs "19" differs), so the two are
+    # cleanly separable by the substring lookup.
+    "CD19/CD20 dual": ["mb-cart2019.1", "mb-cart2019",
+                       "zamtocabtagene autoleucel", "zamto-cel"],
+    # BMS-986453 = dual BCMA × GPRC5D CAR-T (BMS/Juno R/R MM, NCT06153251).
+    # User-confirmed 2026-04-27. Maps the named-product short-circuit
+    # so the LLM-override-locked CAR-T_unspecified is bypassed.
+    "BCMA/GPRC5D dual": ["bms-986453", "bms986453"],
+    # ---- BAFF-R named product (added 2026-05-05 from audit) ----
+    # LMY-920 (Luminary) is the BAFF-CAR construct. NCT05546723 (R/R MM)
+    # had no LLM override and was term-detected as BCMA from
+    # "BCMA targeting CAR-T cell treatment" in the BriefSummary —
+    # which actually describes a PRIOR therapy, not the CAR's target.
+    # The named-product short-circuit fixes this. (NCT05312801 +
+    # NCT06916767 already have explicit BAFF-R LLM overrides.)
+    "BAFF-R": ["lmy-920", "lmy 920", "lmy920"],
+    # ---- BMS-986393 = arlocabtagene autoleucel (GPRC5D CAR-T) ----
+    "GPRC5D": ["bms-986393", "bms986393",
+                "arlocabtagene autoleucel", "arlo-cel"],
     "NKG2D-L": ["cyad-01"],
     # New target labels seen repeatedly in curation loop
     "Claudin 18.2": ["ct041", "satricabtagene autoleucel", "satri-cel"],

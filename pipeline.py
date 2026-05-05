@@ -415,15 +415,29 @@ def _assign_target_with_source(row: dict) -> tuple[str, str]:
       - "fallback"          — nothing matched, defaulted to Other_or_unknown
     """
     nct = _safe_text(row.get("NCTId")).strip()
+    text = _row_text(row)
+    named = _lookup_named_product(text, NAMED_PRODUCT_TARGETS)
+
+    # Precedence rule (revised 2026-05-05):
+    # - LLM specific answer always wins (it's a manual curation)
+    # - LLM "punt" answers (Other_or_unknown / CAR-T_unspecified) are
+    #   OVERRIDDEN by named-product lookup IF a named product is detected
+    #   — this unblocks trials whose LLM curation predates a product
+    #   addition to NAMED_PRODUCT_TARGETS (e.g. JY231, CT1190B).
+    # - LLM punt with NO named product → trust the LLM punt verbatim
+    #   (do NOT fall through to term-detection, because the LLM was
+    #   informative — "CAR-T_unspecified" means "it's a CAR-T but
+    #   antigen unknown", which is more useful than dropping to
+    #   "Other_or_unknown" via term-detection's fallback path).
+    _PUNT_LABELS = {"Other_or_unknown", "CAR-T_unspecified", "", None}
     if nct in _LLM_OVERRIDES:
         t = _LLM_OVERRIDES[nct].get("target_category")
+        if named and t in _PUNT_LABELS:
+            return named, "named_product_over_llm_punt"
         if t:
             return t, "llm_override"
 
-    text = _row_text(row)
-
-    # Named-product short-circuit.
-    named = _lookup_named_product(text, NAMED_PRODUCT_TARGETS)
+    # Standard path: named-product short-circuit (no LLM override).
     if named:
         return named, "named_product"
 

@@ -496,12 +496,12 @@
     "branch": "Solid-onc",
     "disease_category": "Thoracic",
     "disease_entity": "Mesothelioma",
-    "target_category": "Mesothelin",
+    "target_category": "B7-H3",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "medium",
-    "notes": "MT027 for pleural tumors/mesothelioma, likely mesothelin-targeted."
+    "notes": "MT027 = B7-H3 CAR-T (allogeneic). Pleural mesothelioma is the disease, NOT the target. Corrected 2026-05-05 from Mesothelin (LLM had picked target from disease text)."
   },
   {
     "nct_id": "NCT06758713",
@@ -568,12 +568,12 @@
     "branch": "Heme-onc",
     "disease_category": "CLL_SLL",
     "disease_entity": "CLL",
-    "target_category": "Other_or_unknown",
+    "target_category": "BAFF-R",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "BAFF CAR-T (LMY-920) targets BAFF-R; not in target list."
+    "notes": "BAFF CAR-T (LMY-920) for CLL — targets BAFF-R (added 2026-04-27)."
   },
   {
     "nct_id": "NCT06964737",
@@ -964,12 +964,12 @@
     "branch": "Heme-onc",
     "disease_category": "B-NHL",
     "disease_entity": "B-NHL",
-    "target_category": "Other_or_unknown",
+    "target_category": "BAFF-R",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "BAFF CAR-T (LMY-920) for NHL; targets BAFF-R not in allow-list."
+    "notes": "BAFF CAR-T (LMY-920) for NHL — targets BAFF-R (added 2026-04-27)."
   },
   {
     "nct_id": "NCT05354375",
@@ -1209,11 +1209,11 @@
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "ADI-270 engineered gamma-delta V\u03b41 CAR-T for CD70 ccRCC."
+    "notes": "ADI-270 engineered gamma-delta Vδ1 CAR-T for CD70 ccRCC."
   },
   {
     "nct_id": "NCT06508775",
-    "branch": "Heme-onc",
+    "branch": "Mixed",
     "disease_category": "Basket/Multidisease",
     "disease_entity": "Basket/Multidisease",
     "target_category": "CD19/CD20 dual",
@@ -1221,7 +1221,7 @@
     "exclude": false,
     "exclude_reason": null,
     "confidence": "medium",
-    "notes": "Miltenyi MB-CART19.1/20.1/2019.1 long-term follow-up; heme malignancies dominant."
+    "notes": "Miltenyi MB-CART19.1/20.1/2019.1 long-term follow-up. Conditions span heme (B-NHL, ALL, CLL) + solid (Melanoma stage III/IV) → Branch=Mixed (corrected 2026-04-27 from Heme-onc)."
   },
   {
     "nct_id": "NCT06534060",
@@ -5212,24 +5212,24 @@
     "branch": "Solid-onc",
     "disease_category": "CNS",
     "disease_entity": "GBM",
-    "target_category": "IL13R\u03b12",
+    "target_category": "IL13Rα2",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "TGF\u03b2R2KO/IL13R\u03b12 CAR-T intracranial for glioma."
+    "notes": "TGFβR2KO/IL13Rα2 CAR-T intracranial for glioma."
   },
   {
     "nct_id": "NCT06856278",
     "branch": "Solid-onc",
     "disease_category": "H&N",
     "disease_entity": "H&N",
-    "target_category": "CAR-NK",
+    "target_category": "CAR-NK: NKG2D-L",
     "product_type": "Allogeneic/Off-the-shelf",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "NKG2D CAR-NK + PD-1 for anaplastic thyroid cancer."
+    "notes": "NKG2D CAR-NK + PD-1 for anaplastic thyroid — receptor is NKG2D-L (added 2026-04-27)."
   },
   {
     "nct_id": "NCT06898905",
@@ -5373,7 +5373,7 @@
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "IL-5 (CD125) CAR-T for eosinophilic leukemia. \u00b7 target corrected 'Other_or_unknown' \u2192 'IL-5' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
+    "notes": "IL-5 (CD125) CAR-T for eosinophilic leukemia. · target corrected 'Other_or_unknown' → 'IL-5' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT07300683",
@@ -5428,12 +5428,12 @@
     "branch": "Solid-onc",
     "disease_category": "CNS",
     "disease_entity": "GBM",
-    "target_category": "IL13R\u03b12",
+    "target_category": "IL13Rα2",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "IL13R\u03b12 CAR-T secreting anti-PD-L1 for glioma."
+    "notes": "IL13Rα2 CAR-T secreting anti-PD-L1 for glioma."
   },
   {
     "nct_id": "NCT07509450",
@@ -5476,7 +5476,7 @@
     "branch": "Solid-onc",
     "disease_category": "CNS",
     "disease_entity": "GBM",
-    "target_category": "IL13R\u03b12",
+    "target_category": "IL13Rα2",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
@@ -5709,7 +5709,7 @@
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "CD19-7\u00d719 CAR-T with IL-7/CCL19 + tislelizumab in DLBCL."
+    "notes": "CD19-7×19 CAR-T with IL-7/CCL19 + tislelizumab in DLBCL."
   },
   {
     "nct_id": "NCT05705570",
@@ -6549,7 +6549,7 @@
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "CD4CAR CAR-T in relapsed/refractory CMML; CD4 not in allow-list. \u00b7 target corrected 'Other_or_unknown' \u2192 'CD4' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
+    "notes": "CD4CAR CAR-T in relapsed/refractory CMML; CD4 not in allow-list. · target corrected 'Other_or_unknown' → 'CD4' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT06097455",
@@ -6568,12 +6568,12 @@
     "branch": "Heme-onc",
     "disease_category": "Multiple myeloma",
     "disease_entity": "R/R MM",
-    "target_category": "CAR-T_unspecified",
+    "target_category": "BCMA/GPRC5D dual",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
-    "confidence": "medium",
-    "notes": "BMS-986453 (BMS CAR-T candidate) in R/R MM."
+    "confidence": "high",
+    "notes": "BMS-986453 = dual BCMA × GPRC5D CAR-T from BMS/Juno for R/R MM. User-confirmed 2026-04-27 (corrected from CAR-T_unspecified)."
   },
   {
     "nct_id": "NCT06242834",
@@ -7432,12 +7432,12 @@
     "branch": "Solid-onc",
     "disease_category": "GI",
     "disease_entity": "Pancreatic",
-    "target_category": "CAR-NK",
+    "target_category": "CAR-NK: NKG2D-L",
     "product_type": "Allogeneic/Off-the-shelf",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "EUS intratumoral NKG2D CAR-NK in advanced pancreatic cancer."
+    "notes": "EUS intratumoral NKG2D CAR-NK pancreatic — receptor is NKG2D-L (added 2026-04-27)."
   },
   {
     "nct_id": "NCT06503211",
@@ -8349,7 +8349,7 @@
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "FGFR4 CAR-T for pediatric RMS; FGFR4 not in target list. \u00b7 target corrected 'Other_or_unknown' \u2192 'FGFR4' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
+    "notes": "FGFR4 CAR-T for pediatric RMS; FGFR4 not in target list. · target corrected 'Other_or_unknown' → 'FGFR4' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT06906380",
@@ -9004,12 +9004,12 @@
     "branch": "Solid-onc",
     "disease_category": "GI",
     "disease_entity": "Pancreatic",
-    "target_category": "CAR-NK",
+    "target_category": "CAR-NK: NKG2D-L",
     "product_type": "Allogeneic/Off-the-shelf",
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "NKG2D CAR-NK plus chemo for pancreatic cancer."
+    "notes": "NKG2D CAR-NK + chemo for pancreatic — receptor is NKG2D-L (added 2026-04-27)."
   },
   {
     "nct_id": "NCT06532643",
@@ -9592,7 +9592,7 @@
     "branch": "Solid-onc",
     "disease_category": "CNS",
     "disease_entity": "GBM",
-    "target_category": "IL13R\u03b12",
+    "target_category": "IL13Rα2",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
@@ -10660,7 +10660,7 @@
     "branch": "Heme-onc",
     "disease_category": "T-cell",
     "disease_entity": "T-cell",
-    "target_category": "CAR-\u03b3\u03b4 T",
+    "target_category": "CAR-γδ T",
     "product_type": "Autologous",
     "exclude": false,
     "exclude_reason": null,
@@ -11824,7 +11824,7 @@
     "branch": "Heme-onc",
     "disease_category": "AML",
     "disease_entity": "AML",
-    "target_category": "CAR-\u03b3\u03b4 T",
+    "target_category": "CAR-γδ T",
     "product_type": "Autologous",
     "exclude": true,
     "exclude_reason": "Exploratory feasibility/blood sampling study; no CAR-T treatment administered",
@@ -12145,15 +12145,15 @@
   },
   {
     "nct_id": "NCT07395479",
-    "branch": "Unknown",
+    "branch": "Mixed",
     "disease_category": "Basket/Multidisease",
     "disease_entity": "Basket/Multidisease",
-    "target_category": "BCMA/GPRC5D dual",
+    "target_category": "Multi-target platform",
     "product_type": "In vivo",
     "exclude": false,
     "exclude_reason": null,
-    "confidence": "medium",
-    "notes": "V001 in vivo CAR-T platform (BCMA/GPRC5D/DLL3) in advanced malignancies."
+    "confidence": "high",
+    "notes": "In vivo CAR-T platform trial testing THREE SEPARATE constructs: in-vivo BCMA CAR-T, in-vivo GPRC5D CAR-T, in-vivo DLL3 CAR-T. Not a dual-target single construct. User-confirmed 2026-05-05. Antigens: BCMA + GPRC5D + DLL3 (each via its own product, not co-expressed). ProductType is `In vivo` for all three. Branch=Mixed: BCMA + GPRC5D target heme (MM); DLL3 targets solid (SCLC). Originally set Heme-onc; corrected to Mixed."
   },
   {
     "nct_id": "NCT02876978",
@@ -12621,7 +12621,7 @@
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "Anti-CD1a CAR-T for R/R T-ALL/T-LL. \u00b7 target corrected 'Other_or_unknown' \u2192 'CD1a' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
+    "notes": "Anti-CD1a CAR-T for R/R T-ALL/T-LL. · target corrected 'Other_or_unknown' → 'CD1a' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT07152223",
@@ -12717,7 +12717,7 @@
     "exclude": false,
     "exclude_reason": null,
     "confidence": "high",
-    "notes": "FAP-specific CAR-T for malignant pleural mesothelioma. \u00b7 target corrected 'Other_or_unknown' \u2192 'FAP' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
+    "notes": "FAP-specific CAR-T for malignant pleural mesothelioma. · target corrected 'Other_or_unknown' → 'FAP' via independent-LLM validation 2026-04-25 (user-verified on CT.gov)"
   },
   {
     "nct_id": "NCT05302037",
@@ -13654,5 +13654,29 @@
     "exclude_reason": "Non-malignant indication: HIV-1 infection",
     "confidence": "high",
     "notes": "Third-gen CAR-T for HIV-1 infection, not oncology."
+  },
+  {
+    "nct_id": "NCT07106710",
+    "branch": "Heme-onc",
+    "disease_category": "Multiple myeloma",
+    "disease_entity": "R/R MM",
+    "target_category": "BCMA",
+    "product_type": "Autologous",
+    "exclude": false,
+    "exclude_reason": null,
+    "confidence": "high",
+    "notes": "ASCT followed by BCMA CAR-T (single-antigen) and GPRC5D/CD3 BiTEs for maintenance. The CAR-T construct targets BCMA only — GPRC5D is the bispecific antibody used for maintenance, not the CAR's target. Corrected 2026-05-05 from BCMA/GPRC5D dual (false-fire on dual-target detector when both antigens appear in title text)."
+  },
+  {
+    "nct_id": "NCT07106684",
+    "branch": "Heme-onc",
+    "disease_category": "Multiple myeloma",
+    "disease_entity": "R/R MM",
+    "target_category": "BCMA",
+    "product_type": "Autologous",
+    "exclude": false,
+    "exclude_reason": null,
+    "confidence": "high",
+    "notes": "ASCT followed by BCMA CAR-T (single-antigen) and GPRC5D/CD3 BiTEs for maintenance. The CAR-T construct targets BCMA only — GPRC5D is the bispecific antibody used for maintenance, not the CAR's target. Corrected 2026-05-05 from BCMA/GPRC5D dual (false-fire on dual-target detector when both antigens appear in title text)."
   }
 ]

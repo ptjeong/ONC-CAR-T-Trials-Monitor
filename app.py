@@ -4674,6 +4674,13 @@ with tab_pub:
                 label_visibility="collapsed",
             )
 
+            # Stash for export buttons rendered outside this fragment.
+            # `fig1` is a local of `_render_fig1`; without this, the
+            # export call below the fragment can't reach it. Re-run
+            # of the fragment (pill clicks) refreshes the stashed
+            # fig so PNG/SVG always reflect the latest pill state.
+            st.session_state["_fig1_for_export"] = fig1
+
         _render_fig1()
 
         total_t = len(df_filt)
@@ -4692,15 +4699,27 @@ with tab_pub:
         c4.metric("CAGR (overall)", cagr_str)
 
         _pub_caption(len(df_filt))
-        _fig_download_buttons(
-            fig1, "fig1_temporal_trends", "Fig 1",
-            csv_button=dict(
-                label="Fig 1 — data (CSV)",
+        # Pull fig1 out of the fragment's stash (set inside _render_fig1).
+        # Defensive: if the fragment didn't render (df_filt empty, etc.)
+        # the stash may be missing — fall back to CSV-only.
+        _fig1_obj = st.session_state.get("_fig1_for_export")
+        if _fig1_obj is not None:
+            _fig_download_buttons(
+                _fig1_obj, "fig1_temporal_trends", "Fig 1",
+                csv_button=dict(
+                    label="Fig 1 — data (CSV)",
+                    data=_csv_with_provenance(year_branch, "Fig 1 — Temporal trends by branch"),
+                    file_name="fig1_temporal_trends.csv",
+                    mime="text/csv",
+                ),
+            )
+        else:
+            st.download_button(
+                "Fig 1 — data (CSV)",
                 data=_csv_with_provenance(year_branch, "Fig 1 — Temporal trends by branch"),
                 file_name="fig1_temporal_trends.csv",
                 mime="text/csv",
-            ),
-        )
+            )
     else:
         st.info("No start year data available.")
 
@@ -5051,6 +5070,9 @@ with tab_pub:
                 "archetypes (dose-escalation → pivotal). Mixed and Unknown branches "
                 "excluded; their enrollment data is preserved in the CSV export."
             )
+            # Stash for export buttons rendered outside this conditional
+            # (fig4a is defined only inside `else: # not _bar_df.empty`).
+            st.session_state["_fig4a_for_export"] = fig4a
 
         # 4b — Median enrollment by phase × branch
         st.markdown(
@@ -5140,6 +5162,9 @@ with tab_pub:
                             borderwidth=0, title=None),
             )
             st.plotly_chart(fig4c, width='stretch', config=PUB_EXPORT)
+            # Stash for export (fig4c is defined inside the
+            # `if not _dis_enroll_agg.empty` branch only).
+            st.session_state["_fig4c_for_export"] = fig4c
 
         # Fig 4d (forest plot by subgroup) was removed — 4a/4b/4c already
         # cover the enrollment landscape cleanly, and once a user filter
@@ -5160,18 +5185,28 @@ with tab_pub:
         ]].sort_values("EnrollmentCount", ascending=False)
         _pub_caption(len(df_filt),
                      extra=f"Enrollment panels restricted to {len(df_enroll_known):,} trials with a numeric enrollment target.")
-        # Fig 4 has three sub-figures (a/b/c). Export each.
-        _fig_download_buttons(fig4a, "fig4a_enrollment_branch", "Fig 4a (branch)")
+        # Fig 4 has three sub-figures (a/b/c). 4a + 4c are defined inside
+        # nested conditionals (empty-data branches), so they're stashed
+        # via session_state. 4b is at the outer scope and always defined.
+        # Defensive .get() with CSV-only fallback per sub-fig.
+        _fig4a_obj = st.session_state.get("_fig4a_for_export")
+        if _fig4a_obj is not None:
+            _fig_download_buttons(_fig4a_obj, "fig4a_enrollment_branch", "Fig 4a (branch)")
         _fig_download_buttons(fig4b, "fig4b_enrollment_phase",  "Fig 4b (phase)")
-        _fig_download_buttons(
-            fig4c, "fig4c_enrollment_category", "Fig 4c (category)",
-            csv_button=dict(
-                label="Fig 4 — data (CSV)",
-                data=_csv_with_provenance(fig4_csv, "Fig 4 — Enrollment by branch / phase / category"),
-                file_name="fig4_enrollment.csv",
-                mime="text/csv",
-            ),
+        _fig4c_obj = st.session_state.get("_fig4c_for_export")
+        _fig4_csv_button = dict(
+            label="Fig 4 — data (CSV)",
+            data=_csv_with_provenance(fig4_csv, "Fig 4 — Enrollment by branch / phase / category"),
+            file_name="fig4_enrollment.csv",
+            mime="text/csv",
         )
+        if _fig4c_obj is not None:
+            _fig_download_buttons(
+                _fig4c_obj, "fig4c_enrollment_category", "Fig 4c (category)",
+                csv_button=_fig4_csv_button,
+            )
+        else:
+            st.download_button(**_fig4_csv_button)
     else:
         st.info("Insufficient enrollment data available.")
 
@@ -5578,6 +5613,9 @@ with tab_pub:
             _f7c_last = int(mod_year["StartYear"].max())
             fig7c.update_xaxes(range=[_f7c_first - 0.5, _f7c_last + 0.5])
             st.plotly_chart(fig7c, width='stretch', config=PUB_EXPORT)
+            # Stash for export buttons rendered outside this fragment
+            # (same pattern as Fig 1 — `fig7c` is a fragment-local).
+            st.session_state["_fig7c_for_export"] = fig7c
 
         _render_fig7b(_mod_year_raw)
 
@@ -5606,17 +5644,28 @@ with tab_pub:
         )
         _pub_caption(len(df_filt),
                      extra="Panel counts restricted to trials with a known start year.")
-        # Fig 7 has two sub-figs (b/c). Export both.
+        # Fig 7 has two sub-figs (b/c). fig7b is module-scoped; fig7c is
+        # stashed by the @st.fragment _render_fig7b above (because it's
+        # a fragment-local). Defensive get for fig7c with CSV-only fallback.
         _fig_download_buttons(fig7b, "fig7b_product_type", "Fig 7b (product type)")
-        _fig_download_buttons(
-            fig7c, "fig7c_modality", "Fig 7c (modality)",
-            csv_button=dict(
-                label="Fig 7 — data (CSV)",
+        _fig7c_obj = st.session_state.get("_fig7c_for_export")
+        if _fig7c_obj is not None:
+            _fig_download_buttons(
+                _fig7c_obj, "fig7c_modality", "Fig 7c (modality)",
+                csv_button=dict(
+                    label="Fig 7 — data (CSV)",
+                    data=_csv_with_provenance(fig7_csv, "Fig 7 — Innovation signals"),
+                    file_name="fig7_innovation_signals.csv",
+                    mime="text/csv",
+                ),
+            )
+        else:
+            st.download_button(
+                "Fig 7 — data (CSV)",
                 data=_csv_with_provenance(fig7_csv, "Fig 7 — Innovation signals"),
                 file_name="fig7_innovation_signals.csv",
                 mime="text/csv",
-            ),
-        )
+            )
     else:
         st.info("No start year data available for innovation analysis.")
 

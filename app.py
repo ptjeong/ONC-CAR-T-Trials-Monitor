@@ -6533,6 +6533,23 @@ The frozen dataset used for all analyses was generated on {snapshot_date}. CSV e
 the trial-level dataset (trials.csv) and site-level dataset (sites.csv) are available
 via the Data tab. All analyses are reproducible from the frozen snapshot using the
 published code and configuration files.
+
+External Comparator and Validation
+----------------------------------
+The classifier output was cross-checked against the ASGCT/Citeline Q1 2026 Gene, Cell, &
+RNA Therapy Landscape Report (American Society of Gene & Cell Therapy / Citeline,
+April 2026; pipeline data from Pharmaprojects/Trialtrove with cutoff approximately end of
+March 2026), accessed at https://www.asgct.org/uploads/files/general/Landscape-Report-2026-Q1.pdf.
+Top oncology antigen targets reported by ASGCT (CD19 154 programs, BCMA 68, CD20 29,
+CD22 27, HER2 25, claudin 18 24, GPC3 23, KRAS 20, mesothelin 17, CD70 16, NY-ESO-1 15,
+CD7 15, EGFR 14, CD33 14, B7-H3 14, PRAME 13, MUC1 13, GPRC5D 11, CLEC12A 11) align with
+the antigens captured by HEME_TARGET_TERMS and SOLID_TARGET_TERMS in this study's
+classifier; KRAS, NY-ESO-1, and PRAME were added to the taxonomy in May 2026 to match.
+The ASGCT report does NOT separate CAR-T from broader gene-therapy aggregates and
+provides no geographic, sponsor-type, or autologous/allogeneic stratification — gaps
+the present analysis fills via direct CT.gov queries with curated CAR-T classification.
+The 2026-05-05 named-product audit (n=171 trial-product matches across {n_named_products}
+known products) achieved 98.2% trial-level classification accuracy.
 """
     return text
 

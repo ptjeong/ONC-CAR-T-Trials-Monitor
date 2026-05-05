@@ -482,6 +482,37 @@ SOLID_TARGET_TERMS: dict[str, list[str]] = {
               "met car-t", "met car t", "hepatocyte growth factor receptor"],   # NCT03060356
     "FGFR4": ["fgfr4", "fgfr 4", "anti-fgfr4",
               "fibroblast growth factor receptor 4"],   # NCT06865664 (rhabdomyosarcoma)
+    # Added 2026-05-05 after ASGCT Q1 2026 Landscape Report cross-check —
+    # these antigens have ≥13 active gene-therapy programs each (per ASGCT
+    # /Citeline data) but were absent from our taxonomy. Construct-anchored
+    # synonyms only because all three are commonly mentioned in eligibility
+    # text (e.g. "KRAS-mutant patients", "NY-ESO-1 positive tumors",
+    # "PRAME expression required") which would false-fire bare-token matches.
+    #
+    # KRAS — 20 programs per ASGCT Q1 2026. Mostly NSCLC, CRC, pancreatic.
+    # KRAS-mutant subtypes (G12D, G12C) often referenced as eligibility,
+    # so require explicit construct phrasing.
+    "KRAS":     ["anti-kras", "kras car", "kras-car", "kras cart",
+                 "kras-cart", "kras-targeted", "kras targeted",
+                 "kras-directed", "kras directed", "kras scfv",
+                 "kras g12d-targeted", "kras g12c-targeted",
+                 "anti-kras-g12d", "anti-kras-g12c"],
+    # NY-ESO-1 — 15 programs per ASGCT (CTAG1B / cancer testis antigen 1B).
+    # Mostly TCR-T (synovial sarcoma, melanoma, ovarian, NSCLC) but CAR-T
+    # exists too. Construct-anchored only — "NY-ESO-1 positive patients"
+    # is a common eligibility phrase.
+    "NY-ESO-1": ["anti-ny-eso-1", "anti-ny eso 1", "anti-nyeso",
+                 "ny-eso-1 car", "ny-eso-1-car", "nyeso car", "nyeso-car",
+                 "ny-eso-1 cart", "ny-eso-1-cart",
+                 "ny-eso-1-targeted", "ny-eso-1 targeted",
+                 "ny-eso-1-directed", "ny-eso-1 directed",
+                 "ctag1b car", "ctag1b-car"],
+    # PRAME — 13 programs per ASGCT. Solid (melanoma, sarcoma) + heme (AML).
+    # PRAME is also a common eligibility marker; construct-anchored only.
+    "PRAME":    ["anti-prame", "prame car", "prame-car", "prame cart",
+                 "prame-cart", "prame car-t", "prame-car-t",
+                 "prame-targeted", "prame targeted",
+                 "prame-directed", "prame directed", "prame scfv"],
 }
 
 # Dual / multi-target combos (checked pair-wise against detected targets)
@@ -533,6 +564,20 @@ NAMED_PRODUCT_TARGETS: dict[str, list[str]] = {
         # CD19 — but standalone MB-CART20.1 should be CD20. We keep
         # CD19 as a default given the rarity of standalone CD20-only
         # in this dataset; revisit if a standalone trial appears.
+        # Added 2026-05-05 from ASGCT Q1 2026 Landscape Report.
+        # All confirmed CD19-targeted CAR-Ts via sponsor product info /
+        # press releases / regulatory filings.
+        "varnimcabtagene autoleucel", "qartemi",   # Immuneel — India / Spain B-NHL approval 2025
+        "renikeolunsai", "hicara",                  # Hrain Bio — China r/r LBCL approval 2025
+        "pulkilumab", "pulidekai",                  # Chongqing Precision — China ALL approval 2025
+        "anbal-cel", "anbalcel",                    # Curocell — South Korea pre-reg
+        "kite-753", "kite753",                      # Kite/Gilead — DLBCL (RMAT designation Q1 2026)
+        # Prulacabtagene leucel — autoimmune CAR-T (lupus nephritis +
+        # SLE, FDA meetings expected Q2 2026). Won't appear in onc CT.gov
+        # queries but kept here so cross-referencing the rheum repo
+        # via this config doesn't double-add. Same construct as the
+        # rheum-classified CD19 autoimmune CAR-Ts.
+        "prulacabtagene leucel", "prulacabtagene autoleucel", "prula-cel",
     ],
     "BCMA": [
         "idecabtagene vicleucel", "abecma", "ide-cel",
@@ -549,6 +594,22 @@ NAMED_PRODUCT_TARGETS: dict[str, list[str]] = {
         "allo-715", "anito-cel", "ct053",
         # Curation-loop additions
         "ct0596", "hbi0101",
+        # Added 2026-05-05 from ASGCT Q1 2026 Landscape Report —
+        # NXC-201 (Immix Biopharma) BCMA CAR-T received FDA Breakthrough
+        # Therapy Designation Jan 2026 for AL amyloidosis. Heme-onc
+        # rare disease; included here because BCMA is the construct's
+        # antigen even though indication isn't standard MM.
+        "nxc-201", "nxc201",
+    ],
+    # CD7 — added the WU-CART-007 named-product alias (Wugen, allogeneic
+    # CD7 CAR-T, BTD for ALL Jan 2026 per ASGCT). The CD7 single-antigen
+    # term-list above already catches "anti-CD7" / "CD7-directed" via
+    # the standard pattern, but the product code "WU-CART-007" needs
+    # the explicit alias to short-circuit cleanly.
+    # Note: CD7 is in HEME_TARGET_TERMS, not SOLID_TARGET_TERMS, so
+    # this entry sits under the CD7 heme key in NAMED_PRODUCT_TARGETS.
+    "CD7": [
+        "wu-cart-007", "wucart-007", "wucart007", "wu-cart007",
     ],
     "CD19/BCMA dual": ["gc012f", "azd0120"],
     # MB-CART2019.1 = zamtocabtagene autoleucel = tandem CD20/CD19.

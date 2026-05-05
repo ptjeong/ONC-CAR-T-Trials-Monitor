@@ -1480,21 +1480,78 @@ st.markdown(
 # Cached loaders
 # ---------------------------------------------------------------------------
 
+def _classifier_mtime() -> float:
+    """Combined max-mtime of every file that influences classifier output.
+
+    Used as a cache-bust key for `load_live` so that whenever
+    `config.py`, `pipeline.py`, or `llm_overrides.json` change, the
+    24-hour live cache invalidates on the next render — without
+    requiring the user to click "Refresh now" or wait for TTL expiry.
+
+    Why this exists: `load_live` runs the classifier in-process on
+    fresh CT.gov data. Without this key, an LLM-override or
+    NAMED_PRODUCT_TARGETS edit (e.g. anito-cel CD38→BCMA fix)
+    would be silently ignored by all live-mode users for up to 24h
+    or until they manually refresh — even though the classifier
+    code has already changed on disk.
+    """
+    from pathlib import Path as _Path
+    repo = _Path(__file__).resolve().parent
+    paths = [
+        repo / "config.py",
+        repo / "pipeline.py",
+        repo / "llm_overrides.json",
+    ]
+    return max(
+        (p.stat().st_mtime for p in paths if p.exists()),
+        default=0.0,
+    )
+
+
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
-def load_live(max_records: int = 5000, statuses: tuple[str, ...] = ()) -> tuple:
+def load_live(max_records: int = 5000, statuses: tuple[str, ...] = (),
+              classifier_mtime: float = 0.0) -> tuple:
     """Fetch from CT.gov; cache for 24 hours.
 
     With a 24h TTL the first user of the day pays the cold-start cost
     (~30–60s for ~2.5k trials) and everyone else in the same day gets an
     instant warm cache. This makes live-mode the natural default and
     removes the need for users to trigger a 'refresh' step.
+
+    `classifier_mtime` is part of the cache key so that classifier code
+    changes (config / pipeline / llm_overrides) bust the cache on the
+    next render. Without it, edits to the classifier would be invisible
+    to live-mode users until the 24h TTL expired or "Refresh now" was
+    clicked. Pass `_classifier_mtime()` from every call site.
     """
+    del classifier_mtime  # only used for cache keying
     statuses_list = list(statuses) if statuses else None
     return build_all_from_api(max_records=max_records, statuses=statuses_list)
 
 
-@st.cache_data
-def load_frozen(snapshot_date: str) -> tuple:
+def _snapshot_mtime(snapshot_date: str) -> float:
+    """Float mtime of the snapshot's trials.csv (0.0 if missing).
+
+    Used as a `load_frozen` cache key so that when the CSV is re-patched
+    in place (e.g. via `audit/named_product_audit.py` follow-ups), the
+    Streamlit cache invalidates on the next render rather than serving
+    a stale in-memory DataFrame until the process restarts.
+    """
+    from pathlib import Path as _Path
+    p = _Path(__file__).resolve().parent / "snapshots" / snapshot_date / "trials.csv"
+    return p.stat().st_mtime if p.exists() else 0.0
+
+
+@st.cache_data(show_spinner=False)
+def load_frozen(snapshot_date: str, csv_mtime: float = 0.0) -> tuple:
+    """Cached snapshot loader.
+
+    `csv_mtime` is part of the cache key (NOT the underscored-prefix
+    "ignored arg" convention — we WANT it in the key). Pass the live
+    mtime from `_snapshot_mtime(snapshot_date)` at every call site so
+    in-place CSV patches invalidate the cache automatically.
+    """
+    del csv_mtime  # only used for cache keying
     return load_snapshot(snapshot_date)
 
 
@@ -1655,7 +1712,9 @@ if _pinned and _pinned not in available_snapshots:
 
 if _pinned:
     with st.spinner(f"Loading pinned snapshot {_pinned}..."):
-        df, df_sites, prisma_counts = load_frozen(_pinned)
+        df, df_sites, prisma_counts = load_frozen(
+            _pinned, csv_mtime=_snapshot_mtime(_pinned),
+        )
     st.sidebar.success(
         f"Pinned to frozen snapshot **{_pinned}** ({len(df):,} trials)."
     )
@@ -1667,7 +1726,10 @@ else:
     selected_statuses: list[str] = []
     try:
         with st.spinner("Fetching live ClinicalTrials.gov data (cached 24h)..."):
-            df, df_sites, prisma_counts = load_live(statuses=tuple(selected_statuses))
+            df, df_sites, prisma_counts = load_live(
+                statuses=tuple(selected_statuses),
+                classifier_mtime=_classifier_mtime(),
+            )
         st.sidebar.caption(
             f"Live from CT.gov · {len(df):,} trials · cached 24h"
         )
@@ -1683,7 +1745,9 @@ else:
         if available_snapshots:
             fallback = available_snapshots[0]
             with st.spinner(f"Loading snapshot {fallback}..."):
-                df, df_sites, prisma_counts = load_frozen(fallback)
+                df, df_sites, prisma_counts = load_frozen(
+                    fallback, csv_mtime=_snapshot_mtime(fallback),
+                )
             st.sidebar.info(
                 f"Loaded frozen snapshot **{fallback}** (offline fallback)."
             )
@@ -2564,6 +2628,73 @@ with tab_overview:
         else:
             st.info("No trials with a valid start year for the current filter selection.")
 
+    # Row 3: Trials by platform (cell-therapy modality)
+    # Reveals the platform mix at a glance: how many trials use the
+    # standard autologous CAR-T construct vs. allogeneic / CAR-NK /
+    # CAAR-T / CAR-γδ T / CAR-Treg / in-vivo. Each modality is split
+    # by branch (heme vs solid) to surface where alternative platforms
+    # are concentrating.
+    st.subheader("Trials by platform (cell-therapy modality)")
+    st.caption(
+        "Distribution across CAR-T construct platforms — auto vs. allogeneic, "
+        "CAR-NK, CAAR-T, CAR-γδ T, CAR-Treg, in-vivo. Stacked by branch."
+    )
+    if not df_filt.empty and "Modality" in df_filt.columns:
+        platform_counts = (
+            df_filt.groupby(["Modality", "Branch"], as_index=False)
+            .size().rename(columns={"size": "Count"})
+        )
+        # Sort modalities by total count descending; consistent with
+        # Row 1's "biggest bucket first" ordering convention.
+        _modality_totals = (
+            platform_counts.groupby("Modality")["Count"].sum()
+            .sort_values(ascending=False)
+        )
+        platform_counts["Modality"] = pd.Categorical(
+            platform_counts["Modality"],
+            categories=_modality_totals.index.tolist(),
+            ordered=True,
+        )
+        platform_counts = platform_counts.sort_values(["Modality", "Branch"])
+
+        fig_platform = px.bar(
+            platform_counts, x="Modality", y="Count", color="Branch",
+            color_discrete_map=BRANCH_COLORS, template="plotly_white",
+            height=320, text="Count",
+        )
+        fig_platform.update_traces(
+            marker_line_width=0, opacity=1, textposition="inside",
+            textfont=dict(size=10, color="white"),
+        )
+        fig_platform.update_layout(
+            barmode="stack",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=10, r=10, t=10, b=10),
+            font=dict(color=THEME["text"]),
+            xaxis_title=None, yaxis_title=None, legend_title=None,
+            showlegend=False,
+        )
+        fig_platform.update_xaxes(color=THEME["muted"])
+        fig_platform.update_yaxes(gridcolor=THEME["grid"], color=THEME["muted"])
+        st.plotly_chart(fig_platform, width='stretch')
+
+        # Compact summary metrics below the chart — modal platform +
+        # share of "alternative" (non-Auto) modalities.
+        _total_pf = int(platform_counts["Count"].sum())
+        _modal_pf = _modality_totals.index[0] if len(_modality_totals) else "—"
+        _modal_n = int(_modality_totals.iloc[0]) if len(_modality_totals) else 0
+        _alt_n = int(_modality_totals.drop("Auto CAR-T", errors="ignore").sum())
+        _alt_pct = (100 * _alt_n / _total_pf) if _total_pf else 0
+        pf1, pf2, pf3 = st.columns(3)
+        pf1.metric("Modal platform", f"{_modal_pf}",
+                    f"{_modal_n} trials")
+        pf2.metric("Distinct platforms", f"{len(_modality_totals)}")
+        pf3.metric("Alternative-platform share",
+                    f"{_alt_pct:.0f}%",
+                    f"{_alt_n} non-Auto-CAR-T trials")
+    else:
+        st.info("No platform data available for the current filter selection.")
+
     # Methodological backing — collapsed by default so the insight-first flow
     # above isn't blocked. Full PRISMA narrative also lives in the Methods tab.
     if prisma_counts:
@@ -2913,12 +3044,12 @@ with tab_geo:
                         selection_mode=("points",),
                     )
 
-                    # If the user clicked a dot (and it's a NEW click —
-                    # compare against the last-seen point_index so a
-                    # stale click from an earlier rerun doesn't fight
-                    # a fresh table click), push the matching city row
-                    # into the city table's selection state. Must happen
-                    # BEFORE the st.dataframe below is instantiated.
+                    # Map-click → table-selection sync (multi-select aware).
+                    # Clicking a dot ADDS its city to the table's selected
+                    # rows instead of replacing — matches the multi-row
+                    # selection_mode below. Tracks the last-seen
+                    # point_index per-rerun so a stale click doesn't
+                    # re-fire on every render.
                     try:
                         _points = (_map_event.selection.points
                                    if _map_event and _map_event.selection else None)
@@ -2933,9 +3064,23 @@ with tab_geo:
                                 country_city_counts["City"] == _clicked_city
                             ]
                             if len(_match) > 0:
+                                _existing = (
+                                    st.session_state.get(_tbl_key, {})
+                                    .get("selection", {})
+                                    .get("rows", [])
+                                )
+                                _new_row = int(_match[0])
+                                # Toggle: clicking an already-selected
+                                # city's dot deselects it; clicking a
+                                # new one appends.
+                                if _new_row in _existing:
+                                    _next_rows = [r for r in _existing
+                                                  if r != _new_row]
+                                else:
+                                    _next_rows = list(_existing) + [_new_row]
                                 st.session_state[_tbl_key] = {
                                     "selection": {
-                                        "rows": [int(_match[0])],
+                                        "rows": _next_rows,
                                         "columns": [],
                                     }
                                 }
@@ -2963,19 +3108,23 @@ with tab_geo:
                     width='stretch',
                 )
 
-            # Full city table below — spans full width. Click any row for
-            # the trial drilldown.
+            # Full city table below — spans full width. Multi-row select:
+            # pick any combination of cities (Ctrl/Cmd-click or Shift-click)
+            # to see the union of trials with open sites in any of them.
+            # Each trial appears at most once (deduped on NCTId via .isin
+            # against the union of NCTs across selected cities).
             st.markdown(
                 f"**{selected_country} city table** "
                 f"<span style='color:#64748b; font-weight:400;'>"
-                f"— click a row to see its trials</span>",
+                f"— Cmd/Ctrl-click rows to select multiple cities; "
+                f"trials are de-duplicated</span>",
                 unsafe_allow_html=True,
             )
             city_event = st.dataframe(
                 country_city_counts, width='stretch',
                 height=min(340, max(200, len(country_city_counts) * 32 + 48)),
                 hide_index=True,
-                on_select="rerun", selection_mode="single-row",
+                on_select="rerun", selection_mode="multi-row",
                 key=f"city_table_{selected_country}",
                 column_config={
                     "City": st.column_config.TextColumn("City", width="medium"),
@@ -2987,28 +3136,57 @@ with tab_geo:
             )
 
             if city_event and city_event.selection.rows:
-                selected_idx = city_event.selection.rows[0]
-                selected_city = country_city_counts.iloc[selected_idx]["City"]
+                # Resolve all selected cities, sorted by site count (preserves
+                # the table's ranking order in the heading).
+                _selected_idxs = sorted(city_event.selection.rows)
+                selected_cities = [
+                    country_city_counts.iloc[i]["City"] for i in _selected_idxs
+                ]
+                # Heading: single city → "in Cologne"; multi → "in Cologne,
+                # Berlin, Munich (3 cities)" with count for clarity.
+                if len(selected_cities) == 1:
+                    _city_heading = selected_cities[0]
+                else:
+                    _city_heading = (
+                        ", ".join(selected_cities)
+                        + f" <span style='color:#64748b; font-weight:400;'>"
+                        f"({len(selected_cities)} cities)</span>"
+                    )
 
                 st.markdown(
-                    f"### Trials with open {selected_country} sites in {selected_city} "
+                    f"### Trials with open {selected_country} sites in {_city_heading} "
                     "<span style='color:#64748b; font-weight:400;'>"
                     "— click any row to open the full trial record below</span>",
                     unsafe_allow_html=True,
                 )
 
+                # Union of NCT IDs across all selected cities. The .isin +
+                # .unique() flow guarantees each trial appears once even
+                # if a single trial has open sites in 3 of the picked cities.
                 city_nct_ids = (
                     country_open_sites.loc[
-                        country_open_sites["City"].fillna("Unknown") == selected_city, "NCTId",
+                        country_open_sites["City"].fillna("Unknown")
+                        .isin(selected_cities), "NCTId",
                     ].dropna().unique()
                 )
 
-                city_trial_view = country_study_view[
-                    country_study_view["NCTId"].isin(city_nct_ids)
-                ].copy()
+                # Drop any duplicate NCT rows in country_study_view (defensive
+                # — country_study_view should already be one-row-per-NCT, but
+                # if a trial has multiple sponsor entries this guarantees the
+                # rater sees one row per trial, not one per city-trial pair).
+                city_trial_view = (
+                    country_study_view[
+                        country_study_view["NCTId"].isin(city_nct_ids)
+                    ]
+                    .drop_duplicates(subset=["NCTId"])
+                    .copy()
+                )
 
                 if city_trial_view.empty:
-                    st.info(f"No study rows found for {selected_city}.")
+                    st.info(
+                        "No study rows found for selected cities: "
+                        f"{', '.join(selected_cities)}."
+                    )
                 else:
                     _cols = [c for c in [
                         "NCTId", "NCTLink", "BriefTitle",
@@ -3018,12 +3196,16 @@ with tab_geo:
                         "Cities", "SiteStatuses",
                     ] if c in city_trial_view.columns]
                     city_trial_view, _cols = _attach_flag_column(city_trial_view, _cols)
+                    # Stable key suffix even when city set changes — derived
+                    # from the sorted city list so re-selecting the same
+                    # combination doesn't churn widget state.
+                    _key_cities = "__".join(sorted(selected_cities))[:80]
                     _city_trial_event = st.dataframe(
                         city_trial_view[_cols],
                         width='stretch', height=320, hide_index=True,
                         on_select="rerun",
                         selection_mode="single-row",
-                        key=f"city_trial_table_{selected_country}_{selected_city}",
+                        key=f"city_trial_table_{selected_country}_{_key_cities}",
                         column_config={
                             "NCTId": st.column_config.TextColumn("NCT ID"),
                             "NCTLink": st.column_config.LinkColumn("Trial link", display_text="Open trial"),
@@ -3056,17 +3238,21 @@ with tab_geo:
                         if not _full_rec.empty:
                             _render_trial_drilldown(
                                 _full_rec.iloc[0],
-                                key_suffix=f"geo_city_{selected_country}_{selected_city}",
+                                key_suffix=f"geo_city_{selected_country}_{_key_cities}",
                             )
                         else:
                             # Fallback: use the country_study_view row if df_filt
                             # doesn't have it (unlikely but defensive).
                             _render_trial_drilldown(
                                 city_trial_view.iloc[_selected_trial_rows[0]],
-                                key_suffix=f"geo_city_{selected_country}_{selected_city}",
+                                key_suffix=f"geo_city_{selected_country}_{_key_cities}",
                             )
             else:
-                st.caption("Select a city row in the table to open the related trial list below.")
+                st.caption(
+                    "Select one or more city rows in the table (Cmd/Ctrl-click "
+                    "to multi-select) to see the union of trials with open sites "
+                    "in any of them."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -3288,6 +3474,95 @@ _LAB_SZ    = 12
 PUB_FONT = dict(family="Arial, Helvetica, sans-serif", size=_TICK_SZ, color=_AX_COLOR)
 PUB_BASE = dict(template="plotly_white", paper_bgcolor="white", plot_bgcolor="white", font=PUB_FONT)
 PUB_EXPORT = {"toImageButtonOptions": {"format": "png", "width": 1600, "height": 900, "scale": 2}}
+
+# ---- High-fidelity figure export (PNG + SVG) for publication / slides ----
+# PNG: scale=5 against the PUB_EXPORT 1600×900 base → 8000×4500 px. Comfortably
+# exceeds 4K projection (3840×2160) AND 300-DPI journal requirements (~3500 px
+# wide for an A4 column). Universal compatibility, drag-and-drop into
+# PowerPoint/Keynote/Slides without import friction.
+# SVG: vector, infinite resolution, individual elements editable in
+# Illustrator/Figma/Inkscape. Required by NEJM/JAMA/Lancet for vector
+# submission. Smaller file size than PNG for typical chart content.
+PUB_PNG_SCALE = 5
+PUB_EXPORT_WIDTH = 1600
+PUB_EXPORT_HEIGHT = 900
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _fig_to_bytes_cached(fig_json: str, fmt: str,
+                          width: int, height: int, scale: int) -> bytes:
+    """Render a Plotly figure (passed as JSON string for hashability) to
+    bytes in the requested format. Cached so the same figure under the
+    same filter state doesn't re-render kaleido every interaction.
+    """
+    import plotly.io as pio
+    fig = pio.from_json(fig_json)
+    if fmt == "png":
+        return fig.to_image(format="png", width=width, height=height, scale=scale)
+    if fmt == "svg":
+        return fig.to_image(format="svg", width=width, height=height)
+    raise ValueError(f"Unsupported format: {fmt!r}")
+
+
+def _fig_download_buttons(fig, name_stem: str, fig_label: str = "figure",
+                           *, csv_button=None) -> None:
+    """Render a row of download buttons for a Plotly figure.
+
+    Three buttons in one columns row: PNG (high-res, scale=5), SVG
+    (vector), and optionally CSV (passed-through st.download_button kwargs
+    so the caller controls the data + label).
+
+    Generated bytes are cached on the figure's JSON form so flipping
+    between figures or filter changes that don't alter THIS figure
+    don't re-render kaleido. Failures (e.g. kaleido missing) surface
+    as a one-line caption rather than crashing the page — the camera
+    icon in the Plotly toolbar remains as a fallback.
+    """
+    try:
+        fig_json = fig.to_json()
+        png_bytes = _fig_to_bytes_cached(
+            fig_json, "png",
+            PUB_EXPORT_WIDTH, PUB_EXPORT_HEIGHT, PUB_PNG_SCALE,
+        )
+        svg_bytes = _fig_to_bytes_cached(
+            fig_json, "svg",
+            PUB_EXPORT_WIDTH, PUB_EXPORT_HEIGHT, 1,
+        )
+    except Exception as e:
+        st.caption(
+            f"Image export unavailable ({type(e).__name__}). Use the "
+            "camera icon in the chart toolbar to download a PNG."
+        )
+        if csv_button is not None:
+            st.download_button(**csv_button)
+        return
+
+    cols = st.columns(3 if csv_button else 2)
+    with cols[0]:
+        st.download_button(
+            f"{fig_label} — PNG (high-res)",
+            data=png_bytes,
+            file_name=f"{name_stem}.png",
+            mime="image/png",
+            help=f"{PUB_EXPORT_WIDTH * PUB_PNG_SCALE}×"
+                 f"{PUB_EXPORT_HEIGHT * PUB_PNG_SCALE} px, scale={PUB_PNG_SCALE}. "
+                 "Drop into PowerPoint/Keynote/Slides as-is.",
+            use_container_width=True,
+        )
+    with cols[1]:
+        st.download_button(
+            f"{fig_label} — SVG (vector)",
+            data=svg_bytes,
+            file_name=f"{name_stem}.svg",
+            mime="image/svg+xml",
+            help="Vector — open in Illustrator / Figma / Inkscape to "
+                 "re-color, re-typeset, or recompose. Required by NEJM / "
+                 "JAMA / Lancet for vector submission.",
+            use_container_width=True,
+        )
+    if csv_button is not None:
+        with cols[2]:
+            st.download_button(use_container_width=True, **csv_button)
 
 
 def _pub_header(figure_num: str, title: str, subtitle: str | None = None) -> None:
@@ -4417,9 +4692,15 @@ with tab_pub:
         c4.metric("CAGR (overall)", cagr_str)
 
         _pub_caption(len(df_filt))
-        st.download_button("Fig 1 data (CSV)",
-                           _csv_with_provenance(year_branch, "Fig 1 — Temporal trends by branch"),
-                           "fig1_temporal_trends.csv", "text/csv")
+        _fig_download_buttons(
+            fig1, "fig1_temporal_trends", "Fig 1",
+            csv_button=dict(
+                label="Fig 1 — data (CSV)",
+                data=_csv_with_provenance(year_branch, "Fig 1 — Temporal trends by branch"),
+                file_name="fig1_temporal_trends.csv",
+                mime="text/csv",
+            ),
+        )
     else:
         st.info("No start year data available.")
 
@@ -4472,9 +4753,15 @@ with tab_pub:
 
         fig2_csv = phase_counts[["Phase", "Branch", "Trials"]].copy()
         _pub_caption(len(df_filt))
-        st.download_button("Fig 2 data (CSV)",
-                           _csv_with_provenance(fig2_csv, "Fig 2 — Phase distribution by branch"),
-                           "fig2_phase_by_branch.csv", "text/csv")
+        _fig_download_buttons(
+            fig2, "fig2_phase_by_branch", "Fig 2",
+            csv_button=dict(
+                label="Fig 2 — data (CSV)",
+                data=_csv_with_provenance(fig2_csv, "Fig 2 — Phase distribution by branch"),
+                file_name="fig2_phase_by_branch.csv",
+                mime="text/csv",
+            ),
+        )
     else:
         st.info("No phase data available.")
 
@@ -4578,9 +4865,21 @@ with tab_pub:
         fig3_csv["% of total"] = (fig3_csv["Trials"] / total_geo * 100).round(1)
         _pub_caption(len(df_filt),
                      extra="Multi-country trials are counted once per country.")
-        st.download_button("Fig 3 data (CSV)",
-                           _csv_with_provenance(fig3_csv, "Fig 3 — Geographic distribution"),
-                           "fig3_geographic_distribution.csv", "text/csv")
+        # Fig 3 has both a map (fig3_map) and a bar (fig3_bar). Surface
+        # both via separate exports so the user can pick whichever fits
+        # their slide / manuscript layout.
+        _fig_download_buttons(
+            fig3_map, "fig3a_geographic_map", "Fig 3a (map)",
+        )
+        _fig_download_buttons(
+            fig3_bar, "fig3b_geographic_bar", "Fig 3b (bar)",
+            csv_button=dict(
+                label="Fig 3 — data (CSV)",
+                data=_csv_with_provenance(fig3_csv, "Fig 3 — Geographic distribution"),
+                file_name="fig3_geographic_distribution.csv",
+                mime="text/csv",
+            ),
+        )
     else:
         st.info("No country data available.")
 
@@ -4861,9 +5160,18 @@ with tab_pub:
         ]].sort_values("EnrollmentCount", ascending=False)
         _pub_caption(len(df_filt),
                      extra=f"Enrollment panels restricted to {len(df_enroll_known):,} trials with a numeric enrollment target.")
-        st.download_button("Fig 4 data (CSV)",
-                           _csv_with_provenance(fig4_csv, "Fig 4 — Enrollment by branch / phase / category"),
-                           "fig4_enrollment.csv", "text/csv")
+        # Fig 4 has three sub-figures (a/b/c). Export each.
+        _fig_download_buttons(fig4a, "fig4a_enrollment_branch", "Fig 4a (branch)")
+        _fig_download_buttons(fig4b, "fig4b_enrollment_phase",  "Fig 4b (phase)")
+        _fig_download_buttons(
+            fig4c, "fig4c_enrollment_category", "Fig 4c (category)",
+            csv_button=dict(
+                label="Fig 4 — data (CSV)",
+                data=_csv_with_provenance(fig4_csv, "Fig 4 — Enrollment by branch / phase / category"),
+                file_name="fig4_enrollment.csv",
+                mime="text/csv",
+            ),
+        )
     else:
         st.info("Insufficient enrollment data available.")
 
@@ -4921,9 +5229,15 @@ with tab_pub:
 
         _pub_caption(len(df_filt),
                      extra="Basket/Multidisease trials are shown as their own category slice under the inferred branch.")
-        st.download_button("Fig 5 data (CSV)",
-                           _csv_with_provenance(sun_df, "Fig 5 — Disease hierarchy"),
-                           "fig5_disease_hierarchy.csv", "text/csv")
+        _fig_download_buttons(
+            fig5, "fig5_disease_hierarchy", "Fig 5",
+            csv_button=dict(
+                label="Fig 5 — data (CSV)",
+                data=_csv_with_provenance(sun_df, "Fig 5 — Disease hierarchy"),
+                file_name="fig5_disease_hierarchy.csv",
+                mime="text/csv",
+            ),
+        )
     else:
         st.info("No disease data available.")
 
@@ -4986,16 +5300,19 @@ with tab_pub:
         )
         return fig
 
+    # Capture the figs so we can offer PNG/SVG export below (the prior
+    # inline-render lost the reference; export buttons below need the
+    # fig handle).
+    fig6_heme = _target_hbar(heme_tgt, HEME_COLOR, "Heme-onc targets", 380) if not heme_tgt.empty else None
+    fig6_solid = _target_hbar(solid_tgt, SOLID_COLOR, "Solid-onc targets", 380) if not solid_tgt.empty else None
     with col_h:
-        if not heme_tgt.empty:
-            st.plotly_chart(_target_hbar(heme_tgt, HEME_COLOR, "Heme-onc targets", 380),
-                            width='stretch', config=PUB_EXPORT)
+        if fig6_heme is not None:
+            st.plotly_chart(fig6_heme, width='stretch', config=PUB_EXPORT)
         else:
             st.info("No heme-onc trials in filter.")
     with col_s:
-        if not solid_tgt.empty:
-            st.plotly_chart(_target_hbar(solid_tgt, SOLID_COLOR, "Solid-onc targets", 380),
-                            width='stretch', config=PUB_EXPORT)
+        if fig6_solid is not None:
+            st.plotly_chart(fig6_solid, width='stretch', config=PUB_EXPORT)
         else:
             st.info("No solid-onc trials in filter.")
 
@@ -5100,9 +5417,25 @@ with tab_pub:
     _pub_caption(len(df_filt),
                  extra="Undisclosed / unclear merges CAR-T_unspecified and Other_or_unknown; both preserved in CSV.")
     if not fig6_csv.empty:
-        st.download_button("Fig 6 data (CSV)",
-                           _csv_with_provenance(fig6_csv, "Fig 6 — Antigen targets by branch"),
-                           "fig6_targets_by_branch.csv", "text/csv")
+        if fig6_heme is not None:
+            _fig_download_buttons(fig6_heme, "fig6a_heme_targets", "Fig 6a (heme)")
+        if fig6_solid is not None:
+            _fig_download_buttons(
+                fig6_solid, "fig6b_solid_targets", "Fig 6b (solid)",
+                csv_button=dict(
+                    label="Fig 6 — data (CSV)",
+                    data=_csv_with_provenance(fig6_csv, "Fig 6 — Antigen targets by branch"),
+                    file_name="fig6_targets_by_branch.csv",
+                    mime="text/csv",
+                ),
+            )
+        else:
+            st.download_button(
+                "Fig 6 — data (CSV)",
+                data=_csv_with_provenance(fig6_csv, "Fig 6 — Antigen targets by branch"),
+                file_name="fig6_targets_by_branch.csv",
+                mime="text/csv",
+            )
 
     # ------------------------------------------------------------------
     # Fig 7 — Innovation signals (product type + modality over time)
@@ -5273,9 +5606,17 @@ with tab_pub:
         )
         _pub_caption(len(df_filt),
                      extra="Panel counts restricted to trials with a known start year.")
-        st.download_button("Fig 7 data (CSV)",
-                           _csv_with_provenance(fig7_csv, "Fig 7 — Innovation signals"),
-                           "fig7_innovation_signals.csv", "text/csv")
+        # Fig 7 has two sub-figs (b/c). Export both.
+        _fig_download_buttons(fig7b, "fig7b_product_type", "Fig 7b (product type)")
+        _fig_download_buttons(
+            fig7c, "fig7c_modality", "Fig 7c (modality)",
+            csv_button=dict(
+                label="Fig 7 — data (CSV)",
+                data=_csv_with_provenance(fig7_csv, "Fig 7 — Innovation signals"),
+                file_name="fig7_innovation_signals.csv",
+                mime="text/csv",
+            ),
+        )
     else:
         st.info("No start year data available for innovation analysis.")
 
@@ -5374,9 +5715,15 @@ with tab_pub:
             id_vars="DiseaseCategory", var_name="Target", value_name="Trials"
         )
         fig8_csv = fig8_csv[fig8_csv["Trials"] > 0]
-        st.download_button("Fig 8 data (CSV)",
-                           _csv_with_provenance(fig8_csv, "Fig 8 — Disease × target heatmap"),
-                           "fig8_disease_target_heatmap.csv", "text/csv")
+        _fig_download_buttons(
+            fig8, "fig8_disease_target_heatmap", "Fig 8",
+            csv_button=dict(
+                label="Fig 8 — data (CSV)",
+                data=_csv_with_provenance(fig8_csv, "Fig 8 — Disease × target heatmap"),
+                file_name="fig8_disease_target_heatmap.csv",
+                mime="text/csv",
+            ),
+        )
     else:
         st.info("Insufficient disease-target data for heatmap.")
 
@@ -5530,10 +5877,14 @@ with tab_pub:
             lambda r: _phase_pivot.at[r["Branch"], r["Antigen"]],
             axis=1,
         )
-        st.download_button(
-            "Fig 9 data (CSV)",
-            _csv_with_provenance(_fig9_csv, "Fig 9 — Antigen × Branch matrix"),
-            "fig9_antigen_branch_matrix.csv", "text/csv",
+        _fig_download_buttons(
+            fig9, "fig9_antigen_branch_matrix", "Fig 9",
+            csv_button=dict(
+                label="Fig 9 — data (CSV)",
+                data=_csv_with_provenance(_fig9_csv, "Fig 9 — Antigen × Branch matrix"),
+                file_name="fig9_antigen_branch_matrix.csv",
+                mime="text/csv",
+            ),
         )
 
     # ---------------------------------------------------------------------------
@@ -5681,16 +6032,20 @@ with tab_pub:
         )
         _pub_caption(len(_solid_df))
 
-        # CSV export
+        # CSV + image export
         _fig10_csv = _first.copy()
         _fig10_csv["TargetCategory"] = _fig10_csv["TargetCategory"].astype(str)
-        st.download_button(
-            "Fig 10 data (CSV)",
-            _csv_with_provenance(
-                _fig10_csv,
-                "Fig 10 — Solid-tumour antigen × indication frontier",
+        _fig_download_buttons(
+            fig10, "fig10_solid_antigen_frontier", "Fig 10",
+            csv_button=dict(
+                label="Fig 10 — data (CSV)",
+                data=_csv_with_provenance(
+                    _fig10_csv,
+                    "Fig 10 — Solid-tumour antigen × indication frontier",
+                ),
+                file_name="fig10_solid_antigen_frontier.csv",
+                mime="text/csv",
             ),
-            "fig10_solid_antigen_frontier.csv", "text/csv",
         )
 
     # ---------------------------------------------------------------------------
@@ -5806,15 +6161,19 @@ with tab_pub:
         )
         _pub_caption(len(_sc_df))
 
-        # CSV export
+        # CSV + image export
         _fig12_csv = _crowd_df.copy()
-        st.download_button(
-            "Fig 12 data (CSV)",
-            _csv_with_provenance(
-                _fig12_csv,
-                "Fig 12 — Industry sponsor crowding by antigen",
+        _fig_download_buttons(
+            fig12, "fig12_sponsor_crowding", "Fig 12",
+            csv_button=dict(
+                label="Fig 12 — data (CSV)",
+                data=_csv_with_provenance(
+                    _fig12_csv,
+                    "Fig 12 — Industry sponsor crowding by antigen",
+                ),
+                file_name="fig12_sponsor_crowding.csv",
+                mime="text/csv",
             ),
-            "fig12_sponsor_crowding.csv", "text/csv",
         )
 
 

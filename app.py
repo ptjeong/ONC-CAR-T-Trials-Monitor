@@ -137,42 +137,75 @@ _PLATFORM_LABELS = {"CAR-NK", "CAR-Treg", "CAAR-T", "CAR-γδ T"}
 # Last reviewed: 2026-04-24
 APPROVED_PRODUCTS_LAST_REVIEWED = "2026-04-24"
 APPROVED_PRODUCTS = [
+    # `disease` field added 2026-05-05 — surfaced in Fig 1 hover so the
+    # rater sees WHICH indication each approval covers. Critical for
+    # products approved multiple times in different diseases (e.g.
+    # axi-cel: 2017 FDA for DLBCL/FL, 2026 FDA sBLA for PCNSL — would
+    # otherwise look like a confusing duplicate dot at the same brand
+    # row with no explanation of why).
+    #
     # FDA approvals (primary — drawn as prominent vertical lines)
-    {"year": 2017, "name": "tisa-cel (Kymriah)",   "target": "CD19", "regulator": "FDA"},
-    {"year": 2017, "name": "axi-cel (Yescarta)",   "target": "CD19", "regulator": "FDA"},
-    {"year": 2020, "name": "brexu-cel (Tecartus)", "target": "CD19", "regulator": "FDA"},
-    {"year": 2021, "name": "liso-cel (Breyanzi)",  "target": "CD19", "regulator": "FDA"},
-    {"year": 2021, "name": "ide-cel (Abecma)",     "target": "BCMA", "regulator": "FDA"},
-    {"year": 2022, "name": "cilta-cel (Carvykti)", "target": "BCMA", "regulator": "FDA"},
-    {"year": 2024, "name": "obe-cel (Aucatzyl)",   "target": "CD19", "regulator": "FDA"},
+    {"year": 2017, "name": "tisa-cel (Kymriah)",   "target": "CD19", "regulator": "FDA",
+     "disease": "Pediatric/young-adult B-ALL; DLBCL"},
+    {"year": 2017, "name": "axi-cel (Yescarta)",   "target": "CD19", "regulator": "FDA",
+     "disease": "DLBCL, NHL, FL"},
+    {"year": 2020, "name": "brexu-cel (Tecartus)", "target": "CD19", "regulator": "FDA",
+     "disease": "MCL, adult B-ALL"},
+    {"year": 2021, "name": "liso-cel (Breyanzi)",  "target": "CD19", "regulator": "FDA",
+     "disease": "DLBCL, FL, CLL/SLL, MCL, MZL"},
+    {"year": 2021, "name": "ide-cel (Abecma)",     "target": "BCMA", "regulator": "FDA",
+     "disease": "R/R Multiple Myeloma"},
+    {"year": 2022, "name": "cilta-cel (Carvykti)", "target": "BCMA", "regulator": "FDA",
+     "disease": "R/R Multiple Myeloma"},
+    {"year": 2024, "name": "obe-cel (Aucatzyl)",   "target": "CD19", "regulator": "FDA",
+     "disease": "Adult R/R B-ALL"},
     # FDA label-expansion (sBLA, not new product) — added 2026-05-05 from
     # ASGCT Q1 2026 report. Yescarta extended to PCNSL Feb 6, 2026.
-    {"year": 2026, "name": "axi-cel (Yescarta) — PCNSL sBLA",
-                                                   "target": "CD19", "regulator": "FDA"},
+    # NOTE the brand stays "axi-cel (Yescarta)" (NOT "axi-cel (Yescarta) —
+    # PCNSL sBLA") so the y-axis collapses both Yescarta approvals onto
+    # ONE row instead of crowding two adjacent rows. The PCNSL detail
+    # surfaces only in the hover tooltip via the `disease` field.
+    {"year": 2026, "name": "axi-cel (Yescarta)",   "target": "CD19", "regulator": "FDA",
+     "disease": "PCNSL (sBLA label expansion)"},
     # NMPA approvals (China — listed in caption only, no chart line)
-    {"year": 2021, "name": "relma-cel (Carteyva)", "target": "CD19", "regulator": "NMPA"},
-    {"year": 2023, "name": "eque-cel (Fucaso)",    "target": "BCMA", "regulator": "NMPA"},
-    {"year": 2024, "name": "zevor-cel",            "target": "BCMA", "regulator": "NMPA"},
+    {"year": 2021, "name": "relma-cel (Carteyva)", "target": "CD19", "regulator": "NMPA",
+     "disease": "DLBCL, FL, MCL"},
+    {"year": 2023, "name": "eque-cel (Fucaso)",    "target": "BCMA", "regulator": "NMPA",
+     "disease": "R/R Multiple Myeloma"},
+    {"year": 2024, "name": "zevor-cel",            "target": "BCMA", "regulator": "NMPA",
+     "disease": "R/R Multiple Myeloma"},
     # NMPA additions 2026-05-05 from ASGCT Q1 2026 cross-check —
     # were missing from the prior overlay despite being approved.
-    {"year": 2023, "name": "inati-cel (Yorwida)",       "target": "CD19", "regulator": "NMPA"},
-    {"year": 2025, "name": "renikeolunsai (Hicara)",    "target": "CD19", "regulator": "NMPA"},
-    {"year": 2025, "name": "pulkilumab (Pulidekai)",    "target": "CD19", "regulator": "NMPA"},
+    {"year": 2023, "name": "inati-cel (Yorwida)",       "target": "CD19", "regulator": "NMPA",
+     "disease": "ALL, LBCL"},
+    {"year": 2025, "name": "renikeolunsai (Hicara)",    "target": "CD19", "regulator": "NMPA",
+     "disease": "R/R LBCL"},
+    {"year": 2025, "name": "pulkilumab (Pulidekai)",    "target": "CD19", "regulator": "NMPA",
+     "disease": "ALL"},
     # EMA approvals (EU — listed in caption only, no chart line)
-    {"year": 2018, "name": "tisa-cel (Kymriah)",   "target": "CD19", "regulator": "EMA"},
-    {"year": 2018, "name": "axi-cel (Yescarta)",   "target": "CD19", "regulator": "EMA"},
-    {"year": 2020, "name": "brexu-cel (Tecartus)", "target": "CD19", "regulator": "EMA"},
-    {"year": 2021, "name": "ide-cel (Abecma)",     "target": "BCMA", "regulator": "EMA"},
-    {"year": 2022, "name": "liso-cel (Breyanzi)",  "target": "CD19", "regulator": "EMA"},
-    {"year": 2022, "name": "cilta-cel (Carvykti)", "target": "BCMA", "regulator": "EMA"},
-    {"year": 2025, "name": "obe-cel (Aucatzyl)",   "target": "CD19", "regulator": "EMA"},
+    {"year": 2018, "name": "tisa-cel (Kymriah)",   "target": "CD19", "regulator": "EMA",
+     "disease": "Pediatric/young-adult B-ALL; DLBCL"},
+    {"year": 2018, "name": "axi-cel (Yescarta)",   "target": "CD19", "regulator": "EMA",
+     "disease": "DLBCL, PMBCL"},
+    {"year": 2020, "name": "brexu-cel (Tecartus)", "target": "CD19", "regulator": "EMA",
+     "disease": "MCL, adult B-ALL"},
+    {"year": 2021, "name": "ide-cel (Abecma)",     "target": "BCMA", "regulator": "EMA",
+     "disease": "R/R Multiple Myeloma"},
+    {"year": 2022, "name": "liso-cel (Breyanzi)",  "target": "CD19", "regulator": "EMA",
+     "disease": "DLBCL, PMBCL, FL"},
+    {"year": 2022, "name": "cilta-cel (Carvykti)", "target": "BCMA", "regulator": "EMA",
+     "disease": "R/R Multiple Myeloma"},
+    {"year": 2025, "name": "obe-cel (Aucatzyl)",   "target": "CD19", "regulator": "EMA",
+     "disease": "Adult R/R B-ALL"},
     # EMA addition 2026-05-05 — Qartemi was approved in Spain (EU member
     # state, EMA-routable) AND India (CDSCO) per ASGCT Q1 2026.
-    {"year": 2025, "name": "varni-cel (Qartemi)",  "target": "CD19", "regulator": "EMA"},
+    {"year": 2025, "name": "varni-cel (Qartemi)",  "target": "CD19", "regulator": "EMA",
+     "disease": "B-NHL"},
     # CDSCO (India) — Qartemi was approved in India 2025. New regulator
     # type, kept off the default pill set (only fires if user toggles
     # it on; same caption-only treatment as NMPA / EMA).
-    {"year": 2025, "name": "varni-cel (Qartemi)",  "target": "CD19", "regulator": "CDSCO"},
+    {"year": 2025, "name": "varni-cel (Qartemi)",  "target": "CD19", "regulator": "CDSCO",
+     "disease": "B-NHL"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -4514,6 +4547,7 @@ with tab_pub:
                 "brand": _brand_of(p["name"]),
                 "generic": _generic_of(p["name"]),
                 "target": p.get("target", ""),
+                "disease": p.get("disease", "—"),
                 "full": p["name"],
             })
         _appr_df = pd.DataFrame(_approvals)
@@ -4541,9 +4575,20 @@ with tab_pub:
             _appr_active = _appr_df[_appr_df["regulator"].isin(_active_regs)].copy()
             _has_any_active = not _appr_active.empty
 
-            # Subplot — fixed 0.72 / 0.28 split. The strip grows/shrinks only
-            # when the pill set is empty (entire bottom panel hidden).
-            _panel_heights = [0.80, 0.20] if not _has_any_active else [0.72, 0.28]
+            # Brand count drives the strip height + tick font — with 14+
+            # brands (post-ASGCT-Q1-2026 additions: Yorwida, Hicara, Pulidekai,
+            # Qartemi, plus the original 10) the prior fixed 0.28 split
+            # crowded labels into illegibility. Scale dynamically: 0.20 for
+            # ≤4 brands, ~0.40 for 14+, capped at 0.48 to keep the trend
+            # panel readable.
+            n_brands_active = (
+                _appr_active["brand"].nunique() if _has_any_active else 0
+            )
+            if not _has_any_active:
+                _strip_h = 0.20
+            else:
+                _strip_h = max(0.28, min(0.48, 0.20 + 0.018 * n_brands_active))
+            _panel_heights = [1.0 - _strip_h, _strip_h]
             fig1 = make_subplots(
                 rows=2, cols=1, shared_xaxes=True,
                 row_heights=_panel_heights,
@@ -4586,11 +4631,13 @@ with tab_pub:
                                 line=dict(width=1.2, color="white"),
                                 symbol=_REG_SYMBOL[reg],
                             ),
-                            customdata=_sub[["brand", "generic", "target", "regulator", "year"]].values,
+                            customdata=_sub[["brand", "generic", "target",
+                                              "regulator", "year", "disease"]].values,
                             hovertemplate=(
                                 "<b>%{customdata[0]}</b> (%{customdata[1]})<br>"
                                 "%{customdata[3]} approval · %{customdata[4]}<br>"
-                                "Target: %{customdata[2]}"
+                                "Target: <b>%{customdata[2]}</b><br>"
+                                "Disease: %{customdata[5]}"
                                 "<extra></extra>"
                             ),
                             legendgroup=reg,
@@ -4610,12 +4657,20 @@ with tab_pub:
                 title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
                 zeroline=False, rangemode="tozero",
             )
+            # Tick font scales down as brand count climbs — keeps labels
+            # legible without overlap. Pre-ASGCT (10 brands) used size 11;
+            # post-ASGCT (14+ brands) drops to 9-10 so the strip fits.
+            _brand_tick_size = (
+                11 if n_brands_active <= 8
+                else 10 if n_brands_active <= 12
+                else 9
+            )
             fig1.update_yaxes(
                 row=2, col=1,
                 tickmode="array",
                 tickvals=list(_brand_to_y.values()) if _has_any_active else [],
                 ticktext=list(_brand_to_y.keys())  if _has_any_active else [],
-                tickfont=dict(size=11, color=THEME["text"]),
+                tickfont=dict(size=_brand_tick_size, color=THEME["text"]),
                 showgrid=False,
                 showline=True, linewidth=1.2, linecolor=_AX_COLOR,
                 zeroline=False,
@@ -4667,9 +4722,17 @@ with tab_pub:
                     row=1, col=1,
                 )
 
+            # Overall height also scales with brand count so the bottom
+            # strip never compresses below ~22 px per row (legibility floor
+            # for tickfont size 9-11). 14 brands × 22 = ~308 px strip,
+            # ÷ ~0.40 strip share = ~770 px total.
+            _fig1_height = (
+                440 if not _has_any_active
+                else int(max(560, 360 + n_brands_active * 30))
+            )
             fig1.update_layout(
                 **PUB_BASE,
-                height=560 if _has_any_active else 440,
+                height=_fig1_height,
                 margin=dict(l=140, r=36, t=24, b=130),
                 legend=dict(
                     orientation="h",

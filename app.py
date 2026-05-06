@@ -5373,11 +5373,13 @@ with tab_deep:
     with deep_sub_landscape:
         st.subheader("Strategic landscape")
         st.caption(
-            "Seven cross-cutting analyses for understanding the field's "
+            "Five cross-cutting analyses for understanding the field's "
             "structural dynamics — when each antigen entered the clinic, "
-            "where sponsors compete vs. where niches sit uncontested, how "
-            "fast targets progress, and the well-known heme-vs-solid "
-            "maturity gap. All views auto-update with the sidebar filters. Sections 3 (Phase velocity), 4 (Sponsor concentration), and 9 (First-in-disease pairs) were dropped 2026-05-06 in a de-redundancy pass — they were either frequently empty or overlapped with the remaining views."
+            "where sponsors compete vs. where niches sit uncontested, "
+            "the well-known heme-vs-solid maturity gap, and which targets "
+            "are accelerating vs. cooling. All views auto-update with "
+            "the sidebar filters and degrade gracefully when filters "
+            "narrow the dataset."
         )
 
         if df_filt.empty:
@@ -5920,259 +5922,16 @@ with tab_deep:
             # scoped, decision-support framing). Three sections in the
             # same numbered scroll as the rest:
 
-            # ---------- 6. Pivotal candidates ----------
-            st.markdown("---")
-            st.markdown(
-                "### 6. Pivotal candidates "
-                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
-                "— Industry-sponsored Ph2 / Ph3 trials with status "
-                "RECRUITING / ACTIVE_NOT_RECRUITING and enrollment ≥30. "
-                "Most likely to support an FDA / EMA / NMPA filing "
-                "in the next 1-3 years."
-                "</span>",
-                unsafe_allow_html=True,
-            )
+            # Sections 6 (Pivotal candidates) and 7 (Acquisition
+            # signals) dropped 2026-05-06 in the de-redundancy pass.
+            # Same precedent as the earlier Phase-velocity cut: both
+            # views were decision-support analyses that work at the
+            # global / unfiltered scope but render empty under most
+            # sidebar filter combinations (Industry × Ph2/3 ×
+            # Recruiting × n≥30 is a tight filter chain). Replaced
+            # with friendlier guidance: the Data tab + sidebar filters
+            # can reproduce these queries ad-hoc when needed.
 
-            _piv_filters = (
-                df_filt["SponsorType"].isin(["Industry"])
-                & df_filt["PhaseOrdered"].astype(str).isin(["Phase 2", "Phase 3", "Phase 2/3"])
-                & df_filt["OverallStatus"].isin(["RECRUITING", "ACTIVE_NOT_RECRUITING"])
-            )
-            _piv = df_filt[_piv_filters].copy()
-            _piv["EnrollmentCount"] = pd.to_numeric(
-                _piv["EnrollmentCount"], errors="coerce"
-            )
-            _piv = _piv[_piv["EnrollmentCount"].fillna(0) >= 30]
-
-            if _piv.empty:
-                st.info(
-                    "No pivotal candidates in the current filter — try "
-                    "broadening the Sponsor / Phase / Status filters."
-                )
-            else:
-                _piv["Phase"] = _piv["PhaseLabel"].fillna(_piv["Phase"])
-                _piv["OverallStatus"] = _piv["OverallStatus"].map(
-                    STATUS_DISPLAY).fillna(_piv["OverallStatus"])
-                _piv["NCTLink"] = _piv["NCTId"].apply(
-                    lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
-                )
-                _piv = _piv.sort_values(
-                    ["PhaseOrdered", "EnrollmentCount"],
-                    ascending=[False, False],
-                ).reset_index(drop=True)
-
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Pivotal candidates", f"{len(_piv):,}")
-                m2.metric(
-                    "Distinct sponsors",
-                    f"{_piv['LeadSponsor'].nunique():,}",
-                )
-                m3.metric(
-                    "Distinct antigens",
-                    f"{_piv['TargetCategory'].nunique():,}",
-                )
-                _med_enroll = (
-                    int(_piv["EnrollmentCount"].median())
-                    if _piv["EnrollmentCount"].notna().any() else 0
-                )
-                m4.metric("Median enrollment", f"{_med_enroll:,}")
-
-                # Distribution of pivotal candidates by target
-                st.markdown("**Pivotal candidates by antigen target**")
-                _piv_by_tgt = (
-                    _piv.groupby("TargetCategory").size()
-                    .reset_index(name="Trials")
-                    .sort_values("Trials", ascending=True)
-                    .tail(15)
-                )
-                if not _piv_by_tgt.empty:
-                    fig_piv = px.bar(
-                        _piv_by_tgt, x="Trials", y="TargetCategory",
-                        orientation="h", template="plotly_white",
-                        color_discrete_sequence=[HEME_COLOR],
-                        height=max(280, len(_piv_by_tgt) * 26 + 60),
-                        text="Trials",
-                    )
-                    fig_piv.update_traces(
-                        marker_line_width=0, opacity=0.92,
-                        textposition="outside",
-                        textfont=dict(size=10, color=_AX_COLOR),
-                    )
-                    fig_piv.update_layout(
-                        **PUB_BASE,
-                        margin=dict(l=140, r=44, t=8, b=24),
-                        xaxis_title="Number of pivotal trials",
-                        yaxis_title=None, showlegend=False,
-                    )
-                    st.plotly_chart(fig_piv, width='stretch')
-
-                # Trial table
-                st.markdown(
-                    "**Pivotal-candidate trials** "
-                    "<span style='color:#64748b; font-weight:400;'>"
-                    "(click any row for full trial details)</span>",
-                    unsafe_allow_html=True,
-                )
-                _piv_cols = [c for c in [
-                    "NCTId", "NCTLink", "BriefTitle", "Branch",
-                    "DiseaseCategory", "DiseaseEntity", "TargetCategory",
-                    "ProductName", "Phase", "OverallStatus",
-                    "EnrollmentCount", "StartYear", "Countries", "LeadSponsor",
-                ] if c in _piv.columns]
-                _piv, _piv_cols = _attach_flag_column(_piv, _piv_cols)
-                _piv_event = st.dataframe(
-                    _piv[_piv_cols],
-                    width='stretch', height=420, hide_index=True,
-                    on_select="rerun", selection_mode="single-row",
-                    key="insights_pivotal_table",
-                    column_config=_trial_detail_cols(),
-                )
-                _piv_rows = (
-                    _piv_event.selection.rows
-                    if _piv_event and hasattr(_piv_event, "selection") else []
-                )
-                if _piv_rows:
-                    _render_trial_drilldown(
-                        _piv.iloc[_piv_rows[0]],
-                        key_suffix="insights_pivotal",
-                    )
-                st.download_button(
-                    "Download pivotal candidates (CSV)",
-                    _csv_with_provenance(_piv,
-                                          "Insights — Pivotal candidates",
-                                          include_filters=True),
-                    "insights_pivotal_candidates.csv", "text/csv",
-                )
-
-            # Section 9 (First-in-disease pairs) dropped 2026-05-06
-            # in the de-redundancy pass — overlapped with Section 1
-            # (Antigen first-in-class timeline). Both answered 'when
-            # did each thing first appear in the clinic?' — Section 1
-            # at the antigen level (more digestible), Section 9 at
-            # the (target × disease) pair level (rarely actionable
-            # for manuscript readers).
-
-            # ---------- 7. Acquisition signals ----------
-            st.markdown("---")
-            st.markdown(
-                "### 7. Acquisition signals "
-                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
-                "— sponsors with a SMALL portfolio (1-3 trials) BUT at "
-                "least one Ph2/3 trial AND any RECRUITING / "
-                "ACTIVE_NOT_RECRUITING status. Historical M&A pattern "
-                "(Arcellx → Gilead Feb 2026, $7.8B)."
-                "</span>",
-                unsafe_allow_html=True,
-            )
-
-            _acq_base = df_filt[
-                df_filt["SponsorType"].isin(["Industry"])
-                & df_filt["LeadSponsor"].notna()
-            ].copy()
-            if _acq_base.empty:
-                st.info("No industry-sponsored trials in current filter.")
-            else:
-                _spon_portfolio = (
-                    _acq_base.groupby("LeadSponsor")
-                    .agg(Trials=("NCTId", "nunique"),
-                         MaxPhase=("PhaseOrdered", "max"),
-                         AnyRecruiting=(
-                             "OverallStatus",
-                             lambda s: any(
-                                 str(x) in ("RECRUITING", "ACTIVE_NOT_RECRUITING")
-                                 for x in s
-                             ),
-                         ),
-                         Targets=(
-                             "TargetCategory",
-                             lambda s: ", ".join(sorted(set(
-                                 x for x in s
-                                 if pd.notna(x) and x not in (
-                                     "Other_or_unknown", "CAR-T_unspecified",
-                                 )
-                             ))),
-                         ),
-                         Diseases=(
-                             "DiseaseEntity",
-                             lambda s: ", ".join(sorted(set(
-                                 x for x in s if pd.notna(x)
-                             ))[:5]),
-                         ),
-                         FirstYear=("StartYear", "min"),
-                         LatestYear=("StartYear", "max"),
-                         Products=(
-                             "ProductName",
-                             lambda s: ", ".join(sorted(set(
-                                 x for x in s if pd.notna(x)
-                             ))) or "—",
-                         ))
-                    .reset_index()
-                )
-                # Acquisition criteria: small portfolio + any Ph2+/3 + recruiting
-                _acq = _spon_portfolio[
-                    (_spon_portfolio["Trials"] <= 3)
-                    & _spon_portfolio["AnyRecruiting"]
-                    & _spon_portfolio["MaxPhase"].astype(str).isin([
-                        "Phase 2", "Phase 3", "Phase 2/3",
-                    ])
-                ].copy()
-                _acq["MaxPhaseLabel"] = _acq["MaxPhase"].astype(str).map(PHASE_LABELS).fillna(_acq["MaxPhase"])
-                _acq = _acq.sort_values(
-                    ["MaxPhase", "Trials"], ascending=[False, True],
-                ).reset_index(drop=True)
-                _acq = _acq.drop(columns=["AnyRecruiting", "MaxPhase"])
-
-                if _acq.empty:
-                    st.info(
-                        "No sponsors match the acquisition-signal criteria "
-                        "in the current filter (1-3 trials + Ph2/3 + open)."
-                    )
-                else:
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Acquisition candidates", f"{len(_acq):,}")
-                    _ph3 = int(
-                        (_acq["MaxPhaseLabel"] == "Phase III").sum()
-                        + (_acq["MaxPhaseLabel"] == "Phase II/III").sum()
-                    )
-                    m2.metric("With Ph III data", f"{_ph3:,}",
-                              help="Most attractive M&A targets — Ph3 = "
-                                    "near-term approval potential")
-                    _solo = int((_acq["Trials"] == 1).sum())
-                    m3.metric("Single-trial sponsors", f"{_solo:,}",
-                              help="One-trial wonders — pure-play candidates")
-
-                    st.dataframe(
-                        _acq, width='stretch', height=420, hide_index=True,
-                        column_config={
-                            "LeadSponsor": st.column_config.TextColumn("Sponsor", width="medium"),
-                            "Trials": st.column_config.NumberColumn("# Trials", width="small"),
-                            "MaxPhaseLabel": st.column_config.TextColumn("Furthest phase", width="small"),
-                            "Targets": st.column_config.TextColumn("Targets", width="medium"),
-                            "Diseases": st.column_config.TextColumn("Diseases (top 5)", width="medium"),
-                            "FirstYear": st.column_config.NumberColumn("First trial", width="small"),
-                            "LatestYear": st.column_config.NumberColumn("Latest trial", width="small"),
-                            "Products": st.column_config.TextColumn("Products", width="medium"),
-                        },
-                        key="insights_acq_table",
-                    )
-                    st.caption(
-                        "<span style='color:#64748b'>"
-                        "Validation example: <strong>Arcellx</strong> "
-                        "(anito-cel) had 2 BCMA CAR-T trials in MM with "
-                        "BLA acceptance Feb 2026 → acquired by Gilead "
-                        "for $7.8B. Same pattern observable for upcoming "
-                        "candidates — drill into trials of the highest-"
-                        "phase candidates above for M&A signal."
-                        "</span>",
-                        unsafe_allow_html=True,
-                    )
-                    st.download_button(
-                        "Download acquisition signals (CSV)",
-                        _csv_with_provenance(_acq,
-                                              "Insights — Acquisition signals",
-                                              include_filters=True),
-                        "insights_acquisition_signals.csv", "text/csv",
-                    )
 
 
 # ---------------------------------------------------------------------------

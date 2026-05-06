@@ -5003,12 +5003,15 @@ with tab_deep:
                                     ].nunique()
                                 ),
                             })
-                        _ws_df = pd.DataFrame(_ws_rows).sort_values(
-                            "TotalTrials", ascending=True
-                        )
-                        # Only show categories with >0 CAR-T trials (otherwise
-                        # it's a dead category, not a white-space opportunity)
-                        _ws_df = _ws_df[_ws_df["TotalTrials"] > 0]
+                        # Empty-data guard: same fix pattern as the
+                        # phase-velocity chart — `_ws_rows` may be empty,
+                        # in which case sort_values would KeyError.
+                        _ws_df = pd.DataFrame(_ws_rows)
+                        if not _ws_df.empty:
+                            _ws_df = _ws_df.sort_values("TotalTrials", ascending=True)
+                            # Only show categories with >0 CAR-T trials (otherwise
+                            # it's a dead category, not a white-space opportunity)
+                            _ws_df = _ws_df[_ws_df["TotalTrials"] > 0]
                         if not _ws_df.empty:
                             fig_ws = px.bar(
                                 _ws_df, x="TotalTrials", y="DiseaseCategory",
@@ -5800,8 +5803,14 @@ with tab_deep:
                         "VelocityYears": int(_ph3_yrs.min() - _ph1_yrs.min()),
                         "TotalTrials": len(_grp),
                     })
-            _velo_df = pd.DataFrame(_ph_velo).sort_values("VelocityYears")
+            # Empty-data guard: if no antigens qualify (no antigen has
+            # BOTH a Ph1 AND a Ph3/Ph2-3 trial in the current filter),
+            # `_ph_velo` is empty and `pd.DataFrame([])` has zero columns
+            # → sort_values("VelocityYears") raises KeyError. Build the
+            # frame first, gate on empty, sort only when populated.
+            _velo_df = pd.DataFrame(_ph_velo)
             if not _velo_df.empty:
+                _velo_df = _velo_df.sort_values("VelocityYears")
                 fig_velo = px.bar(
                     _velo_df, x="VelocityYears", y="TargetCategory",
                     orientation="h", template="plotly_white",

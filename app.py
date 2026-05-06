@@ -224,19 +224,55 @@ _BRANCH_COLORS_HIGH_CONTRAST = {
 # previously buried in the publication-figures style block at line
 # ~3877 — moved up so the sidebar (which runs earlier in the script)
 # can reference it without a forward-reference NameError.
-PUB_EXPORT = {
-    "toImageButtonOptions": {
-        "format": "png",
-        "width": 1600,
-        "height": 900,
-        "scale": 5,
-    },
-    "displaylogo": False,
-    "modeBarButtonsToRemove": [
-        "lasso2d", "select2d", "autoScale2d", "hoverClosestCartesian",
-        "hoverCompareCartesian", "toggleSpikelines",
-    ],
-}
+# Default PUB_EXPORT — used until the sidebar's Display-options expander
+# computes the live version and replaces it. Kept as a module-level
+# fallback so any chart rendered BEFORE the sidebar block runs (none
+# in practice, but defensive) still has a valid config.
+#
+# IMPORTANT: starting 2026-05-06, PUB_EXPORT is REBUILT (not mutated)
+# on every script run via `_build_pub_export()` below. Reason: the
+# previous in-place mutation pattern produced the same dict object
+# reference on every rerun, so Streamlit's change-detection on
+# `st.plotly_chart(config=...)` saw "same args, no need to re-render"
+# — the modebar kept its previous (PNG) format burned in even when
+# the user picked SVG in the sidebar. Rebuilding the dict gives a
+# new object identity → Streamlit re-renders → modebar picks up
+# the new format. Verified by user report 2026-05-06: "download
+# plot as svg doesnt work even if selected in the sidebar".
+def _build_pub_export() -> dict:
+    """Construct a fresh PUB_EXPORT dict from current sidebar state.
+
+    Returns a NEW dict object on every call (no caching) so that
+    Streamlit's chart-arg-hashing detects the format change and
+    re-renders the chart with the updated modebar config.
+    """
+    fmt_choice = st.session_state.get(
+        "chart_export_fmt", "PNG (slides, 5× resolution)",
+    )
+    is_svg = fmt_choice.startswith("SVG")
+    return {
+        "toImageButtonOptions": {
+            "format": "svg" if is_svg else "png",
+            # Width/height are advisory for SVG (it scales to natural
+            # bounds anyway) but required for raster PNG sizing.
+            "width": 1600,
+            "height": 900,
+            # scale=1 for SVG (vector — already infinite resolution),
+            # scale=5 for PNG (8000×4500 px = 4K + 300DPI safe).
+            "scale": 1 if is_svg else 5,
+        },
+        "displaylogo": False,
+        "modeBarButtonsToRemove": [
+            "lasso2d", "select2d", "autoScale2d", "hoverClosestCartesian",
+            "hoverCompareCartesian", "toggleSpikelines",
+        ],
+    }
+
+
+# Module-level fallback (used only if the sidebar hasn't run yet, e.g.
+# during a hot-reload or test import). The sidebar block reassigns
+# `PUB_EXPORT` to the result of `_build_pub_export()` on every rerun.
+PUB_EXPORT = _build_pub_export()
 
 _MODALITY_COLORS: dict[str, str] = {}  # populated below once NEJM palette defined
 
@@ -1907,14 +1943,13 @@ with st.sidebar.expander("Display options", expanded=False):
         ),
     )
 
-# Mutate PUB_EXPORT in place per the export choice. Same dict object
-# referenced by every `config=PUB_EXPORT` arg downstream.
-if _export_choice.startswith("SVG"):
-    PUB_EXPORT["toImageButtonOptions"]["format"] = "svg"
-    PUB_EXPORT["toImageButtonOptions"]["scale"] = 1
-else:
-    PUB_EXPORT["toImageButtonOptions"]["format"] = "png"
-    PUB_EXPORT["toImageButtonOptions"]["scale"] = 5
+# Rebuild PUB_EXPORT as a NEW dict object on every script run (not
+# mutate-in-place). Reason documented at the `_build_pub_export()`
+# definition: in-place mutation fails to bust Streamlit's chart-arg
+# hash, so the modebar's download config stays stuck at the previous
+# format. A fresh dict identity forces Streamlit to detect the
+# config change and re-render the chart with the new format.
+PUB_EXPORT = _build_pub_export()
 
 # Mutate BRANCH_COLORS in place per the toggle. .clear() + .update()
 # keeps the SAME dict object so charts that captured a reference to

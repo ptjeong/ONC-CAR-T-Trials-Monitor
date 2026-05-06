@@ -2502,9 +2502,15 @@ if _MODERATOR_MODE:
     _tab_labels.append("Moderation")
 
 # Insights as a top-level tab was removed 2026-05-06 in the UX cleanup
-# pass — its three views (Pivotal candidates, First-in-disease,
-# Acquisition signals) are now sections 8/9/10 of Deep Dive >
-# Strategic landscape. Same data, one fewer top-level tab.
+# pass — its three views (Pivotal candidates, First-in-disease pairs,
+# Acquisition signals) were briefly folded into Strategic-landscape as
+# sections 8/9/10, then dropped entirely later the same day in the
+# de-redundancy pass: First-in-disease overlapped with Section 1
+# (first-in-class antigen timeline); Pivotal candidates and Acquisition
+# signals rendered empty under most sidebar filter combinations
+# (Industry × Ph2/3 × Recruiting × n≥30 is a tight filter chain). The
+# surviving Strategic-landscape sections (1-5) all degrade gracefully
+# under any filter scope.
 _tabs = st.tabs(_tab_labels)
 tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = _tabs[:7]
 tab_moderation = _tabs[7] if _MODERATOR_MODE else None
@@ -4076,16 +4082,14 @@ def _cagr(first_count: int, last_count: int, n_years: int) -> float | None:
 
 with tab_deep:
     st.markdown(
-        '<p class="small-note">Five focused views that complement the aggregate dashboards: '
+        '<p class="small-note">Four focused views that complement the aggregate dashboards: '
         "(1) drill into a single disease entity (category or Tier-3 leaf) to see all trials, "
         "sponsors, phases and targets in one place; (2) drill into a single antigen target "
         "to see how its pipeline spreads across diseases, phases, modalities and sponsors; "
         "(3) aggregate trials by named CAR-T product to track each product's portfolio across "
-        "indications and phases; (4) break the landscape down by sponsor type (Industry / "
-        "Academic / Government / Other) to compare who is running what; "
-        "(5) <strong>strategic-landscape view</strong> — cross-cutting analyses that don't fit "
-        "any single dimension (antigen first-in-class timeline, sponsor competition matrix, "
-        "phase-progression velocity, sponsor concentration, heme-vs-solid maturity gap). "
+        "indications and phases; (4) <strong>strategic-landscape view</strong> — five "
+        "cross-cutting analyses (antigen first-in-class timeline, sponsor competition matrix, "
+        "heme-vs-solid maturity gap, white-space matrix, target momentum). "
         "Every trial-list table supports row-click drilldown to a full trial record.</p>",
         unsafe_allow_html=True,
     )
@@ -5914,14 +5918,15 @@ with tab_deep:
                     "Insufficient data for target-momentum analysis."
                 )
 
-            # ====== Sections 6 + 7 (formerly 8 + 10) — folded from former "Insights" tab ======
-            # Originally a separate top-level tab (added 2026-05-05); folded
-            # into Strategic-landscape on 2026-05-06 in the UX cleanup pass
-            # because the analyses are conceptually identical to the other
-            # strategic-landscape views (cross-cutting, sidebar-filter-
-            # scoped, decision-support framing). Three sections in the
-            # same numbered scroll as the rest:
-
+            # ====== Strategic-landscape final form: 5 sections ======
+            # Originally 7 sections (1, 2, 3-orig=phase-velocity, 4-orig=
+            # sponsor-concentration, 5-orig=heme-vs-solid, 6-orig=white-
+            # space, 7-orig=target-momentum) plus 3 folded-from-Insights
+            # (8/9/10 = pivotal/first-in-disease/acquisition). All three
+            # folded-from-Insights views + the original sections 3 & 4
+            # were dropped in the de-redundancy pass — left were 5 views
+            # that all work at both global AND filtered scopes:
+            #
             # Sections 6 (Pivotal candidates) and 7 (Acquisition
             # signals) dropped 2026-05-06 in the de-redundancy pass.
             # Same precedent as the earlier Phase-velocity cut: both
@@ -5935,15 +5940,18 @@ with tab_deep:
 
 
 # ---------------------------------------------------------------------------
-# TAB: Publication Figures  (oncology-specific set, 8 figures)
+# TAB: Publication Figures  (oncology-specific set, 11 figures: 1-10 + 12;
+# Fig 11 is the PRISMA flow in the Methods tab)
 # ---------------------------------------------------------------------------
 
 with tab_pub:
     st.markdown(
         '<p class="small-note" style="color:#555">Publication-ready figures with white backgrounds. '
-        "Use the camera icon (▷ toolbar) on each chart to download a high-resolution PNG; "
-        "each chart has a CSV export below it with a provenance header capturing the active "
-        "filter state so downloads are reproducibly tagged. "
+        "Use the camera icon (▷ toolbar) on each chart to download the figure as PNG or SVG "
+        "— format and resolution are controlled globally by the sidebar's "
+        "<strong>Display options</strong> expander (PNG = 5× resolution for slides; "
+        "SVG = vector for journal / Illustrator). Each chart also has a CSV export "
+        "below it with a provenance header capturing the active filter state. "
         "Heme-onc shown in navy, Solid-onc in amber throughout.</p>",
         unsafe_allow_html=True,
     )

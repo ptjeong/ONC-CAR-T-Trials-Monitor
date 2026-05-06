@@ -12,11 +12,29 @@ ClinicalTrials.gov registry.
 The app provides a filtered trial list, a three-tier disease hierarchy
 (Branch → Category → Entity), cascading filters, target-antigen classification,
 cell-therapy modality annotation, approved-product overlays, geographic mapping
-(global + Germany-specific), publication-ready figures with provenance-tagged CSV
-exports, and an auto-generated methods section.
+(global + per-country drilldown), strategic-landscape analyses, publication-ready
+figures with provenance-tagged CSV exports, and an auto-generated methods section.
 
 Designed as a research and educational resource — **not** a medical, regulatory,
 or decision-support tool.
+
+---
+
+## Tab structure
+
+| Tab | What it does |
+|---|---|
+| **Overview** | At-a-glance: branch chips, disease-hierarchy sunburst, by-category / by-target / by-phase / by-year / by-platform panels, top sponsors, recruitment hotspots, snapshot freshness banner |
+| **Geography / Map** | Regional aggregation (China / NA / EU / APAC / MEA / LatAm), country picker → per-country phase + sponsor distribution, world map with site-level scatter, multi-city drilldown table |
+| **Data** | Filterable trial table with column-level search; per-trial drilldown card |
+| **Deep Dive** | Four sub-tabs: **By disease** (cohort focus), **By target** (antigen focus + maturity heatmap + temporal trajectory + co-targeting + sponsor commitment + white-space coverage), **By product** (per-product portfolio + Gantt + activity rate), **Strategic landscape** (4 cross-cutting analyses) |
+| **Publication Figures** | 11 oncology-tuned figures (Fig 1-10 + Fig 12; Fig 11 is the PRISMA flow in Methods) with provenance-tagged CSV exports |
+| **Methods & Appendix** | Auto-generated methods narrative + ontology + excluded NCT list + curation queue + validation κ — collapsed into a sub-tab row |
+| **About** | Citation, disclaimer, contact |
+
+A **sidebar Display options** expander controls global chart export format
+(PNG 5× resolution for slides, or SVG vector for journal / Illustrator) and a
+high-contrast Tableau-20-based palette toggle.
 
 ---
 
@@ -31,15 +49,28 @@ or decision-support tool.
 - **Cascading sidebar filter** — Branch → Category → Entity, plus filters for
   Phase, Antigen target, Status, Product type, Modality, Country, Age group,
   Sponsor type, and Classification confidence
-- **Target classifier** covering 22 heme antigens (CD19, BCMA, CD20, CD22, CD5,
+- **Sidebar Display options** — global PNG/SVG export-format radio (drives every
+  chart's modebar download) and a Tableau-20 high-contrast palette toggle for
+  greyscale-printing / stacked-bar legibility
+- **Target classifier** covering 23 heme antigens (CD19, BCMA, CD20, CD22, CD5,
   CD7, CD30, CD33, CD38, CD70, CD123, GPRC5D, FcRH5, SLAMF7, CD79b, Kappa LC,
-  FLT3, CLL1, CD147, CD4, CD1a, IL-5) and 28 solid antigens (GPC3, Claudin 18.2,
-  Mesothelin, GD2, HER2, EGFR, EGFRvIII, B7-H3, PSMA, PSCA, CEA, EpCAM, MUC1,
-  CLDN6, NKG2D-L, ROR1, L1CAM, CD133, AFP, IL13Rα2, HER3, DLL3, CDH17, GUCY2C,
-  GPNMB, FAP, MET, FGFR4), plus 7 dual-target combos
-- **Named-product short-circuit** — approved & late-stage products (tisa-cel,
-  axi-cel, brexu-cel, liso-cel, ide-cel, cilta-cel, obe-cel, relma-cel, eque-cel,
-  zevor-cel, GC012F, CT041 / satri-cel, MT027, HBI0101, ALLO-501/715, …)
+  FLT3, CLL1, CD147, CD4, CD1a, IL-5, BAFF-R) and 31 solid antigens (GPC3,
+  Claudin 18.2, Mesothelin, GD2, HER2, EGFR, EGFRvIII, B7-H3, PSMA, PSCA, CEA,
+  EpCAM, MUC1, CLDN6, NKG2D-L, ROR1, L1CAM, CD133, AFP, IL13Rα2, HER3, DLL3,
+  CDH17, GUCY2C, GPNMB, FAP, MET, FGFR4, KRAS, NY-ESO-1, PRAME), plus 7 dual-
+  target combos (CD19/CD22, CD19/CD20, CD19/BCMA, BCMA/GPRC5D, BCMA/CD70,
+  HER2/MUC1, GPC3/MSLN)
+- **Ligand-CAR convention** — for ligand-based CARs (IL3 → CD123, APRIL → BCMA,
+  BAFF → BAFF-R, NKG2D → NKG2D-L), the classifier records the receptor on the
+  tumour cell, NOT the binding-domain ligand on the construct. Documented in
+  the rater UI's TargetCategory help text
+- **Named-product short-circuit** — 86 product aliases across 15 antigen groups,
+  spanning all 7 FDA-approved CAR-Ts (tisa-cel, axi-cel, brexu-cel, liso-cel,
+  ide-cel, cilta-cel, obe-cel), 5 NMPA-approved (relma-cel, eque-cel, zevor-cel,
+  inati-cel/Yorwida, renikeolunsai/Hicara, pulkilumab/Pulidekai), 1
+  India/EU-approved (varni-cel/Qartemi), and clinical-stage products including
+  anitocabtagene autoleucel (anito-cel), BMS-986453, KITE-753, NXC-201,
+  WU-CART-007, GC012F, CT041 (satri-cel), MT027, HBI0101, JY231, Anbal-cel
 - **Cell-therapy modality classification** — 8 mechanistically distinct buckets
   (Auto / Allo CAR-T, CAR-NK, CAAR-T, CAR-Treg, CAR-γδ T, In vivo CAR, unclear)
 - **Sponsor classification** with explicit PI detection — Industry / Academic /
@@ -47,9 +78,11 @@ or decision-support tool.
 - **PRISMA-style flow** + auto-generated Methods section that live-derives
   antigen lists, counts, LLM-curation stats, and ontology table from the live
   config/code (no hand-maintained drift)
-- **Publication figures** (8 figures, oncology-tuned, NEJM-flat aesthetic):
+- **Publication figures** (11 in the dedicated tab; Fig 11 PRISMA in Methods,
+  oncology-tuned, NEJM-flat aesthetic):
   1. Temporal trends by branch with two-panel approval-milestone strip
-     (FDA / EMA / NMPA dots filterable via pill chips)
+     (FDA / EMA / NMPA / CDSCO dots filterable via pill chips, hover tooltip
+     surfaces target + indication per approval)
   2. Phase distribution by branch
   3. Geographic distribution + global site-level scatter overlay
   4. Enrollment landscape — 100%-stacked clinical-size buckets +
@@ -59,18 +92,40 @@ or decision-support tool.
   7. Innovation signals — product type + modality over time (with absolute /
      % share toggle)
   8. Disease × antigen target heatmap (white-for-zero, label-on-shaded-cells)
-- **Geography tab** — single merged world map (country choropleth + open-site
-  dot overlay), per-country drilldown with city scatter, country-zoom in Data tab
+  9. Antigen × Branch matrix with phase encoding
+  10. Solid-tumour antigen frontier (chronological emergence)
+  12. Industry sponsor crowding by antigen
+- **Strategic Landscape** sub-tab in Deep Dive — 4 cross-cutting analyses
+  (antigen first-in-class timeline, sponsor competition matrix, heme-vs-solid
+  maturity gap, target momentum 24mo windows). All views auto-update with the
+  sidebar filters and degrade gracefully when filters narrow the dataset
+- **Geography tab** — regional aggregation (China / North America / Europe /
+  Asia-Pacific / Middle East & Africa / Latin America / Other), country picker
+  with per-country phase distribution + top-sponsor leaderboard, single merged
+  world map (country choropleth + open-site dot overlay), per-country drilldown
+  with city scatter and multi-city select
 - **CSV exports** with `#`-prefixed provenance headers (snapshot date, filter
   state, row count, API source, **classifier git SHA**) — readable via
   `pd.read_csv(path, comment="#")`
-- **Three-layer validation infrastructure**:
+- **Four-layer validation infrastructure**:
   1. Locked regression benchmark (`tests/benchmark_set.csv` + per-axis F1 floor)
   2. Independent-LLM cross-validation (`scripts/validate_independent_llm.py` —
      multi-vendor: Gemini / Groq / OpenAI / Anthropic — Cohen's κ + consensus
      disagreement bucket)
   3. Snapshot-to-snapshot diff (`scripts/snapshot_diff.py` — categorises
      reclassifications as expected / hard-listed / unexplained)
+  4. Named-product audit (`scripts/audit/named_product_audit.py` — 46-product
+     knowledge base; verifies every trial mentioning a known product gets the
+     expected target / branch / modality classification. Achieved 97.2%
+     trial-level accuracy on 181 audited trials in the most recent run)
+- **External comparator** — Methods-text auto-generated section cross-cites the
+  ASGCT/Citeline Q1 2026 Gene, Cell, & RNA Therapy Landscape Report for
+  cross-validation of antigen ranking, with explicit disclosure of the
+  comparator's gaps (no CAR-T-specific geographic / sponsor-type / autologous-
+  vs-allogeneic stratification — gaps the present analysis fills)
+- **Inter-rater κ validation app** — separate companion app under
+  `validation_study/` for blind two-rater Cohen's κ measurement on a locked
+  200-trial sample
 - Full **Impressum, Datenschutz, and citation block** for German academic use
 
 ---
@@ -114,16 +169,18 @@ mesothelioma, carcinoma). Trials whose *only* indication is autoimmune /
 rheumatologic are excluded via a curated keyword list (the inverse of the
 sister rheum app).
 
-TCR-T products (NY-ESO-1, MAGE-A4, afami-cel) are out of scope for v1 — they are
-not strictly CAR-T constructs.
+TCR-T products (NY-ESO-1 TCRs, MAGE-A4, afami-cel) are out of scope for v1 — they
+are not strictly CAR-T constructs. NY-ESO-1 is included as a *target* in the
+solid-antigen taxonomy because some CAR-T variants exist, and the comparator
+analyses (ASGCT) report it as a top oncology target.
 
 ---
 
 ## Classification strategy
 
 The pipeline uses a **hybrid four-layer classifier**: deterministic rules for
-the bulk, a calibrated default for inference gaps, and a two-round LLM
-validation loop for the residual ambiguous cases.
+the bulk, a calibrated default for inference gaps, named-product short-circuits,
+and a multi-round LLM validation loop for the residual ambiguous cases.
 
 1. **Rule-based keyword layer** — `config.py` term tables:
    `ENTITY_TERMS`, `CATEGORY_FALLBACK_TERMS`, `HEME_TARGET_TERMS`,
@@ -131,9 +188,11 @@ validation loop for the residual ambiguous cases.
    regex for all term lengths prevents prefix collisions (EGFR vs EGFRvIII,
    hodgkin vs non-hodgkin).
 2. **Named-product lookup** — `NAMED_PRODUCT_TARGETS` /
-   `NAMED_PRODUCT_TYPES` map known products (tisa-cel, axi-cel, ide-cel,
-   cilta-cel, GC012F, CT041, HBI0101, MT027, ThisCART19A, JY231, …) to
-   their disclosed antigen and manufacturing type.
+   `NAMED_PRODUCT_TYPES` map known products (86 aliases across 15 antigen
+   groups) to their disclosed antigen and manufacturing type. Includes
+   ligand-CAR mappings (IL3 → CD123, APRIL → BCMA, BAFF → BAFF-R, NKG2D →
+   NKG2D-L) so the classifier records the tumor receptor, not the construct
+   binding-domain ligand.
 3. **Calibrated Autologous default** — if a trial is confirmed as CAR-T
    but no product-type marker surfaces, the pipeline defaults to
    `Autologous`, reflecting the dominant modality in the current landscape
@@ -156,17 +215,22 @@ validation loop for the residual ambiguous cases.
        (PRO studies, follow-up registries, bispecifics/mAbs, device
        trials, out-of-scope indications). Dropped at the PRISMA
        hard-exclusion stage, alongside the manual list.
+   - **Precedence rule**: LLM overrides win for specific labels; for
+     "punted" labels (`Other_or_unknown` / `CAR-T_unspecified`) the
+     named-product lookup wins if it finds a known product. Prevents
+     stale LLM punts from blocking newly-added named products.
 5. **Hard-exclusion list** — `HARD_EXCLUDED_NCT_IDS` in `config.py` for
    manually curated exceptions.
 
 Every trial carries a **`ClassificationConfidence`** label
 (`high` / `medium` / `low`) combining rule strength, `ProductTypeSource`,
-and LLM-override status. Surfaced in the Data tab and Data-Quality panel
-so users can filter analyses to high-confidence rows only.
+and LLM-override status. Surfaced in the Data tab and the Methods tab's
+Classifier-confidence chart so users can filter analyses to high-confidence
+rows only.
 
 ### Validation infrastructure
 
-Three independent layers of validation ship with the repo:
+Four independent layers of validation ship with the repo:
 
 **1. Locked regression benchmark** — `tests/benchmark_set.csv` plus
 `tests/test_benchmark.py`. Pivotal CAR-T trials with hand-curated ground
@@ -207,11 +271,48 @@ config edits with wider blast radius than intended.
 python scripts/snapshot_diff.py snapshots/2026-04-24 snapshots/<new-date>
 ```
 
+**4. Named-product audit** — `scripts/audit/named_product_audit.py`.
+Maintains a 46-product knowledge base (`scripts/audit/known_products.py`)
+covering FDA/NMPA/EMA/CDSCO-approved CAR-Ts plus clinical-stage codenames.
+For every product, checks that all trials mentioning it in the dataset
+are classified to the expected target / branch / product type. Achieved
+**97.2% trial-level accuracy on 181 audited trials** in the most recent
+run; mismatches surface as a structured PARTIAL / MISS report for triage.
+
+```bash
+python scripts/audit/named_product_audit.py /path/to/trials_view.csv
+```
+
+**5. Inter-rater κ companion app** — `validation_study/app.py` is a
+separate Streamlit app for blind two-rater Cohen's κ measurement on a
+locked 200-trial pre-registered sample (`validation_study/sample_v1.json`,
+sha256-anchored). 8 axes (Branch, DiseaseCategory, DiseaseEntity,
+TargetCategory, ProductType, SponsorType, Platform, TrialDesign). Token-
+gated rater URLs; durable submission storage with append-only audit log.
+
 #### Legacy single-vendor curation (`validate.py`)
 
 `validate.py` (Claude-only) generated the entries currently in
 `llm_overrides.json`. Kept for historical reproducibility but
 **deprecated** — use the multi-vendor harness above for new curation.
+
+---
+
+## External comparator
+
+The Methods tab auto-generated narrative cross-cites the
+[ASGCT/Citeline Q1 2026 Gene, Cell, & RNA Therapy Landscape Report](https://www.asgct.org/uploads/files/general/Landscape-Report-2026-Q1.pdf)
+(April 2026). Top oncology antigen targets reported by ASGCT (CD19 154
+programs, BCMA 68, CD20 29, CD22 27, HER2 25, claudin 18 24, GPC3 23,
+KRAS 20, mesothelin 17, CD70 16, NY-ESO-1 15, CD7 15, EGFR 14, CD33 14,
+B7-H3 14, PRAME 13, MUC1 13, GPRC5D 11, CLEC12A 11) align with the antigens
+captured by `HEME_TARGET_TERMS` / `SOLID_TARGET_TERMS`; KRAS, NY-ESO-1, and
+PRAME were added in May 2026 to match.
+
+ASGCT does NOT separate CAR-T from broader gene-therapy aggregates and
+provides no geographic, sponsor-type, or autologous/allogeneic stratification
+— gaps the present analysis fills via direct CT.gov queries with curated
+CAR-T classification.
 
 ---
 
@@ -228,6 +329,11 @@ dataset** expander that:
    (sidebar status flips to "Pinned to … · n trials"). Click **Unpin** to
    return to live data.
 
+Both data paths (`load_frozen` for pinned, `load_live` for default) include
+mtime-based cache invalidation: edits to `config.py` / `pipeline.py` /
+`llm_overrides.json` (or to the snapshot CSV directly) are detected on the
+next render and the Streamlit cache rebuilds automatically.
+
 Publication CSVs include a `#`-prefixed header block with snapshot date,
 filter state, row count, source URL, and **classifier git SHA** — readable
 via `pd.read_csv(path, comment="#")`. The classifier-SHA tag means a
@@ -240,18 +346,21 @@ detect classification drift even if the trial set is identical.
 
 | Path | Purpose |
 |---|---|
-| `app.py` | Streamlit UI, filters, tabs, figures, exports (~4,800 LOC) |
-| `pipeline.py` | API fetch, tri-level classifier, PRISMA, snapshot I/O |
-| `config.py` | Disease ontology, target antigens, named products, exclusions |
+| `app.py` | Streamlit UI, filters, tabs, figures, exports (~9,300 LOC) |
+| `pipeline.py` | API fetch, tri-level classifier, PRISMA, snapshot I/O (~1,750 LOC) |
+| `config.py` | Disease ontology, target antigens, named products, exclusions (~780 LOC) |
 | `llm_overrides.json` | Per-trial classification overrides from LLM curation |
-| `tests/` | Unit tests (`test_classifier.py`), regression benchmark (`benchmark_set.csv` + `test_benchmark.py`), Methods-text drift guards (`test_methods_text.py`) |
-| `scripts/` | `validate_independent_llm.py` (multi-vendor LLM cross-validation), `snapshot_diff.py`, `backfill_site_geo.py` |
+| `tests/` | Unit tests (`test_classifier.py`), regression benchmark (`benchmark_set.csv` + `test_benchmark.py`), Methods-text drift guards (`test_methods_text.py`), filter NaN regression (`test_filter_completeness.py`) |
+| `scripts/` | `validate_independent_llm.py` (multi-vendor LLM cross-validation), `snapshot_diff.py`, `backfill_site_geo.py`, `generate_validation_sample.py` |
+| `scripts/audit/` | Named-product classification audit — `known_products.py` (46-product knowledge base) + `named_product_audit.py` |
+| `validation_study/` | Companion inter-rater κ Streamlit app + locked 200-trial sample (`sample_v1.json`) + per-rater response-state files |
 | `snapshots/<YYYY-MM-DD>/` | Reproducible frozen datasets (`trials.csv`, `sites.csv`, `prisma.json`, `metadata.json`) |
 | `reports/` | Validation-loop output (gitignored) |
+| `docs/internal/` | Cross-app sync briefs, port prompts, audit prompts (e.g. `LIGAND_CAR_TARGET_FIX_BRIEF_RHEUM.md`, `ASGCT_Q1_2026_PORT_BRIEF_RHEUM.md`, `NAMED_PRODUCT_AUDIT_PROMPT.md`) |
 | `.github/workflows/` | CI: pytest matrix on Python 3.11 + 3.12 |
 | `.github/ISSUE_TEMPLATE/` | Quarterly approvals review, bug report, classification correction |
 | `validate.py` | **Deprecated** — single-vendor Claude curation that produced `llm_overrides.json`. Kept for historical reproducibility |
-| `requirements.txt` | Pinned Python dependencies |
+| `requirements.txt` | Pinned Python dependencies (no `kaleido` — image export uses Plotly's browser-side modebar, configured globally via the sidebar Display options) |
 | `LICENSE` | MIT |
 | `CITATION.cff` | Citation metadata (Zenodo DOI, version, author) |
 | `SECURITY.md` | Vulnerability reporting policy |

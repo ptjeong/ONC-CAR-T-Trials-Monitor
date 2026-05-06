@@ -6125,9 +6125,14 @@ with tab_deep:
                     .fillna(0)
                 )
                 # Mark cells: 0 trials = white space, >0 = covered
-                _ws_marker = _ws_pivot.applymap(lambda v: "—" if v == 0 else "")
+                # `DataFrame.applymap` was removed in pandas 3.x;
+                # `DataFrame.map` (element-wise) is the replacement.
+                # Verified 2026-05-06 from a prod traceback when the
+                # Strategic-landscape > White-space matrix rendered
+                # against pandas==3.0.2.
+                _ws_marker = _ws_pivot.map(lambda v: "—" if v == 0 else "")
                 fig_ws_strat = go.Figure(data=go.Heatmap(
-                    z=_ws_pivot.applymap(lambda v: 0 if v == 0 else 1).values,
+                    z=_ws_pivot.map(lambda v: 0 if v == 0 else 1).values,
                     x=_ws_pivot.columns.tolist(),
                     y=_ws_pivot.index.tolist(),
                     text=_ws_marker.values,

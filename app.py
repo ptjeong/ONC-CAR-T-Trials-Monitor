@@ -2382,15 +2382,17 @@ def _moderator_mode_active() -> bool:
 _MODERATOR_MODE = _moderator_mode_active()
 
 _tab_labels = ["Overview", "Geography / Map", "Data", "Deep Dive",
-               "Insights", "Publication Figures",
-               "Methods & Appendix", "About"]
+               "Publication Figures", "Methods & Appendix", "About"]
 if _MODERATOR_MODE:
     _tab_labels.append("Moderation")
 
+# Insights as a top-level tab was removed 2026-05-06 in the UX cleanup
+# pass — its three views (Pivotal candidates, First-in-disease,
+# Acquisition signals) are now sections 8/9/10 of Deep Dive >
+# Strategic landscape. Same data, one fewer top-level tab.
 _tabs = st.tabs(_tab_labels)
-(tab_overview, tab_geo, tab_data, tab_deep, tab_insights,
- tab_pub, tab_methods, tab_about) = _tabs[:8]
-tab_moderation = _tabs[8] if _MODERATOR_MODE else None
+tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = _tabs[:7]
+tab_moderation = _tabs[7] if _MODERATOR_MODE else None
 
 
 # ---------------------------------------------------------------------------
@@ -4032,10 +4034,14 @@ with tab_deep:
         unsafe_allow_html=True,
     )
 
+    # Sub-tab structure simplified 2026-05-06 in the UX cleanup pass:
+    # dropped "By sponsor type" sub-tab (4-category dimension was too thin
+    # to warrant a top-level slot; sponsor concentration is now covered by
+    # the Strategic-landscape sponsor-concentration analysis). The 4 sub-
+    # tabs left are the genuinely independent analytical lenses.
     (deep_sub_disease, deep_sub_target, deep_sub_product,
-     deep_sub_sponsor, deep_sub_landscape) = st.tabs(
-        ["By disease", "By target", "By product", "By sponsor type",
-         "Strategic landscape"]
+     deep_sub_landscape) = st.tabs(
+        ["By disease", "By target", "By product", "Strategic landscape"]
     )
 
     # ===== By-disease focus =====
@@ -4158,24 +4164,15 @@ with tab_deep:
                 else:
                     st.info("No start-year data.")
 
-                st.markdown("**Top sponsors (top 10)**")
-                _sp = focus["LeadSponsor"].dropna().value_counts().head(10).rename_axis("Sponsor").reset_index(name="Count")
-                if not _sp.empty:
-                    _sp_sorted = _sp.sort_values("Count", ascending=True)
-                    import plotly.express as _px2
-                    _sp_fig = _px2.bar(
-                        _sp_sorted, x="Count", y="Sponsor", orientation="h",
-                        height=max(280, len(_sp_sorted) * 28 + 60),
-                        color_discrete_sequence=[MIXED_COLOR], template="plotly_white",
-                    )
-                    _sp_fig.update_traces(marker_line_width=0, opacity=0.9)
-                    _sp_fig.update_layout(
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        margin=dict(l=160, r=16, t=8, b=8),
-                        font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
-                        xaxis_title=None, yaxis_title=None, showlegend=False,
-                    )
-                    st.plotly_chart(_sp_fig, width='stretch')
+                # Note: original "Top sponsors (top 10)" bar dropped
+                # 2026-05-06 in the UX cleanup pass. Replaced by the
+                # "Sponsor competition strip" below (Phase 1 addition,
+                # Round 2 enhancement) which is strictly more informative
+                # — same sponsor list + bar lengths PLUS color-by-max-
+                # phase encoding so a sponsor with one Ph3 trial visibly
+                # outranks one with five Ph1 trials. Removing the
+                # duplicate cuts ~120 px of vertical scroll without
+                # information loss.
 
             # ====== Phase 1 expansion (added 2026-05-05) ======
             # Three new analytical views layered on top of the existing four
@@ -5052,21 +5049,13 @@ with tab_deep:
                             f"in the current dataset — no white space)_"
                         )
 
-                # Top sponsors developing this antigen
-                st.markdown(
-                    f"**Top sponsors developing {target_pick}** "
-                    f"<span style='color:#64748b; font-weight:400;'>"
-                    f"({_sponsors} distinct sponsors total)</span>",
-                    unsafe_allow_html=True,
-                )
-                _spon_top = (
-                    focus["LeadSponsor"].dropna().value_counts().head(15)
-                    .rename_axis("Lead sponsor").reset_index(name="Trials")
-                )
-                st.dataframe(
-                    _spon_top, width="stretch", hide_index=True,
-                    column_config=_mini_count_cols("Lead sponsor"),
-                )
+                # Note: original "Top sponsors developing {target_pick}"
+                # 15-row table dropped 2026-05-06 in the UX cleanup pass.
+                # Replaced by the "Sponsor commitment" chart above
+                # (Round 2 addition) which surfaces the same sponsor list
+                # as a sorted bar PLUS encodes years-active + trial-count
+                # via length + color. The plain table was a strict subset
+                # of what the bar chart already shows.
 
                 # Trial list with row-click → drilldown
                 st.markdown(
@@ -5530,204 +5519,13 @@ with tab_deep:
                 else:
                     st.caption("_(no start-year data for activity rate)_")
 
-    # ===== By-sponsor-type aggregation =====
-    with deep_sub_sponsor:
-        st.subheader("Landscape by sponsor type")
-        st.caption(
-            "Aggregates the filtered dataset by sponsor type "
-            "(Industry / Academic / Government / Other). Drill into any "
-            "bucket to see its top sponsors, antigen targets, and product mix."
-        )
-
-        # Defensive: re-derive SponsorType if a stale cached snapshot lacks it.
-        if "SponsorType" not in df_filt.columns and "LeadSponsor" in df_filt.columns:
-            try:
-                from pipeline import _classify_sponsor as _cs
-                df_filt["SponsorType"] = df_filt.apply(
-                    lambda r: _cs(r.get("LeadSponsor"), r.get("LeadSponsorClass")),
-                    axis=1,
-                )
-            except Exception:
-                pass
-
-        if "SponsorType" not in df_filt.columns:
-            st.info("Sponsor type not available in the current snapshot.")
-        elif df_filt.empty:
-            st.info("No trials in the current filter.")
-        else:
-            sp_agg = (
-                df_filt.groupby("SponsorType")
-                .agg(
-                    Trials=("NCTId", "nunique"),
-                    Open=("OverallStatus", lambda s: int(s.isin(["RECRUITING", "NOT_YET_RECRUITING"]).sum())),
-                    Sponsors=("LeadSponsor", "nunique"),
-                    TotalEnrolled=("EnrollmentCount",
-                                   lambda s: int(pd.to_numeric(s, errors="coerce").fillna(0)
-                                                 .where(lambda x: x <= 1000, 0).sum())),
-                    MedianEnrollment=("EnrollmentCount",
-                                      lambda s: pd.to_numeric(s, errors="coerce")
-                                                .where(lambda x: x <= 1000).median()),
-                )
-                .reset_index()
-                .sort_values("Trials", ascending=False)
-            )
-            sp_agg["MedianEnrollment"] = sp_agg["MedianEnrollment"].fillna(0).astype(int)
-
-            st.caption(f"{len(sp_agg)} sponsor types · sorted by trial count")
-            st.dataframe(
-                sp_agg, width='stretch', hide_index=True,
-                column_config=_landscape_table_cols("SponsorType", "Sponsor type"),
-            )
-
-            sp_choices = sp_agg["SponsorType"].tolist()
-            pick = st.selectbox(
-                "Drill into sponsor type", options=["—"] + sp_choices, key="dd_sponsor_pick",
-            )
-            if pick and pick != "—":
-                sub = df_filt[df_filt["SponsorType"] == pick]
-
-                st.markdown(
-                    f"**Sponsors in *{pick}*** "
-                    f"<span style='color:#64748b; font-weight:400;'>"
-                    f"({len(sub)} trials, {sub['LeadSponsor'].nunique()} distinct sponsors)"
-                    f"</span>",
-                    unsafe_allow_html=True,
-                )
-
-                # Sponsor list — searchable + scrollable, NOT capped at top-N.
-                # User wanted ability to scroll through every sponsor in the
-                # selected class (was previously capped at top-10) and to
-                # filter by name. Table dimension stays the same; the data
-                # source changes from .head(10) to the full list.
-                _sponsor_search = st.text_input(
-                    "Search sponsors",
-                    value="",
-                    key=f"dd_sponsor_search_{pick}",
-                    placeholder="Filter by sponsor name (case-insensitive substring)",
-                    label_visibility="collapsed",
-                )
-                all_sponsors = (
-                    sub["LeadSponsor"].dropna().value_counts()
-                    .rename_axis("Lead sponsor").reset_index(name="Trials")
-                )
-                if _sponsor_search:
-                    _q = _sponsor_search.strip().lower()
-                    all_sponsors = all_sponsors[
-                        all_sponsors["Lead sponsor"].astype(str).str.lower().str.contains(_q, na=False)
-                    ]
-
-                st.caption(
-                    f"{len(all_sponsors)} sponsor"
-                    f"{'s' if len(all_sponsors) != 1 else ''} "
-                    f"{'(filtered) ' if _sponsor_search else ''}"
-                    "· click a sponsor row to see its trials below"
-                )
-                _sponsor_event = st.dataframe(
-                    all_sponsors, width='stretch', hide_index=True,
-                    height=320,  # fixed height keeps the layout tidy regardless of N
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key=f"dd_sponsor_table_{pick}",
-                    column_config=_mini_count_cols("Lead sponsor"),
-                )
-
-                # Antigen target and product-type breakdowns for this sponsor class
-                cA, cB = st.columns(2)
-                with cA:
-                    st.markdown("**Antigen targets**")
-                    _tgt_sub = (
-                        sub.loc[~sub["TargetCategory"].isin(_PLATFORM_LABELS), "TargetCategory"]
-                        .fillna("Unknown").value_counts().head(15)
-                        .rename_axis("Target").reset_index(name="Trials")
-                    )
-                    st.caption(f"{len(_tgt_sub)} antigens · top 15")
-                    st.dataframe(
-                        _tgt_sub, width='stretch', hide_index=True,
-                        column_config=_mini_count_cols("Target"),
-                    )
-                with cB:
-                    st.markdown("**Product types**")
-                    _prod_sub = (
-                        sub["ProductType"].fillna("Unclear").value_counts()
-                        .rename_axis("Product type").reset_index(name="Trials")
-                    )
-                    st.caption(f"{len(_prod_sub)} product types")
-                    st.dataframe(
-                        _prod_sub, width='stretch', hide_index=True,
-                        column_config=_mini_count_cols("Product type"),
-                    )
-
-                # Branch split (useful signal: is industry concentrating on heme or solid?)
-                _branch_sub = (
-                    sub["Branch"].fillna("Unknown").value_counts()
-                    .rename_axis("Branch").reset_index(name="Trials")
-                )
-                st.markdown("**Branch split**")
-                st.caption(f"{len(_branch_sub)} branches")
-                st.dataframe(
-                    _branch_sub, width='stretch', hide_index=True,
-                    column_config=_mini_count_cols("Branch"),
-                )
-
-                # --- Sponsor → trials → trial drilldown ---
-                _sponsor_rows = (
-                    _sponsor_event.selection.rows
-                    if _sponsor_event and hasattr(_sponsor_event, "selection") else []
-                )
-                if _sponsor_rows:
-                    _picked_sponsor = all_sponsors.iloc[_sponsor_rows[0]]["Lead sponsor"]
-                    _spon_trials = sub[sub["LeadSponsor"] == _picked_sponsor].copy()
-                    _spon_trials["NCTLink"] = _spon_trials["NCTId"].apply(
-                        lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
-                    )
-                    _spon_trials["Phase"] = _spon_trials["PhaseLabel"].fillna(_spon_trials["Phase"])
-                    _spon_trials["OverallStatus"] = _spon_trials["OverallStatus"].map(
-                        STATUS_DISPLAY).fillna(_spon_trials["OverallStatus"])
-                    _spon_trials = _spon_trials.sort_values(
-                        ["PhaseOrdered", "StartYear", "NCTId"], na_position="last",
-                    ).reset_index(drop=True)
-
-                    st.markdown(
-                        f"### Trials sponsored by **{_picked_sponsor}** "
-                        f"<span style='color:#64748b; font-weight:400;'>"
-                        f"({len(_spon_trials)} trials · click any row for full details)</span>",
-                        unsafe_allow_html=True,
-                    )
-                    _spon_trial_cols = [c for c in [
-                        "NCTId", "NCTLink", "BriefTitle",
-                        "Branch", "DiseaseCategory", "DiseaseEntity",
-                        "TargetCategory", "ProductType", "Phase",
-                        "OverallStatus", "StartYear", "Countries",
-                    ] if c in _spon_trials.columns]
-                    _spon_trials, _spon_trial_cols = _attach_flag_column(
-                        _spon_trials, _spon_trial_cols
-                    )
-                    _spon_trial_event = st.dataframe(
-                        _spon_trials[_spon_trial_cols],
-                        width='stretch', height=320, hide_index=True,
-                        on_select="rerun", selection_mode="single-row",
-                        key=f"dd_sponsor_trial_table_{pick}_{_picked_sponsor}",
-                        column_config=_trial_detail_cols(),
-                    )
-                    _spon_trial_rows = (
-                        _spon_trial_event.selection.rows
-                        if _spon_trial_event and hasattr(_spon_trial_event, "selection")
-                        else []
-                    )
-                    if _spon_trial_rows:
-                        _render_trial_drilldown(
-                            _spon_trials.iloc[_spon_trial_rows[0]],
-                            key_suffix=f"deep_sponsor_{pick}_{_picked_sponsor}",
-                        )
-
-            st.download_button(
-                "Download sponsor-type aggregation (CSV)",
-                data=_csv_with_provenance(sp_agg, "Landscape by sponsor type", include_filters=True),
-                file_name="deep_dive_by_sponsor_type.csv",
-                mime="text/csv",
-            )
-
     # ===== Strategic landscape (NEW 2026-05-05) =====
+    # Note: the previous "By sponsor type" sub-tab was removed
+    # 2026-05-06 in the UX cleanup pass. Sponsor-type aggregation is
+    # already covered by Strategic-landscape's sponsor-concentration
+    # analysis + the Insights-folded acquisition-signals view; the
+    # 4-category dimension (Industry / Academic / Government / Other)
+    # was too thin to warrant its own sub-tab.
     # Cross-cutting analyses that don't fit any single dimension.
     # All five charts operate on the FULL filtered dataset (df_filt) —
     # no per-row picker needed; the sidebar filters scope everything.
@@ -6430,50 +6228,24 @@ with tab_deep:
                     "Insufficient data for target-momentum analysis."
                 )
 
+            # ====== Sections 8/9/10 — folded from former "Insights" tab ======
+            # Originally a separate top-level tab (added 2026-05-05); folded
+            # into Strategic-landscape on 2026-05-06 in the UX cleanup pass
+            # because the analyses are conceptually identical to the other
+            # strategic-landscape views (cross-cutting, sidebar-filter-
+            # scoped, decision-support framing). Three sections in the
+            # same numbered scroll as the rest:
 
-# ---------------------------------------------------------------------------
-# TAB: Insights  (NEW 2026-05-05 — strategic decision-support)
-# ---------------------------------------------------------------------------
-# Three actionable analytical views that don't fit cleanly into any
-# other tab:
-#   1. Pivotal candidates → trials likely to support an upcoming approval
-#      (Industry-sponsored, Ph2/3, currently recruiting / active, n ≥30)
-#   2. First-in-disease trials → (target × disease) combinations appearing
-#      for the first time in the dataset (pioneer flag)
-#   3. Acquisition signals → small sponsors with one breakthrough or
-#      orphan-designated trial — historically these are M&A targets
-
-with tab_insights:
-    st.markdown(
-        '<p class="small-note">Three actionable strategic views — '
-        '<strong>Pivotal candidates</strong> (likely upcoming approvals), '
-        '<strong>First-in-disease</strong> (newly-emerging target × indication '
-        'combinations), and <strong>Acquisition signals</strong> (small '
-        'sponsors with one breakthrough trial — historical M&A pattern). '
-        'All three respect the sidebar filters; click any row in any table '
-        'to open the full trial drilldown.</p>',
-        unsafe_allow_html=True,
-    )
-
-    if df_filt.empty:
-        st.info("No trials in the current filter selection.")
-    else:
-        ins_tab_pivotal, ins_tab_first, ins_tab_acq = st.tabs(
-            ["Pivotal candidates", "First-in-disease", "Acquisition signals"]
-        )
-
-        # ============================================================
-        # 1. PIVOTAL CANDIDATES
-        # ============================================================
-        with ins_tab_pivotal:
-            st.subheader("Pivotal candidates")
+            # ---------- 8. Pivotal candidates ----------
+            st.markdown("---")
             st.markdown(
-                '<p class="small-note">Industry-sponsored Phase 2/3 trials '
-                'with status RECRUITING / ACTIVE_NOT_RECRUITING and a '
-                'planned enrollment ≥30. These are the trials most likely '
-                'to support an FDA / EMA / NMPA approval filing in the '
-                'next 1-3 years. Sorted by max-phase-reached × '
-                'enrollment.</p>',
+                "### 8. Pivotal candidates "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— Industry-sponsored Ph2 / Ph3 trials with status "
+                "RECRUITING / ACTIVE_NOT_RECRUITING and enrollment ≥30. "
+                "Most likely to support an FDA / EMA / NMPA filing "
+                "in the next 1-3 years."
+                "</span>",
                 unsafe_allow_html=True,
             )
 
@@ -6588,18 +6360,15 @@ with tab_insights:
                     "insights_pivotal_candidates.csv", "text/csv",
                 )
 
-        # ============================================================
-        # 2. FIRST-IN-DISEASE
-        # ============================================================
-        with ins_tab_first:
-            st.subheader("First-in-disease trials")
+            # ---------- 9. First-in-disease pairs ----------
+            st.markdown("---")
             st.markdown(
-                '<p class="small-note">For each (TargetCategory × '
-                'DiseaseEntity) pair, we identify the EARLIEST trial — '
-                'the pioneer that opened that combination. Useful for '
-                'tracking who broke ground in each niche, and for '
-                'identifying recently-pioneered combinations that may '
-                'spawn follow-on trials.</p>',
+                "### 9. First-in-disease trials "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— for each (TargetCategory × DiseaseEntity) pair, the "
+                "EARLIEST trial. Useful for tracking who broke ground in "
+                "each niche, and for spotting recently-pioneered combinations."
+                "</span>",
                 unsafe_allow_html=True,
             )
 
@@ -6715,20 +6484,16 @@ with tab_insights:
                     "insights_first_in_disease.csv", "text/csv",
                 )
 
-        # ============================================================
-        # 3. ACQUISITION SIGNALS
-        # ============================================================
-        with ins_tab_acq:
-            st.subheader("Acquisition signals")
+            # ---------- 10. Acquisition signals ----------
+            st.markdown("---")
             st.markdown(
-                '<p class="small-note">Sponsors with a SMALL portfolio '
-                '(1-3 CAR-T trials in the dataset) but at least one trial '
-                'in <strong>Phase 2/3</strong> AND with status RECRUITING '
-                'or ACTIVE_NOT_RECRUITING. Historical pattern: these '
-                'sponsors are M&A candidates (e.g., Arcellx → Gilead Feb '
-                '2026 for $7.8B; Allogene PG candidates). Big pharma '
-                'often acquires when one breakthrough trial proves out a '
-                'novel construct.</p>',
+                "### 10. Acquisition signals "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— sponsors with a SMALL portfolio (1-3 trials) BUT at "
+                "least one Ph2/3 trial AND any RECRUITING / "
+                "ACTIVE_NOT_RECRUITING status. Historical M&A pattern "
+                "(Arcellx → Gilead Feb 2026, $7.8B)."
+                "</span>",
                 unsafe_allow_html=True,
             )
 
@@ -9357,273 +9122,289 @@ forthcoming primary fidelity benchmark.
 
     methods_text = _build_methods_text(prisma_counts, snap_date, n_inc)
 
-    st.subheader("Methods section (auto-generated)")
-    st.markdown(
-        '<p class="small-note">Generated from config.py, pipeline.py, and the current dataset. '
-        "Copy or download for use in your manuscript. Edit the journal-specific wording as needed.</p>",
-        unsafe_allow_html=True,
-    )
-    st.text_area("Methods text", value=methods_text, height=520, label_visibility="collapsed")
-    st.download_button(
-        "Download methods (.txt)", data=methods_text,
-        file_name=f"car_t_oncology_methods_{snap_date}.txt",
-        mime="text/plain",
-    )
+    # Sub-tabbed appendix structure (added 2026-05-06 in UX cleanup pass).
+    # Was 5 long st.subheader sections stacked vertically — required heavy
+    # scrolling. Now one st.tabs() row groups them by audience: "Methods
+    # text" (manuscript), "Ontology" (taxonomy reference), "Excluded NCTs"
+    # (audit trail), "Curation queue" (data-quality workflow), and
+    # "Validation" (κ + sample export).
+    methods_tabs = st.tabs([
+        "Methods text",
+        "Ontology",
+        "Excluded NCTs",
+        "Curation queue",
+        "Validation",
+    ])
 
-    st.subheader("Appendix — Classification ontology")
-    st.markdown(
-        '<p class="small-note">Tri-level ontology and key term maps (supplementary Table S1).</p>',
-        unsafe_allow_html=True,
-    )
-    ontology_df = _build_ontology_df()
-    st.dataframe(
-        ontology_df, width='stretch', hide_index=True,
-        column_config={
-            "Tier": st.column_config.TextColumn("Tier", width="medium"),
-            "Branch": st.column_config.TextColumn("Branch", width="small"),
-            "Label": st.column_config.TextColumn("Label", width="medium"),
-            "Terms (sample)": st.column_config.TextColumn("Terms (sample)", width="large"),
-            "N entities": st.column_config.NumberColumn("N entities", width="small"),
-        },
-    )
-    st.download_button(
-        "Download ontology table (CSV)",
-        data=_csv_with_provenance(ontology_df,
-                                    "Classification ontology — supplementary Table S1",
-                                    include_filters=False),
-        file_name=f"car_t_onco_ontology_{snap_date}.csv",
-        mime="text/csv",
-    )
-
-    st.subheader("Appendix — Hard-excluded NCT IDs")
-    if HARD_EXCLUDED_NCT_IDS:
-        excl_df = pd.DataFrame(sorted(HARD_EXCLUDED_NCT_IDS), columns=["NCTId"])
-        excl_df["ClinicalTrials.gov link"] = excl_df["NCTId"].apply(
-            lambda x: f"https://clinicaltrials.gov/study/{x}"
+    with methods_tabs[0]:
+        st.markdown(
+            '<p class="small-note">Generated from config.py, pipeline.py, and the current dataset. '
+            "Copy or download for use in your manuscript. Edit the journal-specific wording as needed.</p>",
+            unsafe_allow_html=True,
         )
+        st.text_area("Methods text", value=methods_text, height=520, label_visibility="collapsed")
+        st.download_button(
+            "Download methods (.txt)", data=methods_text,
+            file_name=f"car_t_oncology_methods_{snap_date}.txt",
+            mime="text/plain",
+        )
+
+    with methods_tabs[1]:
+        st.markdown(
+            '<p class="small-note">Tri-level ontology and key term maps (supplementary Table S1).</p>',
+            unsafe_allow_html=True,
+        )
+        ontology_df = _build_ontology_df()
         st.dataframe(
-            excl_df, width='stretch', hide_index=True,
+            ontology_df, width='stretch', hide_index=True,
             column_config={
-                "NCTId": st.column_config.TextColumn("NCT ID"),
-                "ClinicalTrials.gov link": st.column_config.LinkColumn("Link", display_text="Open"),
+                "Tier": st.column_config.TextColumn("Tier", width="medium"),
+                "Branch": st.column_config.TextColumn("Branch", width="small"),
+                "Label": st.column_config.TextColumn("Label", width="medium"),
+                "Terms (sample)": st.column_config.TextColumn("Terms (sample)", width="large"),
+                "N entities": st.column_config.NumberColumn("N entities", width="small"),
             },
         )
-    else:
-        st.info("No hard-excluded NCT IDs yet. Additions flow from the curation loop below.")
-
-    # Curation loop
-    st.subheader("Curation loop — unclear / unclassified trials")
-    st.markdown(
-        '<p class="small-note">Download the structured CSV, feed it to Claude Code, '
-        "and the assistant will propose and apply patches to config.py / pipeline.py automatically.</p>",
-        unsafe_allow_html=True,
-    )
-    unclear_disease_mask = (
-        df_filt["Branch"].astype(str).str.lower().isin(["unknown"])
-        | df_filt["DiseaseEntity"].astype(str).str.lower().isin([UNCLASSIFIED_LABEL.lower(), "heme-onc_other", "solid-onc_other"])
-    )
-    unclear_target_mask = df_filt["TargetCategory"].astype(str).str.lower().isin(
-        ["other_or_unknown", "car-t_unspecified", "car_t_unspecified", "unclassified", "unknown"]
-    )
-    unclear_product_mask = df_filt["ProductType"].astype(str).str.lower() == "unclear"
-
-    df_unclear = df_filt[unclear_disease_mask | unclear_target_mask | unclear_product_mask].copy()
-
-    if not df_unclear.empty:
-        def _unclear_fields(row):
-            flags = []
-            if (str(row.get("Branch", "")).lower() == "unknown"
-                or str(row.get("DiseaseEntity", "")).lower() in {"unclassified", "heme-onc_other", "solid-onc_other"}):
-                flags.append("Disease")
-            if str(row.get("TargetCategory", "")).lower() in {"other_or_unknown", "car-t_unspecified", "car_t_unspecified", "unclassified", "unknown"}:
-                flags.append("Target")
-            if str(row.get("ProductType", "")).lower() == "unclear":
-                flags.append("Product")
-            return "|".join(flags)
-
-        df_unclear["UnclearFields"] = df_unclear.apply(_unclear_fields, axis=1)
-        export_cols = [
-            "NCTId", "BriefTitle", "Conditions", "Interventions",
-            "Branch", "DiseaseCategory", "DiseaseEntity",
-            "TargetCategory", "ProductType", "UnclearFields", "BriefSummary",
-        ]
-        df_export = df_unclear[[c for c in export_cols if c in df_unclear.columns]].copy()
-        if "BriefSummary" in df_export.columns:
-            df_export["BriefSummary"] = df_export["BriefSummary"].astype(str).str[:300]
-
-        import io as _io
-        header_lines = [
-            "# CURATION_LOOP_ONCO_V1",
-            "# INSTRUCTION: You are Claude Code assisting with a CAR-T oncology trial pipeline.",
-            "# For each row below, read BriefTitle / Conditions / Interventions / BriefSummary.",
-            "# Propose the correct Branch (Heme-onc | Solid-onc | Mixed),",
-            "#   DiseaseCategory, DiseaseEntity, TargetCategory, and ProductType.",
-            "# Then automatically patch config.py and/or pipeline.py to capture these cases.",
-            "# UnclearFields shows which field(s) triggered inclusion (Disease|Target|Product).",
-            "#",
-        ]
-        buf = _io.StringIO()
-        for line in header_lines:
-            buf.write(line + "\n")
-        df_export.to_csv(buf, index=False)
-        curation_csv = buf.getvalue()
-
-        st.dataframe(
-            df_export[["NCTId", "BriefTitle", "Branch", "DiseaseCategory",
-                        "DiseaseEntity", "TargetCategory", "ProductType", "UnclearFields"]],
-            width='stretch', height=280,
-        )
-        st.caption(f"{len(df_export)} trial(s) flagged for curation")
-
         st.download_button(
-            label=f"Download curation CSV ({len(df_export)} trials)",
-            data=curation_csv, file_name="curation_loop.csv", mime="text/csv",
-        )
-    else:
-        st.success("No unclear / unclassified trials in the current filter.")
-
-    # Validation sample + Cohen's κ
-    st.subheader("Validation sample export")
-    st.markdown(
-        '<p class="small-note">Stratified random sample for manual classification review. '
-        "Two reviewers complete independently, then compute inter-rater agreement (Cohen's κ).</p>",
-        unsafe_allow_html=True,
-    )
-
-    val_n = st.slider("Target sample size", min_value=25, max_value=200, value=100, step=25)
-    val_seed = st.number_input("Random seed (for reproducibility)", min_value=0, max_value=9999, value=42, step=1)
-
-    def build_validation_sample(source_df: pd.DataFrame, n: int, seed: int) -> pd.DataFrame:
-        review_cols = [
-            "NCTId", "BriefTitle", "Conditions", "BriefSummary",
-            "Branch", "DiseaseCategory", "DiseaseEntity",
-            "TargetCategory", "ProductType",
-            "Phase", "OverallStatus", "LeadSponsor", "Countries",
-        ]
-        available = [c for c in review_cols if c in source_df.columns]
-        base = source_df[available].copy()
-
-        strata = base["DiseaseCategory"].fillna("Unclassified")
-        counts = strata.value_counts()
-        total = len(base)
-        per_stratum = (counts / total * n).clip(lower=1).round().astype(int)
-        diff = n - per_stratum.sum()
-        if diff != 0:
-            largest = per_stratum.idxmax()
-            per_stratum[largest] = max(1, per_stratum[largest] + diff)
-
-        frames = []
-        for entity, k in per_stratum.items():
-            rows = base[strata == entity]
-            k = min(k, len(rows))
-            frames.append(rows.sample(n=k, random_state=int(seed), replace=False))
-
-        sample = pd.concat(frames, ignore_index=True).sample(frac=1, random_state=int(seed)).reset_index(drop=True)
-        sample.insert(0, "SampleID", range(1, len(sample) + 1))
-
-        for col in ["Reviewer1_Branch", "Reviewer1_Category", "Reviewer1_Entity",
-                    "Reviewer1_Target", "Reviewer1_Product",
-                    "Reviewer2_Branch", "Reviewer2_Category", "Reviewer2_Entity",
-                    "Reviewer2_Target", "Reviewer2_Product", "Notes"]:
-            sample[col] = ""
-        return sample
-
-    if not df_filt.empty:
-        sample_df = build_validation_sample(df_filt, val_n, int(val_seed))
-        st.caption(
-            f"Sample: {len(sample_df)} trials across "
-            f"{df_filt['DiseaseCategory'].nunique()} category strata (seed={int(val_seed)})"
-        )
-        st.dataframe(
-            sample_df[["SampleID", "NCTId", "Branch", "DiseaseCategory", "DiseaseEntity",
-                        "TargetCategory", "ProductType", "BriefTitle"]],
-            width='stretch', height=260, hide_index=True,
-        )
-        st.download_button(
-            label="Download validation sample CSV",
-            data=sample_df.to_csv(index=False),
-            file_name=f"car_t_onco_validation_sample_n{len(sample_df)}_seed{int(val_seed)}.csv",
+            "Download ontology table (CSV)",
+            data=_csv_with_provenance(ontology_df,
+                                        "Classification ontology — supplementary Table S1",
+                                        include_filters=False),
+            file_name=f"car_t_onco_ontology_{snap_date}.csv",
             mime="text/csv",
         )
-    else:
-        st.info("No trials in the current filter selection.")
 
-    st.subheader("Inter-rater agreement (Cohen's κ)")
-    st.markdown(
-        '<p class="small-note">Upload the completed validation CSV to compute Cohen\'s κ for '
-        "Branch, Category, Entity, Target, and Product classification.</p>",
-        unsafe_allow_html=True,
-    )
+    with methods_tabs[2]:
+        st.markdown("### Hard-excluded NCT IDs")
+        if HARD_EXCLUDED_NCT_IDS:
+            excl_df = pd.DataFrame(sorted(HARD_EXCLUDED_NCT_IDS), columns=["NCTId"])
+            excl_df["ClinicalTrials.gov link"] = excl_df["NCTId"].apply(
+                lambda x: f"https://clinicaltrials.gov/study/{x}"
+            )
+            st.dataframe(
+                excl_df, width='stretch', hide_index=True,
+                column_config={
+                    "NCTId": st.column_config.TextColumn("NCT ID"),
+                    "ClinicalTrials.gov link": st.column_config.LinkColumn("Link", display_text="Open"),
+                },
+            )
+        else:
+            st.info("No hard-excluded NCT IDs yet. Additions flow from the curation loop tab.")
 
-    def _cohen_kappa(y1: list, y2: list) -> float:
-        from collections import Counter
-        n = len(y1)
-        if n == 0:
-            return float("nan")
-        p_o = sum(a == b for a, b in zip(y1, y2)) / n
-        c1, c2 = Counter(y1), Counter(y2)
-        all_labels = set(c1) | set(c2)
-        p_e = sum((c1[k] / n) * (c2[k] / n) for k in all_labels)
-        if p_e >= 1.0:
-            return 1.0
-        return (p_o - p_e) / (1 - p_e)
+    with methods_tabs[3]:
+        st.markdown("### Curation loop — unclear / unclassified trials")
+        st.markdown(
+            '<p class="small-note">Download the structured CSV, feed it to Claude Code, '
+            "and the assistant will propose and apply patches to config.py / pipeline.py automatically.</p>",
+            unsafe_allow_html=True,
+        )
+        unclear_disease_mask = (
+            df_filt["Branch"].astype(str).str.lower().isin(["unknown"])
+            | df_filt["DiseaseEntity"].astype(str).str.lower().isin([UNCLASSIFIED_LABEL.lower(), "heme-onc_other", "solid-onc_other"])
+        )
+        unclear_target_mask = df_filt["TargetCategory"].astype(str).str.lower().isin(
+            ["other_or_unknown", "car-t_unspecified", "car_t_unspecified", "unclassified", "unknown"]
+        )
+        unclear_product_mask = df_filt["ProductType"].astype(str).str.lower() == "unclear"
 
-    def _kappa_label(k: float) -> str:
-        if k != k:
-            return "—"
-        if k < 0.00: return "Poor (< 0)"
-        if k < 0.20: return "Slight (< 0.20)"
-        if k < 0.40: return "Fair (0.20–0.40)"
-        if k < 0.60: return "Moderate (0.40–0.60)"
-        if k < 0.80: return "Substantial (0.60–0.80)"
-        return "Almost perfect (≥ 0.80)"
+        df_unclear = df_filt[unclear_disease_mask | unclear_target_mask | unclear_product_mask].copy()
 
-    uploaded = st.file_uploader(
-        "Completed validation CSV", type="csv",
-        help="Upload the filled-in validation sample with Reviewer1_* and Reviewer2_* columns.",
-    )
+        if not df_unclear.empty:
+            def _unclear_fields(row):
+                flags = []
+                if (str(row.get("Branch", "")).lower() == "unknown"
+                    or str(row.get("DiseaseEntity", "")).lower() in {"unclassified", "heme-onc_other", "solid-onc_other"}):
+                    flags.append("Disease")
+                if str(row.get("TargetCategory", "")).lower() in {"other_or_unknown", "car-t_unspecified", "car_t_unspecified", "unclassified", "unknown"}:
+                    flags.append("Target")
+                if str(row.get("ProductType", "")).lower() == "unclear":
+                    flags.append("Product")
+                return "|".join(flags)
 
-    if uploaded is not None:
-        try:
-            rev_df = pd.read_csv(uploaded)
-        except Exception as e:
-            st.error(f"Could not read file: {e}")
-            rev_df = None
+            df_unclear["UnclearFields"] = df_unclear.apply(_unclear_fields, axis=1)
+            export_cols = [
+                "NCTId", "BriefTitle", "Conditions", "Interventions",
+                "Branch", "DiseaseCategory", "DiseaseEntity",
+                "TargetCategory", "ProductType", "UnclearFields", "BriefSummary",
+            ]
+            df_export = df_unclear[[c for c in export_cols if c in df_unclear.columns]].copy()
+            if "BriefSummary" in df_export.columns:
+                df_export["BriefSummary"] = df_export["BriefSummary"].astype(str).str[:300]
 
-        if rev_df is not None:
-            required = {
-                "Reviewer1_Branch", "Reviewer2_Branch",
-                "Reviewer1_Category", "Reviewer2_Category",
-                "Reviewer1_Entity", "Reviewer2_Entity",
-                "Reviewer1_Target", "Reviewer2_Target",
-                "Reviewer1_Product", "Reviewer2_Product",
-            }
-            missing_cols = required - set(rev_df.columns)
-            if missing_cols:
-                st.error(f"Missing columns: {', '.join(sorted(missing_cols))}")
-            else:
-                pairs = [
-                    ("Branch",    "Reviewer1_Branch",   "Reviewer2_Branch"),
-                    ("Category",  "Reviewer1_Category", "Reviewer2_Category"),
-                    ("Entity",    "Reviewer1_Entity",   "Reviewer2_Entity"),
-                    ("Target",    "Reviewer1_Target",   "Reviewer2_Target"),
-                    ("Product",   "Reviewer1_Product",  "Reviewer2_Product"),
-                ]
-                kappa_rows = []
-                for label, col1, col2 in pairs:
-                    sub = rev_df[[col1, col2]].dropna()
-                    sub = sub[(sub[col1].str.strip() != "") & (sub[col2].str.strip() != "")]
-                    n_rated = len(sub)
-                    n_agreed = int((sub[col1].str.strip() == sub[col2].str.strip()).sum())
-                    k = _cohen_kappa(sub[col1].str.strip().tolist(), sub[col2].str.strip().tolist())
-                    kappa_rows.append({
-                        "Classification task": label, "n rated": n_rated, "n agreed": n_agreed,
-                        "% agreement": f"{100 * n_agreed / n_rated:.1f}%" if n_rated else "—",
-                        "κ": round(k, 3) if k == k else "—",
-                        "Interpretation": _kappa_label(k),
-                    })
-                kappa_summary = pd.DataFrame(kappa_rows)
-                st.dataframe(kappa_summary, width='stretch', hide_index=True)
+            import io as _io
+            header_lines = [
+                "# CURATION_LOOP_ONCO_V1",
+                "# INSTRUCTION: You are Claude Code assisting with a CAR-T oncology trial pipeline.",
+                "# For each row below, read BriefTitle / Conditions / Interventions / BriefSummary.",
+                "# Propose the correct Branch (Heme-onc | Solid-onc | Mixed),",
+                "#   DiseaseCategory, DiseaseEntity, TargetCategory, and ProductType.",
+                "# Then automatically patch config.py and/or pipeline.py to capture these cases.",
+                "# UnclearFields shows which field(s) triggered inclusion (Disease|Target|Product).",
+                "#",
+            ]
+            buf = _io.StringIO()
+            for line in header_lines:
+                buf.write(line + "\n")
+            df_export.to_csv(buf, index=False)
+            curation_csv = buf.getvalue()
+
+            st.dataframe(
+                df_export[["NCTId", "BriefTitle", "Branch", "DiseaseCategory",
+                            "DiseaseEntity", "TargetCategory", "ProductType", "UnclearFields"]],
+                width='stretch', height=280,
+            )
+            st.caption(f"{len(df_export)} trial(s) flagged for curation")
+
+            st.download_button(
+                label=f"Download curation CSV ({len(df_export)} trials)",
+                data=curation_csv, file_name="curation_loop.csv", mime="text/csv",
+            )
+        else:
+            st.success("No unclear / unclassified trials in the current filter.")
+
+    # Validation sub-tab: stratified sample export + κ workflow
+    with methods_tabs[4]:
+        st.markdown("### Validation sample export")
+        st.markdown(
+            '<p class="small-note">Stratified random sample for manual classification review. '
+            "Two reviewers complete independently, then compute inter-rater agreement (Cohen's κ).</p>",
+            unsafe_allow_html=True,
+        )
+
+        val_n = st.slider("Target sample size", min_value=25, max_value=200, value=100, step=25)
+        val_seed = st.number_input("Random seed (for reproducibility)", min_value=0, max_value=9999, value=42, step=1)
+
+        def build_validation_sample(source_df: pd.DataFrame, n: int, seed: int) -> pd.DataFrame:
+            review_cols = [
+                "NCTId", "BriefTitle", "Conditions", "BriefSummary",
+                "Branch", "DiseaseCategory", "DiseaseEntity",
+                "TargetCategory", "ProductType",
+                "Phase", "OverallStatus", "LeadSponsor", "Countries",
+            ]
+            available = [c for c in review_cols if c in source_df.columns]
+            base = source_df[available].copy()
+
+            strata = base["DiseaseCategory"].fillna("Unclassified")
+            counts = strata.value_counts()
+            total = len(base)
+            per_stratum = (counts / total * n).clip(lower=1).round().astype(int)
+            diff = n - per_stratum.sum()
+            if diff != 0:
+                largest = per_stratum.idxmax()
+                per_stratum[largest] = max(1, per_stratum[largest] + diff)
+
+            frames = []
+            for entity, k in per_stratum.items():
+                rows = base[strata == entity]
+                k = min(k, len(rows))
+                frames.append(rows.sample(n=k, random_state=int(seed), replace=False))
+
+            sample = pd.concat(frames, ignore_index=True).sample(frac=1, random_state=int(seed)).reset_index(drop=True)
+            sample.insert(0, "SampleID", range(1, len(sample) + 1))
+
+            for col in ["Reviewer1_Branch", "Reviewer1_Category", "Reviewer1_Entity",
+                        "Reviewer1_Target", "Reviewer1_Product",
+                        "Reviewer2_Branch", "Reviewer2_Category", "Reviewer2_Entity",
+                        "Reviewer2_Target", "Reviewer2_Product", "Notes"]:
+                sample[col] = ""
+            return sample
+
+        if not df_filt.empty:
+            sample_df = build_validation_sample(df_filt, val_n, int(val_seed))
+            st.caption(
+                f"Sample: {len(sample_df)} trials across "
+                f"{df_filt['DiseaseCategory'].nunique()} category strata (seed={int(val_seed)})"
+            )
+            st.dataframe(
+                sample_df[["SampleID", "NCTId", "Branch", "DiseaseCategory", "DiseaseEntity",
+                            "TargetCategory", "ProductType", "BriefTitle"]],
+                width='stretch', height=260, hide_index=True,
+            )
+            st.download_button(
+                label="Download validation sample CSV",
+                data=sample_df.to_csv(index=False),
+                file_name=f"car_t_onco_validation_sample_n{len(sample_df)}_seed{int(val_seed)}.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("No trials in the current filter selection.")
+
+        st.markdown("### Inter-rater agreement (Cohen's κ)")
+        st.markdown(
+            '<p class="small-note">Upload the completed validation CSV to compute Cohen\'s κ for '
+            "Branch, Category, Entity, Target, and Product classification.</p>",
+            unsafe_allow_html=True,
+        )
+
+        def _cohen_kappa(y1: list, y2: list) -> float:
+            from collections import Counter
+            n = len(y1)
+            if n == 0:
+                return float("nan")
+            p_o = sum(a == b for a, b in zip(y1, y2)) / n
+            c1, c2 = Counter(y1), Counter(y2)
+            all_labels = set(c1) | set(c2)
+            p_e = sum((c1[k] / n) * (c2[k] / n) for k in all_labels)
+            if p_e >= 1.0:
+                return 1.0
+            return (p_o - p_e) / (1 - p_e)
+
+        def _kappa_label(k: float) -> str:
+            if k != k:
+                return "—"
+            if k < 0.00: return "Poor (< 0)"
+            if k < 0.20: return "Slight (< 0.20)"
+            if k < 0.40: return "Fair (0.20–0.40)"
+            if k < 0.60: return "Moderate (0.40–0.60)"
+            if k < 0.80: return "Substantial (0.60–0.80)"
+            return "Almost perfect (≥ 0.80)"
+
+        uploaded = st.file_uploader(
+            "Completed validation CSV", type="csv",
+            help="Upload the filled-in validation sample with Reviewer1_* and Reviewer2_* columns.",
+        )
+
+        if uploaded is not None:
+            try:
+                rev_df = pd.read_csv(uploaded)
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
+                rev_df = None
+
+            if rev_df is not None:
+                required = {
+                    "Reviewer1_Branch", "Reviewer2_Branch",
+                    "Reviewer1_Category", "Reviewer2_Category",
+                    "Reviewer1_Entity", "Reviewer2_Entity",
+                    "Reviewer1_Target", "Reviewer2_Target",
+                    "Reviewer1_Product", "Reviewer2_Product",
+                }
+                missing_cols = required - set(rev_df.columns)
+                if missing_cols:
+                    st.error(f"Missing columns: {', '.join(sorted(missing_cols))}")
+                else:
+                    pairs = [
+                        ("Branch",    "Reviewer1_Branch",   "Reviewer2_Branch"),
+                        ("Category",  "Reviewer1_Category", "Reviewer2_Category"),
+                        ("Entity",    "Reviewer1_Entity",   "Reviewer2_Entity"),
+                        ("Target",    "Reviewer1_Target",   "Reviewer2_Target"),
+                        ("Product",   "Reviewer1_Product",  "Reviewer2_Product"),
+                    ]
+                    kappa_rows = []
+                    for label, col1, col2 in pairs:
+                        sub = rev_df[[col1, col2]].dropna()
+                        sub = sub[(sub[col1].str.strip() != "") & (sub[col2].str.strip() != "")]
+                        n_rated = len(sub)
+                        n_agreed = int((sub[col1].str.strip() == sub[col2].str.strip()).sum())
+                        k = _cohen_kappa(sub[col1].str.strip().tolist(), sub[col2].str.strip().tolist())
+                        kappa_rows.append({
+                            "Classification task": label, "n rated": n_rated, "n agreed": n_agreed,
+                            "% agreement": f"{100 * n_agreed / n_rated:.1f}%" if n_rated else "—",
+                            "κ": round(k, 3) if k == k else "—",
+                            "Interpretation": _kappa_label(k),
+                        })
+                    kappa_summary = pd.DataFrame(kappa_rows)
+                    st.dataframe(kappa_summary, width='stretch', hide_index=True)
 
 
 # ---------------------------------------------------------------------------

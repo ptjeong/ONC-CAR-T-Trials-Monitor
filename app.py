@@ -2431,13 +2431,15 @@ def _moderator_mode_active() -> bool:
 _MODERATOR_MODE = _moderator_mode_active()
 
 _tab_labels = ["Overview", "Geography / Map", "Data", "Deep Dive",
-               "Publication Figures", "Methods & Appendix", "About"]
+               "Insights", "Publication Figures",
+               "Methods & Appendix", "About"]
 if _MODERATOR_MODE:
     _tab_labels.append("Moderation")
 
 _tabs = st.tabs(_tab_labels)
-tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = _tabs[:7]
-tab_moderation = _tabs[7] if _MODERATOR_MODE else None
+(tab_overview, tab_geo, tab_data, tab_deep, tab_insights,
+ tab_pub, tab_methods, tab_about) = _tabs[:8]
+tab_moderation = _tabs[8] if _MODERATOR_MODE else None
 
 
 # ---------------------------------------------------------------------------
@@ -2744,6 +2746,162 @@ with tab_overview:
     else:
         st.info("No platform data available for the current filter selection.")
 
+    # ====== Stage 3 Phase A — Overview enrichment (added 2026-05-05) ======
+    # Three at-a-glance widgets surfaced above the PRISMA expander so the
+    # rater sees them as part of the primary insight flow:
+    #   1. Top-10 active sponsors (currently only buried in Deep Dive)
+    #   2. Recruitment hotspots (top cities with active trials right now)
+    #   3. Snapshot freshness banner (data-as-of date + age)
+
+    st.markdown(
+        '<div style="margin-top:1.4rem; margin-bottom:0.4rem; '
+        'border-top:1px solid #e5e7eb; padding-top:1rem; '
+        'font-weight:600; color:#0b1220;">'
+        'Activity & freshness signals'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    ov_act_a, ov_act_b = st.columns(2)
+
+    # --- Top sponsors at a glance ----
+    with ov_act_a:
+        st.markdown("**Top sponsors** "
+                    "<span style='color:#64748b;font-size:0.78rem;'>"
+                    "(by trial count in current filter)"
+                    "</span>",
+                    unsafe_allow_html=True)
+        _ov_sponsors = (
+            df_filt["LeadSponsor"].dropna().value_counts().head(10)
+            .rename_axis("LeadSponsor").reset_index(name="Trials")
+        )
+        if not _ov_sponsors.empty:
+            _ov_sponsors_sorted = _ov_sponsors.sort_values("Trials", ascending=True)
+            fig_top_spon = px.bar(
+                _ov_sponsors_sorted, x="Trials", y="LeadSponsor",
+                orientation="h", template="plotly_white",
+                color_discrete_sequence=[THEME["primary"]],
+                height=max(280, len(_ov_sponsors) * 26 + 40),
+                text="Trials",
+            )
+            fig_top_spon.update_traces(
+                marker_line_width=0, opacity=0.9,
+                textposition="outside",
+                textfont=dict(size=10, color=_AX_COLOR),
+            )
+            fig_top_spon.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=180, r=40, t=8, b=24),
+                font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
+                xaxis_title=None, yaxis_title=None, showlegend=False,
+            )
+            st.plotly_chart(fig_top_spon, width='stretch')
+        else:
+            st.caption("_(no sponsor data)_")
+
+    # --- Recruitment hotspots — top open-trial cities right now ----
+    with ov_act_b:
+        st.markdown("**Recruitment hotspots** "
+                    "<span style='color:#64748b;font-size:0.78rem;'>"
+                    "(top 10 cities with currently recruiting / open trials)"
+                    "</span>",
+                    unsafe_allow_html=True)
+        # Use df_sites if available
+        try:
+            _open_mask = df_sites["SiteStatus"].astype(str).str.upper().isin([
+                "RECRUITING", "NOT_YET_RECRUITING", "ACTIVE_NOT_RECRUITING",
+            ])
+            _hotspots = (
+                df_sites.loc[_open_mask & df_sites["NCTId"].isin(df_filt["NCTId"])]
+                .dropna(subset=["City"])
+                .groupby("City")
+                .agg(Trials=("NCTId", "nunique"),
+                     Country=("Country", lambda s: s.value_counts().index[0] if not s.empty else "—"))
+                .reset_index()
+                .sort_values("Trials", ascending=False)
+                .head(10)
+            )
+        except Exception:
+            _hotspots = pd.DataFrame()
+
+        if not _hotspots.empty:
+            _hotspots["CityCountry"] = (
+                _hotspots["City"] + " — " + _hotspots["Country"]
+            )
+            _hotspots_sorted = _hotspots.sort_values("Trials", ascending=True)
+            fig_hot = px.bar(
+                _hotspots_sorted, x="Trials", y="CityCountry",
+                orientation="h", template="plotly_white",
+                color_discrete_sequence=[SOLID_COLOR],
+                height=max(280, len(_hotspots) * 26 + 40),
+                text="Trials",
+            )
+            fig_hot.update_traces(
+                marker_line_width=0, opacity=0.9,
+                textposition="outside",
+                textfont=dict(size=10, color=_AX_COLOR),
+            )
+            fig_hot.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=180, r=40, t=8, b=24),
+                font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
+                xaxis_title=None, yaxis_title=None, showlegend=False,
+            )
+            st.plotly_chart(fig_hot, width='stretch')
+        else:
+            st.caption(
+                "_(no recruitment hotspots — site-level data may be "
+                "unavailable for this snapshot. Click 'Refresh now' "
+                "in the sidebar to populate.)_"
+            )
+
+    # --- Snapshot freshness banner ----
+    # Surfaces snapshot date prominently so users know how current
+    # the analyses are, and computes age in days.
+    _snap_date_str = ""
+    _snap_age_days = None
+    try:
+        _candidate = (
+            st.session_state.get("pinned_snapshot")
+            or (available_snapshots[0] if available_snapshots else None)
+        )
+        if _candidate:
+            _snap_date_str = str(_candidate)
+            _snap_dt = datetime.fromisoformat(_snap_date_str)
+            _snap_age_days = (datetime.now() - _snap_dt).days
+    except Exception:
+        pass
+
+    if _snap_date_str:
+        if _snap_age_days is None:
+            _freshness_class = ""
+            _freshness_msg = "freshness unknown"
+            _freshness_color = THEME["muted"]
+        elif _snap_age_days <= 7:
+            _freshness_msg = f"{_snap_age_days} days old · fresh"
+            _freshness_color = "#059669"
+        elif _snap_age_days <= 30:
+            _freshness_msg = f"{_snap_age_days} days old · current"
+            _freshness_color = "#0891b2"
+        elif _snap_age_days <= 90:
+            _freshness_msg = f"{_snap_age_days} days old · stale-leaning"
+            _freshness_color = "#92400e"
+        else:
+            _freshness_msg = f"{_snap_age_days} days old · STALE — refresh recommended"
+            _freshness_color = "#991b1b"
+        st.markdown(
+            f'<div style="margin-top:0.8rem; padding:0.6rem 0.9rem; '
+            f'border-radius:6px; background:#f8fafc; border-left:4px solid '
+            f'{_freshness_color}; font-size:0.85rem; color:{THEME["text"]};">'
+            f'<strong>Data snapshot:</strong> {_snap_date_str} '
+            f'<span style="color:{_freshness_color};">· {_freshness_msg}</span> '
+            f'<span style="color:#64748b;">'
+            f'· Click <em>Refresh now</em> in the sidebar to fetch the latest '
+            f'CT.gov state.</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
     # Methodological backing — collapsed by default so the insight-first flow
     # above isn't blocked. Full PRISMA narrative also lives in the Methods tab.
     if prisma_counts:
@@ -2990,6 +3148,129 @@ with tab_geo:
     if not _countries_avail:
         st.info("No open or recruiting study sites in the current filter selection.")
     else:
+        # ====== Stage 3 Phase B — Regional aggregation (added 2026-05-05) ======
+        # Roll up countries into regions for a high-level "where in the
+        # world" view above the per-country drilldown. Reveals dominant
+        # regions at a glance — addresses the well-known "China dominates
+        # CAR-T trials" question without needing to expand every country
+        # row in the city table below.
+        _REGION_MAP = {
+            # North America
+            "United States": "North America", "Canada": "North America",
+            "Mexico": "North America",
+            # Europe (selected)
+            "United Kingdom": "Europe", "Germany": "Europe", "France": "Europe",
+            "Italy": "Europe", "Spain": "Europe", "Netherlands": "Europe",
+            "Belgium": "Europe", "Sweden": "Europe", "Switzerland": "Europe",
+            "Austria": "Europe", "Denmark": "Europe", "Norway": "Europe",
+            "Finland": "Europe", "Poland": "Europe", "Ireland": "Europe",
+            "Czechia": "Europe", "Czech Republic": "Europe", "Greece": "Europe",
+            "Portugal": "Europe", "Hungary": "Europe", "Romania": "Europe",
+            "Bulgaria": "Europe", "Slovakia": "Europe", "Slovenia": "Europe",
+            "Croatia": "Europe", "Latvia": "Europe", "Lithuania": "Europe",
+            "Estonia": "Europe",
+            # China (separate from Asia-other given its CAR-T dominance)
+            "China": "China",
+            # Asia-Pacific (excluding China)
+            "Japan": "Asia-Pacific", "South Korea": "Asia-Pacific",
+            "Korea, Republic of": "Asia-Pacific", "Australia": "Asia-Pacific",
+            "New Zealand": "Asia-Pacific", "Singapore": "Asia-Pacific",
+            "Taiwan": "Asia-Pacific", "Hong Kong": "Asia-Pacific",
+            "Thailand": "Asia-Pacific", "Vietnam": "Asia-Pacific",
+            "Malaysia": "Asia-Pacific", "Indonesia": "Asia-Pacific",
+            "Philippines": "Asia-Pacific", "India": "Asia-Pacific",
+            # Middle East & Africa
+            "Israel": "Middle East & Africa", "United Arab Emirates": "Middle East & Africa",
+            "Saudi Arabia": "Middle East & Africa", "Turkey": "Middle East & Africa",
+            "Egypt": "Middle East & Africa", "South Africa": "Middle East & Africa",
+            "Iran": "Middle East & Africa",
+            # Latin America
+            "Brazil": "Latin America", "Argentina": "Latin America",
+            "Chile": "Latin America", "Colombia": "Latin America",
+            "Peru": "Latin America", "Uruguay": "Latin America",
+        }
+        _REGION_COLOR = {
+            "China": "#dc2626",
+            "North America": "#0b3d91",
+            "Europe": "#0891b2",
+            "Asia-Pacific": "#7c3aed",
+            "Middle East & Africa": "#92400e",
+            "Latin America": "#059669",
+            "Other": "#94a3b8",
+        }
+        # Build the per-region trial-count summary from df_filt
+        _region_counts = []
+        for _, _row in df_filt.iterrows():
+            _cs = _row.get("Countries")
+            if pd.isna(_cs) or not _cs:
+                continue
+            _regions_for_trial = set()
+            for _c in str(_cs).split("|"):
+                _c = _c.strip()
+                if not _c:
+                    continue
+                _r = _REGION_MAP.get(_c, "Other")
+                _regions_for_trial.add(_r)
+            for _r in _regions_for_trial:
+                _region_counts.append({"NCTId": _row["NCTId"], "Region": _r})
+        _region_df = pd.DataFrame(_region_counts)
+        if not _region_df.empty:
+            _region_summary = (
+                _region_df.drop_duplicates(["NCTId", "Region"])
+                .groupby("Region").size().reset_index(name="Trials")
+                .sort_values("Trials", ascending=False)
+            )
+            st.markdown(
+                "**Regional aggregation** "
+                "<span style='color:#64748b;font-size:0.78rem;'>"
+                "(trials counted once per region; multi-region trials "
+                "appear in each)"
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            _rg_a, _rg_b = st.columns([0.6, 0.4])
+            with _rg_a:
+                _region_sorted = _region_summary.sort_values("Trials", ascending=True)
+                fig_region = px.bar(
+                    _region_sorted, x="Trials", y="Region",
+                    orientation="h", template="plotly_white",
+                    color="Region", color_discrete_map=_REGION_COLOR,
+                    height=max(220, len(_region_sorted) * 32 + 50),
+                    text="Trials",
+                )
+                fig_region.update_traces(
+                    marker_line_width=0, opacity=0.92,
+                    textposition="outside",
+                    textfont=dict(size=10, color=_AX_COLOR),
+                )
+                fig_region.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=120, r=40, t=8, b=24),
+                    font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
+                    xaxis_title=None, yaxis_title=None, showlegend=False,
+                )
+                st.plotly_chart(fig_region, width='stretch')
+            with _rg_b:
+                # Mini-stats: total + dominant region's share
+                _total_trials_geo = int(_region_summary["Trials"].sum())
+                _dom = _region_summary.iloc[0]
+                _dom_pct = 100 * _dom["Trials"] / _total_trials_geo
+                st.metric(
+                    f"Dominant region ({_dom['Region']})",
+                    f"{_dom_pct:.0f}%",
+                    f"{int(_dom['Trials'])} of {_total_trials_geo} trials",
+                )
+                _multi_country_n = int((
+                    df_filt["Countries"].dropna().astype(str)
+                    .apply(lambda s: "|" in s).sum()
+                ))
+                st.metric(
+                    "Multi-country trials",
+                    f"{_multi_country_n:,}",
+                    "Trials with sites in ≥2 countries",
+                )
+            st.markdown("")  # spacer
+
         # Default to most active country, but preserve user's last selection
         # via session state so the Geography + Data tabs stay in sync.
         _prev = st.session_state.get("sites_country", _countries_avail[0])
@@ -3027,6 +3308,112 @@ with tab_geo:
                     country_study_view["NCTId"].nunique() if not country_study_view.empty else 0,
                     help=f"NCT IDs with at least one open {selected_country} site",
                 )
+
+            # ====== Stage 3 Phase B — Per-country breakdowns (added 2026-05-05) ======
+            # Two charts: phase distribution + top sponsors for THIS country.
+            # Reveals the country's CAR-T pipeline character at a glance —
+            # are they running early-phase exploration (Ph1/2 dominant) or
+            # mature confirmatory work (Ph3 strong)? Who's the dominant
+            # sponsor / institution?
+            if not country_study_view.empty:
+                _pc1, _pc2 = st.columns(2)
+                with _pc1:
+                    st.markdown(
+                        f"**{selected_country} — phase distribution** "
+                        "<span style='color:#64748b;font-size:0.78rem;'>"
+                        "(stacked by branch)"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                    _pc_phase = (
+                        country_study_view.groupby(
+                            ["PhaseOrdered", "Branch"], observed=False,
+                        ).size().reset_index(name="Trials")
+                    )
+                    _pc_phase["Phase"] = (
+                        _pc_phase["PhaseOrdered"].astype(str).map(PHASE_LABELS)
+                    )
+                    _pc_phase = _pc_phase[_pc_phase["Trials"] > 0]
+                    if not _pc_phase.empty:
+                        fig_pc_phase = px.bar(
+                            _pc_phase, x="Phase", y="Trials", color="Branch",
+                            color_discrete_map=BRANCH_COLORS,
+                            barmode="stack",
+                            template="plotly_white", height=300,
+                            text="Trials",
+                            category_orders={
+                                "Phase": [PHASE_LABELS[p] for p in PHASE_ORDER],
+                            },
+                        )
+                        fig_pc_phase.update_traces(
+                            marker_line_width=0, opacity=0.92,
+                            textposition="inside",
+                            textfont=dict(size=10, color="white"),
+                        )
+                        fig_pc_phase.update_layout(
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            margin=dict(l=44, r=24, t=8, b=60),
+                            font=dict(family="Inter, sans-serif",
+                                       size=11, color=THEME["text"]),
+                            xaxis_title=None, yaxis_title=None,
+                            legend=dict(
+                                orientation="h", yanchor="top", y=-0.18,
+                                xanchor="center", x=0.5,
+                                font=dict(size=10),
+                                bgcolor="rgba(0,0,0,0)", title=None,
+                            ),
+                        )
+                        st.plotly_chart(fig_pc_phase, width='stretch')
+                    else:
+                        st.caption("_(no phase data for this country)_")
+
+                with _pc2:
+                    st.markdown(
+                        f"**{selected_country} — top sponsors / institutions** "
+                        "<span style='color:#64748b;font-size:0.78rem;'>"
+                        "(top 10 by trial count)"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                    _pc_spon = (
+                        country_study_view["LeadSponsor"].dropna()
+                        .value_counts().head(10)
+                        .rename_axis("LeadSponsor").reset_index(name="Trials")
+                    )
+                    if not _pc_spon.empty:
+                        _pc_spon_sorted = _pc_spon.sort_values(
+                            "Trials", ascending=True
+                        )
+                        fig_pc_spon = px.bar(
+                            _pc_spon_sorted, x="Trials", y="LeadSponsor",
+                            orientation="h", template="plotly_white",
+                            color_discrete_sequence=[
+                                _REGION_COLOR.get(
+                                    _REGION_MAP.get(selected_country, "Other"),
+                                    THEME["primary"],
+                                )
+                            ],
+                            height=max(280, len(_pc_spon) * 26 + 40),
+                            text="Trials",
+                        )
+                        fig_pc_spon.update_traces(
+                            marker_line_width=0, opacity=0.9,
+                            textposition="outside",
+                            textfont=dict(size=10, color=_AX_COLOR),
+                        )
+                        fig_pc_spon.update_layout(
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            margin=dict(l=180, r=40, t=8, b=24),
+                            font=dict(family="Inter, sans-serif",
+                                       size=11, color=THEME["text"]),
+                            xaxis_title=None, yaxis_title=None,
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig_pc_spon, width='stretch')
+                    else:
+                        st.caption("_(no sponsor data)_")
 
             # Mirror the Global-view pattern: map + top-cities bar side by
             # side (primary visuals), then the full city table below spans
@@ -3680,20 +4067,24 @@ def _cagr(first_count: int, last_count: int, n_years: int) -> float | None:
 
 with tab_deep:
     st.markdown(
-        '<p class="small-note">Four focused views that complement the aggregate dashboards: '
+        '<p class="small-note">Five focused views that complement the aggregate dashboards: '
         "(1) drill into a single disease entity (category or Tier-3 leaf) to see all trials, "
         "sponsors, phases and targets in one place; (2) drill into a single antigen target "
         "to see how its pipeline spreads across diseases, phases, modalities and sponsors; "
         "(3) aggregate trials by named CAR-T product to track each product's portfolio across "
         "indications and phases; (4) break the landscape down by sponsor type (Industry / "
-        "Academic / Government / Other) to compare who is running what. Every trial-list table "
-        "supports row-click drilldown to a full trial record.</p>",
+        "Academic / Government / Other) to compare who is running what; "
+        "(5) <strong>strategic-landscape view</strong> — cross-cutting analyses that don't fit "
+        "any single dimension (antigen first-in-class timeline, sponsor competition matrix, "
+        "phase-progression velocity, sponsor concentration, heme-vs-solid maturity gap). "
+        "Every trial-list table supports row-click drilldown to a full trial record.</p>",
         unsafe_allow_html=True,
     )
 
     (deep_sub_disease, deep_sub_target, deep_sub_product,
-     deep_sub_sponsor) = st.tabs(
-        ["By disease", "By target", "By product", "By sponsor type"]
+     deep_sub_sponsor, deep_sub_landscape) = st.tabs(
+        ["By disease", "By target", "By product", "By sponsor type",
+         "Strategic landscape"]
     )
 
     # ===== By-disease focus =====
@@ -3834,6 +4225,273 @@ with tab_deep:
                         xaxis_title=None, yaxis_title=None, showlegend=False,
                     )
                     st.plotly_chart(_sp_fig, width='stretch')
+
+            # ====== Phase 1 expansion (added 2026-05-05) ======
+            # Three new analytical views layered on top of the existing four
+            # phase/target/year/sponsor counts. The four counts answer "what's
+            # in this cohort"; these three answer "what's the structural
+            # picture of this cohort":
+            #   - Sponsor competition strip → max-phase-reached per sponsor
+            #     (who's leading vs catching up)
+            #   - Geographic mini-map → where the trials are running
+            #   - Enrollment-by-phase box → how trial size scales with phase
+            # All three are Plotly figs; rendered in a 3-column row to keep
+            # the by-disease tab single-screen-readable.
+
+            st.markdown(
+                '<div style="margin-top:1.2rem; margin-bottom:0.4rem; '
+                'border-top:1px solid #e5e7eb; padding-top:1rem; '
+                'font-weight:600; color:#0b1220;">'
+                'Structural picture of the cohort'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            sx1, sx2, sx3 = st.columns([0.42, 0.32, 0.26])
+
+            # --- 1. Sponsor competition strip ----
+            # Top-8 sponsors by trial count, each row a sponsor, bar
+            # length = # trials, COLORED by max phase they reached. So
+            # a sponsor with one Ph3 trial scores ahead of one with
+            # five Ph1 trials — captures pipeline maturity, not just
+            # volume. Useful for spotting who's leading the disease.
+            with sx1:
+                st.markdown("**Sponsor competition** "
+                            "<span style='color:#64748b;font-size:0.78rem;'>"
+                            "(bar = trial count, color = max phase reached)"
+                            "</span>",
+                            unsafe_allow_html=True)
+                _sc_top = (
+                    focus.groupby("LeadSponsor", dropna=True)
+                    .agg(Trials=("NCTId", "nunique"),
+                         MaxPhase=("PhaseOrdered", "max"))
+                    .reset_index()
+                    .sort_values("Trials", ascending=False).head(8)
+                )
+                if not _sc_top.empty:
+                    _sc_top["MaxPhaseLabel"] = _sc_top["MaxPhase"].astype(str).map(PHASE_LABELS).fillna("Unknown")
+                    _sc_top = _sc_top.sort_values("Trials", ascending=True)
+                    _phase_order_for_color = [PHASE_LABELS[p] for p in PHASE_ORDER if PHASE_LABELS[p] in _sc_top["MaxPhaseLabel"].unique()]
+                    _phase_pal = ["#cbd5e1", "#93c5fd", "#3b82f6", "#1d4ed8", "#0b3d91", "#7c2d12"]
+                    _phase_color_map = {
+                        ph: _phase_pal[min(i, len(_phase_pal) - 1)]
+                        for i, ph in enumerate(_phase_order_for_color)
+                    }
+                    fig_sc = px.bar(
+                        _sc_top, x="Trials", y="LeadSponsor", orientation="h",
+                        color="MaxPhaseLabel", color_discrete_map=_phase_color_map,
+                        category_orders={"MaxPhaseLabel": _phase_order_for_color},
+                        height=max(260, len(_sc_top) * 28 + 80),
+                        template="plotly_white", text="Trials",
+                    )
+                    fig_sc.update_traces(marker_line_width=0, opacity=0.92,
+                                          textposition="outside",
+                                          textfont=dict(size=10, color=_AX_COLOR))
+                    fig_sc.update_layout(
+                        **PUB_BASE,
+                        margin=dict(l=140, r=24, t=8, b=40),
+                        xaxis_title="Number of trials",
+                        yaxis_title=None,
+                        legend=dict(
+                            orientation="h", yanchor="top", y=-0.15,
+                            xanchor="center", x=0.5,
+                            font=dict(size=9, color=_AX_COLOR),
+                            title=None, bgcolor="rgba(0,0,0,0)",
+                        ),
+                    )
+                    st.plotly_chart(fig_sc, width='stretch', config=PUB_EXPORT)
+                else:
+                    st.caption("_(no sponsor data for this cohort)_")
+
+            # --- 2. Geographic mini-map ----
+            # Choropleth of trial counts per country for THIS disease focus.
+            # Same convention as Fig 3 (publication geography) but scoped
+            # to the cohort. Multi-country trials counted once per country.
+            with sx2:
+                st.markdown("**Geographic distribution** "
+                            "<span style='color:#64748b;font-size:0.78rem;'>"
+                            "(trials counted once per country)"
+                            "</span>",
+                            unsafe_allow_html=True)
+                _geo_focus_long = []
+                for _idx, _row in focus.iterrows():
+                    _cs = _row.get("Countries")
+                    if pd.isna(_cs) or not _cs:
+                        continue
+                    for _c in str(_cs).split("|"):
+                        _c = _c.strip()
+                        if _c:
+                            _geo_focus_long.append({"NCTId": _row["NCTId"], "Country": _c})
+                _geo_focus_df = pd.DataFrame(_geo_focus_long)
+                if not _geo_focus_df.empty:
+                    _geo_focus = (
+                        _geo_focus_df.drop_duplicates(["NCTId", "Country"])
+                        .groupby("Country").size().reset_index(name="Trials")
+                    )
+                    _geo_focus["ISO3"] = _geo_focus["Country"].map(_to_iso3)
+                    _geo_focus = _geo_focus.dropna(subset=["ISO3"])
+                    if not _geo_focus.empty:
+                        fig_geo = px.choropleth(
+                            _geo_focus, locations="ISO3", locationmode="ISO-3",
+                            color="Trials", hover_name="Country",
+                            color_continuous_scale=[[0, "#dbeafe"], [0.4, "#5aafd6"], [1, "#0b3d91"]],
+                            projection="natural earth",
+                        )
+                        fig_geo.update_layout(
+                            margin=dict(l=0, r=0, t=8, b=0),
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            geo=dict(bgcolor="rgba(0,0,0,0)",
+                                     showframe=False, showcoastlines=False,
+                                     showcountries=True,
+                                     countrycolor="rgba(0,0,0,0.15)",
+                                     fitbounds="locations"),
+                            coloraxis_colorbar=dict(
+                                title=None, len=0.6, thickness=10,
+                                tickfont=dict(size=9, color=_AX_COLOR),
+                            ),
+                            height=max(260, len(_sc_top) * 28 + 80) if not _sc_top.empty else 260,
+                        )
+                        st.plotly_chart(fig_geo, width='stretch', config=PUB_EXPORT)
+                    else:
+                        st.caption("_(country names didn't ISO3-resolve)_")
+                else:
+                    st.caption("_(no geographic data for this cohort)_")
+
+            # --- 3. Trial-size distribution by phase ----
+            # Boxplot of EnrollmentCount per Phase. Reveals whether trial size
+            # scales with phase as expected (Ph1 small → Ph3 large) or whether
+            # this disease has anomalous patterns. Outliers >1000 clipped per
+            # the global enrollment convention.
+            with sx3:
+                st.markdown("**Trial size by phase** "
+                            "<span style='color:#64748b;font-size:0.78rem;'>"
+                            "(enrollment ≤1000)"
+                            "</span>",
+                            unsafe_allow_html=True)
+                _enroll_focus = focus[["PhaseLabel", "PhaseOrdered", "EnrollmentCount"]].copy()
+                _enroll_focus["EnrollmentCount"] = pd.to_numeric(
+                    _enroll_focus["EnrollmentCount"], errors="coerce")
+                _enroll_focus = _enroll_focus.dropna(subset=["EnrollmentCount", "PhaseLabel"])
+                _enroll_focus = _enroll_focus[_enroll_focus["EnrollmentCount"] <= 1000]
+                if not _enroll_focus.empty and len(_enroll_focus) >= 3:
+                    _phases_present = (
+                        _enroll_focus.sort_values("PhaseOrdered")["PhaseLabel"].unique().tolist()
+                    )
+                    fig_box = px.box(
+                        _enroll_focus, x="PhaseLabel", y="EnrollmentCount",
+                        category_orders={"PhaseLabel": _phases_present},
+                        height=max(260, len(_sc_top) * 28 + 80) if not _sc_top.empty else 260,
+                        template="plotly_white", points="outliers",
+                        color_discrete_sequence=[HEME_COLOR],
+                    )
+                    fig_box.update_traces(
+                        marker=dict(opacity=0.55, size=4),
+                        boxmean=True,
+                        line=dict(width=1.3),
+                    )
+                    fig_box.update_layout(
+                        **PUB_BASE,
+                        margin=dict(l=44, r=12, t=8, b=40),
+                        xaxis_title=None,
+                        yaxis_title="Enrollment",
+                        showlegend=False,
+                    )
+                    fig_box.update_xaxes(tickfont=dict(size=9, color=_AX_COLOR))
+                    st.plotly_chart(fig_box, width='stretch', config=PUB_EXPORT)
+                else:
+                    st.caption("_(insufficient enrollment data for box plot)_")
+
+            # ====== Round 2 addition (added 2026-05-05) ======
+            # Sister-disease analysis: which OTHER diseases share targets
+            # with this one? Spillover candidates — if a target works in
+            # MM, does it have any signal in B-NHL? Identifies cross-
+            # indication transfer-learning opportunities.
+            st.markdown(
+                "**Sister diseases — share antigen targets with this cohort** "
+                "<span style='color:#64748b; font-size:0.78rem;'>"
+                "(top 10 antigens in this cohort, ranked by # of OTHER "
+                "disease entities targeting the same antigen)"
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            # Antigens active in THIS cohort
+            _focus_antigens = (
+                focus.loc[
+                    ~focus["TargetCategory"].isin(_PLATFORM_LABELS)
+                    & focus["TargetCategory"].notna()
+                    & ~focus["TargetCategory"].isin(["Other_or_unknown", "CAR-T_unspecified"]),
+                    "TargetCategory",
+                ].value_counts().head(10).index.tolist()
+            )
+            if _focus_antigens:
+                # For each focus antigen, find OTHER diseases (entities or
+                # categories) that ALSO use this antigen — across the full df.
+                _sister_rows = []
+                _focus_diseases = set(
+                    list(focus["DiseaseEntity"].dropna().unique())
+                    + list(focus["DiseaseCategory"].dropna().unique())
+                )
+                for _ant in _focus_antigens:
+                    _other = df[
+                        (df["TargetCategory"] == _ant)
+                        & ~df["DiseaseEntity"].isin(_focus_diseases)
+                        & ~df["DiseaseCategory"].isin(_focus_diseases)
+                    ]
+                    _other_diseases = sorted(set(
+                        list(_other["DiseaseEntity"].dropna().unique())
+                        + list(_other["DiseaseCategory"].dropna().unique())
+                    ))
+                    # Filter empty + 'Unclassified' / nans
+                    _other_diseases = [d for d in _other_diseases if d and d != "Unclassified"][:8]
+                    _sister_rows.append({
+                        "Antigen": _ant,
+                        "OtherDiseasesN": len(_other_diseases),
+                        "OtherDiseases": ", ".join(_other_diseases) if _other_diseases else "(none)",
+                        "OtherTrials": int(len(_other)),
+                    })
+                _sister_df = pd.DataFrame(_sister_rows)
+                if not _sister_df.empty and _sister_df["OtherTrials"].sum() > 0:
+                    _sister_df_sorted = _sister_df.sort_values(
+                        "OtherDiseasesN", ascending=True
+                    )
+                    fig_sister = px.bar(
+                        _sister_df_sorted, x="OtherTrials", y="Antigen",
+                        orientation="h", template="plotly_white",
+                        color_discrete_sequence=[MIXED_COLOR],
+                        height=max(220, len(_sister_df) * 32 + 60),
+                        text="OtherTrials",
+                        hover_data={"OtherDiseases": True, "OtherDiseasesN": True},
+                    )
+                    fig_sister.update_traces(
+                        marker_line_width=0, opacity=0.92,
+                        textposition="outside",
+                        textfont=dict(size=10, color=_AX_COLOR),
+                    )
+                    fig_sister.update_layout(
+                        **PUB_BASE,
+                        margin=dict(l=110, r=24, t=8, b=32),
+                        xaxis_title="Trials in OTHER diseases targeting same antigen",
+                        yaxis_title=None,
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_sister, width='stretch', config=PUB_EXPORT)
+                    st.caption(
+                        "<span style='color:#64748b'>"
+                        "Hover a bar to see the actual sister-disease list. "
+                        "High counts = the antigen has cross-indication "
+                        "evidence; low counts = your cohort may be "
+                        "the antigen's primary indication."
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption(
+                        "_(no antigens in this cohort are tested in other "
+                        "diseases — your cohort may be the antigen's only "
+                        "indication, or sample is too small)_"
+                    )
+            else:
+                st.caption("_(no antigens with sufficient data for sister-disease analysis)_")
 
             st.markdown(
                 "**Trial list (focus cohort)** "
@@ -4059,6 +4717,390 @@ with tab_deep:
                             column_config=_mini_count_cols("Branch"),
                         )
 
+                # ====== Phase 2 expansion (added 2026-05-05) ======
+                # Three structural views for the picked antigen:
+                #   1. Target × disease maturity heatmap → which indications
+                #      have late-stage data vs which are still Ph1 only
+                #   2. Temporal trajectory → annual trial-start counts
+                #      stacked by phase, reveals when this target took off
+                #   3. Co-targeting partners → which other antigens this
+                #      target pairs with in dual / multi constructs
+                st.markdown(
+                    '<div style="margin-top:1.2rem; margin-bottom:0.4rem; '
+                    'border-top:1px solid #e5e7eb; padding-top:1rem; '
+                    'font-weight:600; color:#0b1220;">'
+                    f'Structural picture of the {target_pick} antigen pipeline'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+                tx1, tx2 = st.columns([0.55, 0.45])
+
+                # --- 1. Target × disease maturity heatmap ----
+                with tx1:
+                    st.markdown(
+                        f"**{target_pick} × disease — most-advanced phase reached** "
+                        "<span style='color:#64748b;font-size:0.78rem;'>"
+                        "(cells colored by furthest phase; blank = no trials)"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                    _mat_pivot = (
+                        focus.assign(_pn=focus["PhaseOrdered"].astype(str))
+                        .groupby(["DiseaseCategory", "_pn"], dropna=True)
+                        .size().reset_index(name="Trials")
+                    )
+                    if not _mat_pivot.empty:
+                        # Convert to per-(category, phase-rank) lookup, take MAX rank per category
+                        _max_per_cat = _mat_pivot.copy()
+                        _max_per_cat["PhaseRank"] = _max_per_cat["_pn"].apply(
+                            lambda p: PHASE_ORDER.index(p) if p in PHASE_ORDER else -1
+                        )
+                        _max_per_cat = _max_per_cat[_max_per_cat["PhaseRank"] >= 0]
+                        if not _max_per_cat.empty:
+                            _agg = (
+                                _max_per_cat.groupby("DiseaseCategory")
+                                .agg(MaxRank=("PhaseRank", "max"),
+                                     Trials=("Trials", "sum"))
+                                .reset_index()
+                                .sort_values("MaxRank", ascending=True)
+                            )
+                            _agg["FurthestPhase"] = _agg["MaxRank"].apply(
+                                lambda r: PHASE_LABELS[PHASE_ORDER[r]]
+                            )
+                            _phase_pal = ["#cbd5e1", "#93c5fd", "#3b82f6",
+                                          "#1d4ed8", "#0b3d91", "#7c2d12"]
+                            _color_map = {
+                                PHASE_LABELS[p]: _phase_pal[min(i, len(_phase_pal) - 1)]
+                                for i, p in enumerate(PHASE_ORDER)
+                            }
+                            fig_mat = px.bar(
+                                _agg, x="Trials", y="DiseaseCategory",
+                                orientation="h", color="FurthestPhase",
+                                color_discrete_map=_color_map,
+                                category_orders={
+                                    "FurthestPhase": [PHASE_LABELS[p] for p in PHASE_ORDER],
+                                },
+                                template="plotly_white",
+                                height=max(280, len(_agg) * 28 + 80),
+                                text="Trials",
+                            )
+                            fig_mat.update_traces(
+                                marker_line_width=0, opacity=0.92,
+                                textposition="outside",
+                                textfont=dict(size=10, color=_AX_COLOR),
+                            )
+                            fig_mat.update_layout(
+                                **PUB_BASE,
+                                margin=dict(l=130, r=24, t=8, b=40),
+                                xaxis_title="Number of trials",
+                                yaxis_title=None,
+                                legend=dict(
+                                    orientation="h", yanchor="top", y=-0.15,
+                                    xanchor="center", x=0.5,
+                                    font=dict(size=9, color=_AX_COLOR),
+                                    title=None,
+                                ),
+                            )
+                            st.plotly_chart(fig_mat, width='stretch', config=PUB_EXPORT)
+                        else:
+                            st.caption("_(no resolvable phases for this target)_")
+                    else:
+                        st.caption("_(no disease × phase data)_")
+
+                # --- 2. Temporal trajectory ----
+                with tx2:
+                    st.markdown(
+                        f"**{target_pick} trial starts by year** "
+                        "<span style='color:#64748b;font-size:0.78rem;'>"
+                        "(stacked by phase)"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                    _yr_focus = focus.copy()
+                    _yr_focus["StartYear"] = pd.to_numeric(_yr_focus["StartYear"], errors="coerce")
+                    _yr_focus = _yr_focus.dropna(subset=["StartYear"])
+                    _yr_focus["StartYear"] = _yr_focus["StartYear"].astype(int)
+                    _yr_focus["PhaseLabel"] = _yr_focus["PhaseLabel"].fillna("Unknown")
+                    _yr_traj = (
+                        _yr_focus.groupby(["StartYear", "PhaseLabel"]).size()
+                        .reset_index(name="Trials")
+                    )
+                    if not _yr_traj.empty:
+                        _phases_in_traj = [
+                            PHASE_LABELS[p] for p in PHASE_ORDER
+                            if PHASE_LABELS[p] in _yr_traj["PhaseLabel"].unique()
+                        ]
+                        _phase_pal_t = ["#cbd5e1", "#93c5fd", "#3b82f6",
+                                        "#1d4ed8", "#0b3d91", "#7c2d12"]
+                        _phase_color_traj = {
+                            ph: _phase_pal_t[min(i, len(_phase_pal_t) - 1)]
+                            for i, ph in enumerate(_phases_in_traj)
+                        }
+                        fig_traj = px.area(
+                            _yr_traj, x="StartYear", y="Trials",
+                            color="PhaseLabel",
+                            color_discrete_map=_phase_color_traj,
+                            category_orders={"PhaseLabel": _phases_in_traj},
+                            template="plotly_white", height=320,
+                        )
+                        fig_traj.update_traces(
+                            line=dict(width=0.4),
+                            opacity=0.85,
+                        )
+                        fig_traj.update_layout(
+                            **PUB_BASE,
+                            margin=dict(l=44, r=12, t=8, b=40),
+                            xaxis_title=None, yaxis_title="Trials started",
+                            legend=dict(
+                                orientation="h", yanchor="top", y=-0.15,
+                                xanchor="center", x=0.5,
+                                font=dict(size=9, color=_AX_COLOR),
+                                title=None,
+                            ),
+                        )
+                        fig_traj.update_xaxes(tickmode="linear", dtick=2,
+                                                tickformat="d")
+                        st.plotly_chart(fig_traj, width='stretch', config=PUB_EXPORT)
+                    else:
+                        st.caption("_(no start-year data)_")
+
+                # --- 3. Co-targeting partners ----
+                # For this antigen, find dual / multi-target constructs that
+                # PAIR it with another antigen. Looks at whole df_filt (NOT
+                # focus, which is single-target) — checks DUAL_TARGET_LABELS
+                # for trials whose TargetCategory matches "X/Y dual" or
+                # "Y/X dual" patterns containing this antigen.
+                st.markdown(
+                    f"**Co-targeting partners — antigens that pair with "
+                    f"{target_pick} in dual / multi-target constructs** "
+                    "<span style='color:#64748b;font-size:0.78rem;'>"
+                    "(across the FULL dataset, not just this antigen's "
+                    "single-target trials)"
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                _dual_pattern_hits = []
+                _all_dual_targets = df[
+                    df["TargetCategory"].astype(str).str.contains("dual", case=False, na=False)
+                ]
+                for _, _r in _all_dual_targets.iterrows():
+                    _tc = str(_r["TargetCategory"])
+                    if target_pick.lower() not in _tc.lower():
+                        continue
+                    # Strip " dual" suffix and split by "/"
+                    _stripped = _tc.lower().replace(" dual", "").replace("dual", "").strip()
+                    _parts = [p.strip() for p in _stripped.split("/")]
+                    # Find the OTHER part
+                    for _p in _parts:
+                        if _p and _p != target_pick.lower():
+                            _dual_pattern_hits.append({
+                                "Partner": _p.upper() if len(_p) <= 5 else _p.title(),
+                                "DualLabel": _tc,
+                                "NCTId": _r["NCTId"],
+                            })
+                if _dual_pattern_hits:
+                    _co_df = pd.DataFrame(_dual_pattern_hits)
+                    _co_summary = (
+                        _co_df.groupby("Partner")
+                        .agg(Trials=("NCTId", "nunique"),
+                             DualLabels=("DualLabel", lambda s: ", ".join(sorted(set(s)))))
+                        .reset_index()
+                        .sort_values("Trials", ascending=False)
+                    )
+                    fig_co = px.bar(
+                        _co_summary.sort_values("Trials", ascending=True),
+                        x="Trials", y="Partner", orientation="h",
+                        template="plotly_white",
+                        color_discrete_sequence=[SOLID_COLOR],
+                        height=max(220, len(_co_summary) * 32 + 60),
+                        text="Trials",
+                        hover_data={"DualLabels": True, "Partner": False, "Trials": True},
+                    )
+                    fig_co.update_traces(
+                        marker_line_width=0, opacity=0.9,
+                        textposition="outside",
+                        textfont=dict(size=10, color=_AX_COLOR),
+                    )
+                    fig_co.update_layout(
+                        **PUB_BASE,
+                        margin=dict(l=120, r=24, t=8, b=24),
+                        xaxis_title="Number of trials",
+                        yaxis_title=None,
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_co, width='stretch', config=PUB_EXPORT)
+                else:
+                    st.caption(
+                        f"_({target_pick} doesn't appear in any dual / "
+                        f"multi-target construct in this dataset)_"
+                    )
+
+                # ====== Round 2 additions (added 2026-05-05) ======
+                # Two more structural views:
+                #   4. Sponsor longevity & commitment — for each sponsor active
+                #      in this target, years between first & most-recent trial
+                #   5. White-space coverage — disease categories where this
+                #      target has ZERO trials (untapped opportunity)
+
+                tx3, tx4 = st.columns([0.55, 0.45])
+
+                # --- 4. Sponsor longevity / commitment per target ----
+                with tx3:
+                    st.markdown(
+                        f"**Sponsor commitment — years active per sponsor** "
+                        "<span style='color:#64748b;font-size:0.78rem;'>"
+                        "(top 12 sponsors; bar = years between first and "
+                        "latest trial; size = trial count)"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                    _commit = focus.dropna(subset=["LeadSponsor", "StartYear"]).copy()
+                    _commit["StartYear"] = pd.to_numeric(_commit["StartYear"], errors="coerce")
+                    _commit = _commit.dropna(subset=["StartYear"])
+                    if not _commit.empty:
+                        _commit_agg = (
+                            _commit.groupby("LeadSponsor")
+                            .agg(FirstYear=("StartYear", "min"),
+                                 LastYear=("StartYear", "max"),
+                                 Trials=("NCTId", "nunique"))
+                            .reset_index()
+                        )
+                        _commit_agg["FirstYear"] = _commit_agg["FirstYear"].astype(int)
+                        _commit_agg["LastYear"] = _commit_agg["LastYear"].astype(int)
+                        _commit_agg["YearsActive"] = (
+                            _commit_agg["LastYear"] - _commit_agg["FirstYear"] + 1
+                        )
+                        _commit_top = _commit_agg.nlargest(12, "Trials").sort_values(
+                            "YearsActive", ascending=True
+                        )
+                        fig_commit = px.bar(
+                            _commit_top, x="YearsActive", y="LeadSponsor",
+                            orientation="h", template="plotly_white",
+                            color="Trials",
+                            color_continuous_scale=[
+                                [0, "#dbeafe"], [0.5, "#5aafd6"], [1, "#0b3d91"],
+                            ],
+                            height=max(280, len(_commit_top) * 28 + 80),
+                            text="YearsActive",
+                            hover_data={"FirstYear": True, "LastYear": True,
+                                         "Trials": True, "YearsActive": False},
+                        )
+                        fig_commit.update_traces(
+                            marker_line_width=0, opacity=0.92,
+                            textposition="outside",
+                            textfont=dict(size=10, color=_AX_COLOR),
+                        )
+                        fig_commit.update_layout(
+                            **PUB_BASE,
+                            margin=dict(l=160, r=44, t=8, b=40),
+                            xaxis_title="Years between first and latest trial",
+                            yaxis_title=None,
+                            coloraxis_colorbar=dict(
+                                title="# trials", thickness=10, len=0.6,
+                                tickfont=dict(size=9, color=_AX_COLOR),
+                            ),
+                        )
+                        st.plotly_chart(fig_commit, width='stretch',
+                                         config=PUB_EXPORT)
+                    else:
+                        st.caption("_(insufficient sponsor / year data)_")
+
+                # --- 5. White-space coverage ----
+                # Disease categories where this antigen has ZERO trials
+                # — untapped opportunity. Compares against the full set of
+                # disease categories present in the dataset.
+                with tx4:
+                    st.markdown(
+                        f"**White-space — disease categories without {target_pick}** "
+                        "<span style='color:#64748b;font-size:0.78rem;'>"
+                        "(categories where this antigen has ZERO trials; "
+                        "potential expansion targets)"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                    _all_cats = sorted(
+                        df["DiseaseCategory"].dropna().unique().tolist()
+                    )
+                    _covered = set(focus["DiseaseCategory"].dropna().unique())
+                    _white_space = [c for c in _all_cats if c not in _covered]
+                    # Per uncovered category, count how many CAR-T trials
+                    # exist there (any antigen) — to gauge if it's a real
+                    # opportunity or a small/dead category.
+                    if _white_space:
+                        _ws_rows = []
+                        for _cat in _white_space:
+                            _cat_trials = df[df["DiseaseCategory"] == _cat]
+                            _ws_rows.append({
+                                "DiseaseCategory": _cat,
+                                "TotalTrials": int(len(_cat_trials)),
+                                "DistinctAntigens": int(
+                                    _cat_trials.loc[
+                                        ~_cat_trials["TargetCategory"].isin(_PLATFORM_LABELS)
+                                        & ~_cat_trials["TargetCategory"].isin(["Other_or_unknown", "CAR-T_unspecified"])
+                                        & _cat_trials["TargetCategory"].notna(),
+                                        "TargetCategory"
+                                    ].nunique()
+                                ),
+                            })
+                        _ws_df = pd.DataFrame(_ws_rows).sort_values(
+                            "TotalTrials", ascending=True
+                        )
+                        # Only show categories with >0 CAR-T trials (otherwise
+                        # it's a dead category, not a white-space opportunity)
+                        _ws_df = _ws_df[_ws_df["TotalTrials"] > 0]
+                        if not _ws_df.empty:
+                            fig_ws = px.bar(
+                                _ws_df, x="TotalTrials", y="DiseaseCategory",
+                                orientation="h", template="plotly_white",
+                                color="DistinctAntigens",
+                                color_continuous_scale=[
+                                    [0, "#fb923c"], [0.5, "#5aafd6"], [1, "#0b3d91"],
+                                ],
+                                height=max(280, len(_ws_df) * 28 + 80),
+                                text="TotalTrials",
+                                hover_data={"DistinctAntigens": True,
+                                             "TotalTrials": True},
+                            )
+                            fig_ws.update_traces(
+                                marker_line_width=0, opacity=0.92,
+                                textposition="outside",
+                                textfont=dict(size=10, color=_AX_COLOR),
+                            )
+                            fig_ws.update_layout(
+                                **PUB_BASE,
+                                margin=dict(l=130, r=60, t=8, b=40),
+                                xaxis_title="CAR-T trials in this category (any antigen)",
+                                yaxis_title=None,
+                                coloraxis_colorbar=dict(
+                                    title="# antigens", thickness=10,
+                                    len=0.6,
+                                    tickfont=dict(size=9, color=_AX_COLOR),
+                                ),
+                            )
+                            st.plotly_chart(fig_ws, width='stretch',
+                                             config=PUB_EXPORT)
+                            st.caption(
+                                f"<span style='color:#64748b'>"
+                                f"<strong>{len(_ws_df)} categories</strong> have "
+                                f"CAR-T trials but ZERO with {target_pick}. "
+                                f"Categories with high trial counts + low "
+                                f"antigen diversity (orange) are the most "
+                                f"promising expansion targets."
+                                "</span>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.caption(
+                                f"_({target_pick} is already tested in every "
+                                f"disease category that has any CAR-T trials)_"
+                            )
+                    else:
+                        st.caption(
+                            f"_({target_pick} covers ALL disease categories "
+                            f"in the current dataset — no white space)_"
+                        )
+
                 # Top sponsors developing this antigen
                 st.markdown(
                     f"**Top sponsors developing {target_pick}** "
@@ -4267,6 +5309,276 @@ with tab_deep:
                         key_suffix=f"deep_product_{_picked_product}",
                     )
 
+                # ====== Phase 3 expansion (added 2026-05-05) ======
+                # Three structural views per picked product:
+                #   1. Per-trial Gantt timeline → start year × phase per
+                #      trial. Reveals the product's clinical history at
+                #      a glance; gaps in years / phases tell a story.
+                #   2. Indication × phase sunburst → portfolio breadth
+                #      (which diseases × how mature)
+                #   3. Geographic footprint → world choropleth scoped
+                #      to this product
+                st.markdown(
+                    f'<div style="margin-top:1.2rem; margin-bottom:0.4rem; '
+                    f'border-top:1px solid #e5e7eb; padding-top:1rem; '
+                    f'font-weight:600; color:#0b1220;">'
+                    f'Structural picture of the {_picked_product} pipeline'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+                pp1, pp2 = st.columns([0.55, 0.45])
+
+                # --- 1. Per-trial Gantt timeline ----
+                with pp1:
+                    st.markdown(
+                        f"**Trial timeline** "
+                        "<span style='color:#64748b;font-size:0.78rem;'>"
+                        "(each row = one trial; x = start year; color = phase)"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                    _gantt = _prod_trials.copy()
+                    _gantt["StartYear"] = pd.to_numeric(_gantt["StartYear"], errors="coerce")
+                    _gantt = _gantt.dropna(subset=["StartYear"])
+                    _gantt["StartYear"] = _gantt["StartYear"].astype(int)
+                    if not _gantt.empty:
+                        _gantt = _gantt.sort_values(["StartYear", "PhaseOrdered"])
+                        _gantt["TrialLabel"] = _gantt["NCTId"]
+                        _phase_pal_p = ["#cbd5e1", "#93c5fd", "#3b82f6",
+                                        "#1d4ed8", "#0b3d91", "#7c2d12"]
+                        _phases_in_gantt = [
+                            PHASE_LABELS[p] for p in PHASE_ORDER
+                            if PHASE_LABELS[p] in _gantt["Phase"].unique()
+                        ]
+                        _phase_color_p = {
+                            ph: _phase_pal_p[min(i, len(_phase_pal_p) - 1)]
+                            for i, ph in enumerate(_phases_in_gantt)
+                        }
+                        fig_gantt = px.scatter(
+                            _gantt, x="StartYear", y="TrialLabel",
+                            color="Phase", color_discrete_map=_phase_color_p,
+                            category_orders={"Phase": _phases_in_gantt},
+                            template="plotly_white",
+                            height=max(280, len(_gantt) * 22 + 80),
+                            hover_data={
+                                "BriefTitle": True, "DiseaseEntity": True,
+                                "OverallStatus": True, "TrialLabel": False,
+                            },
+                        )
+                        fig_gantt.update_traces(marker=dict(size=11, opacity=0.92))
+                        fig_gantt.update_layout(
+                            **PUB_BASE,
+                            margin=dict(l=110, r=24, t=8, b=40),
+                            xaxis_title="Start year",
+                            yaxis_title=None,
+                            yaxis=dict(
+                                showline=True, linewidth=1.2,
+                                linecolor=_AX_COLOR,
+                                tickfont=dict(size=9, color=_AX_COLOR),
+                                showgrid=True, gridcolor=_GRID_CLR,
+                                gridwidth=0.5,
+                            ),
+                            xaxis=dict(
+                                tickmode="linear", dtick=1, tickformat="d",
+                            ),
+                            legend=dict(
+                                orientation="h", yanchor="top", y=-0.15,
+                                xanchor="center", x=0.5,
+                                font=dict(size=9, color=_AX_COLOR),
+                                title=None,
+                            ),
+                        )
+                        st.plotly_chart(fig_gantt, width='stretch', config=PUB_EXPORT)
+                    else:
+                        st.caption("_(no start-year data for this product)_")
+
+                # --- 2. Portfolio sunburst (indication × phase) ----
+                with pp2:
+                    st.markdown(
+                        f"**Indication × phase portfolio**",
+                        unsafe_allow_html=True,
+                    )
+                    _sun_prod = _prod_trials.copy()
+                    _sun_prod["DiseaseEntity"] = _sun_prod["DiseaseEntity"].fillna("Unknown")
+                    _sun_prod["Phase"] = _sun_prod["Phase"].fillna("Unknown")
+                    _sun_data = (
+                        _sun_prod.groupby(["DiseaseEntity", "Phase"])
+                        .size().reset_index(name="Trials")
+                    )
+                    if not _sun_data.empty:
+                        fig_sun_p = px.sunburst(
+                            _sun_data, path=["DiseaseEntity", "Phase"],
+                            values="Trials",
+                            color="DiseaseEntity",
+                            color_discrete_sequence=px.colors.qualitative.Set2,
+                            template="plotly_white", height=380,
+                        )
+                        fig_sun_p.update_traces(
+                            insidetextorientation="radial",
+                            marker=dict(line=dict(color="white", width=1)),
+                        )
+                        fig_sun_p.update_layout(
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            margin=dict(l=8, r=8, t=8, b=8),
+                            font=dict(family="Inter, sans-serif", size=11,
+                                       color=THEME["text"]),
+                        )
+                        st.plotly_chart(fig_sun_p, width='stretch',
+                                         config=PUB_EXPORT)
+                    else:
+                        st.caption("_(no indication × phase data)_")
+
+                # --- 3. Geographic footprint ----
+                st.markdown(
+                    f"**Geographic footprint** "
+                    "<span style='color:#64748b;font-size:0.78rem;'>"
+                    "(one count per (trial, country) pair; multi-country "
+                    "trials counted once per country)"
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                _geo_prod_long = []
+                for _, _r in _prod_trials.iterrows():
+                    _cs = _r.get("Countries")
+                    if pd.isna(_cs) or not _cs:
+                        continue
+                    for _c in str(_cs).split("|"):
+                        _c = _c.strip()
+                        if _c:
+                            _geo_prod_long.append({"NCTId": _r["NCTId"], "Country": _c})
+                if _geo_prod_long:
+                    _geo_prod_df = pd.DataFrame(_geo_prod_long)
+                    _geo_prod = (
+                        _geo_prod_df.drop_duplicates(["NCTId", "Country"])
+                        .groupby("Country").size().reset_index(name="Trials")
+                    )
+                    _geo_prod["ISO3"] = _geo_prod["Country"].map(_to_iso3)
+                    _geo_prod = _geo_prod.dropna(subset=["ISO3"])
+                    if not _geo_prod.empty:
+                        fig_geo_p = px.choropleth(
+                            _geo_prod, locations="ISO3", locationmode="ISO-3",
+                            color="Trials", hover_name="Country",
+                            color_continuous_scale=[
+                                [0, "#dbeafe"], [0.4, "#5aafd6"],
+                                [1, "#0b3d91"],
+                            ],
+                            projection="natural earth",
+                        )
+                        fig_geo_p.update_layout(
+                            margin=dict(l=0, r=0, t=8, b=0),
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            geo=dict(bgcolor="rgba(0,0,0,0)",
+                                     showframe=False, showcoastlines=False,
+                                     showcountries=True,
+                                     countrycolor="rgba(0,0,0,0.15)",
+                                     fitbounds="locations"),
+                            coloraxis_colorbar=dict(
+                                title=None, len=0.6, thickness=10,
+                                tickfont=dict(size=9, color=_AX_COLOR),
+                            ),
+                            height=320,
+                        )
+                        st.plotly_chart(fig_geo_p, width='stretch',
+                                         config=PUB_EXPORT)
+                    else:
+                        st.caption("_(country names didn't ISO3-resolve)_")
+                else:
+                    st.caption("_(no country data for this product)_")
+
+                # ====== Round 2 addition (added 2026-05-05) ======
+                # Product activity rate: trials started per year for this
+                # product, with a recency lens. Reveals whether the program
+                # is accelerating, plateauing, or winding down.
+                st.markdown(
+                    f"**{_picked_product} — annual trial-start rate** "
+                    "<span style='color:#64748b;font-size:0.78rem;'>"
+                    "(line = trials started that year; dashed = 3-year "
+                    "moving average; recency lens for program momentum)"
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                _act_prod = _prod_trials.copy()
+                _act_prod["StartYear"] = pd.to_numeric(
+                    _act_prod["StartYear"], errors="coerce"
+                )
+                _act_prod = _act_prod.dropna(subset=["StartYear"])
+                _act_prod["StartYear"] = _act_prod["StartYear"].astype(int)
+                if not _act_prod.empty:
+                    _act_yr = (
+                        _act_prod.groupby("StartYear").size()
+                        .reset_index(name="Trials")
+                    )
+                    # Fill missing years with 0 so the line shows quiet years
+                    _all_years = list(range(
+                        int(_act_yr["StartYear"].min()),
+                        int(_act_yr["StartYear"].max()) + 1,
+                    ))
+                    _act_full = pd.DataFrame({"StartYear": _all_years}).merge(
+                        _act_yr, on="StartYear", how="left"
+                    ).fillna({"Trials": 0})
+                    _act_full["MA3"] = (
+                        _act_full["Trials"].rolling(window=3, min_periods=1).mean()
+                    )
+                    fig_act = go.Figure()
+                    fig_act.add_trace(go.Scatter(
+                        x=_act_full["StartYear"], y=_act_full["Trials"],
+                        mode="lines+markers", name="Trials started",
+                        line=dict(color=HEME_COLOR, width=2.4),
+                        marker=dict(size=8, color=HEME_COLOR),
+                        hovertemplate="%{x}: <b>%{y:.0f}</b> trials<extra></extra>",
+                    ))
+                    fig_act.add_trace(go.Scatter(
+                        x=_act_full["StartYear"], y=_act_full["MA3"],
+                        mode="lines", name="3-year moving avg",
+                        line=dict(color=SOLID_COLOR, width=1.8, dash="dash"),
+                        hovertemplate="%{x}: <b>%{y:.1f}</b> (MA3)<extra></extra>",
+                    ))
+                    fig_act.update_layout(
+                        **PUB_BASE,
+                        height=300,
+                        margin=dict(l=44, r=24, t=8, b=40),
+                        xaxis=dict(
+                            title="Year", tickmode="linear", dtick=1,
+                            tickformat="d", showline=True, linewidth=1.2,
+                            linecolor=_AX_COLOR,
+                        ),
+                        yaxis=dict(
+                            title="Trials started",
+                            showline=True, linewidth=1.2,
+                            linecolor=_AX_COLOR, gridcolor=_GRID_CLR,
+                            gridwidth=0.5,
+                        ),
+                        legend=dict(
+                            orientation="h", yanchor="top", y=-0.15,
+                            xanchor="center", x=0.5,
+                            font=dict(size=10, color=_AX_COLOR),
+                            bgcolor="rgba(0,0,0,0)", title=None,
+                        ),
+                    )
+                    st.plotly_chart(fig_act, width='stretch', config=PUB_EXPORT)
+                    # Momentum callout
+                    _last3 = _act_full.tail(3)["Trials"].sum()
+                    _prev3 = _act_full.iloc[-6:-3]["Trials"].sum() if len(_act_full) >= 6 else 0
+                    _trend_emoji = (
+                        "↑" if _last3 > _prev3
+                        else "↓" if _last3 < _prev3
+                        else "→"
+                    )
+                    st.caption(
+                        f"<span style='color:#64748b'>"
+                        f"<strong>Last 3 years:</strong> {int(_last3)} trials. "
+                        f"<strong>Prior 3 years:</strong> {int(_prev3)} trials. "
+                        f"Trend: <strong>{_trend_emoji}</strong>. "
+                        f"Active span: {int(_act_full['StartYear'].iloc[0])}"
+                        f"–{int(_act_full['StartYear'].iloc[-1])} "
+                        f"({len(_act_full)} years)."
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption("_(no start-year data for activity rate)_")
+
     # ===== By-sponsor-type aggregation =====
     with deep_sub_sponsor:
         st.subheader("Landscape by sponsor type")
@@ -4463,6 +5775,1120 @@ with tab_deep:
                 file_name="deep_dive_by_sponsor_type.csv",
                 mime="text/csv",
             )
+
+    # ===== Strategic landscape (NEW 2026-05-05) =====
+    # Cross-cutting analyses that don't fit any single dimension.
+    # All five charts operate on the FULL filtered dataset (df_filt) —
+    # no per-row picker needed; the sidebar filters scope everything.
+    with deep_sub_landscape:
+        st.subheader("Strategic landscape")
+        st.caption(
+            "Five cross-cutting analyses for understanding the field's "
+            "structural dynamics — when each antigen entered the clinic, "
+            "where sponsors compete vs. where niches sit uncontested, how "
+            "fast targets progress, and the well-known heme-vs-solid "
+            "maturity gap. All views auto-update with the sidebar filters."
+        )
+
+        if df_filt.empty:
+            st.info("No trials in the current filter selection.")
+        else:
+            # Hidden labels (platforms / catch-alls) excluded from
+            # antigen-level analyses; same convention as the by-target tab.
+            _antigen_hidden = (
+                set(_PLATFORM_LABELS)
+                | {"Other_or_unknown", "CAR-T_unspecified"}
+            )
+            _df_ant = df_filt[
+                ~df_filt["TargetCategory"].isin(_antigen_hidden)
+                & df_filt["TargetCategory"].notna()
+            ].copy()
+            _df_ant["StartYear"] = pd.to_numeric(
+                _df_ant["StartYear"], errors="coerce"
+            )
+
+            # ---------- 1. Antigen first-in-class timeline ----------
+            st.markdown(
+                "### 1. Antigen first-in-class timeline "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— year of first registered trial per antigen, "
+                "sorted chronologically (visualises the antigen-discovery wave)"
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            _firsts = (
+                _df_ant.dropna(subset=["StartYear"])
+                .groupby("TargetCategory")
+                .agg(FirstYear=("StartYear", "min"),
+                     Trials=("NCTId", "nunique"),
+                     LatestYear=("StartYear", "max"),
+                     DominantBranch=("Branch", lambda s: s.value_counts().index[0] if not s.empty else "Unknown"))
+                .reset_index()
+                .sort_values(["FirstYear", "TargetCategory"])
+            )
+            if not _firsts.empty:
+                _firsts["FirstYear"] = _firsts["FirstYear"].astype(int)
+                _firsts["LatestYear"] = _firsts["LatestYear"].astype(int)
+                _firsts["span"] = _firsts["LatestYear"] - _firsts["FirstYear"]
+
+                fig_first = go.Figure()
+                # Span as a thin line from FirstYear to LatestYear
+                for _br in _firsts["DominantBranch"].unique():
+                    _sub = _firsts[_firsts["DominantBranch"] == _br]
+                    _color = BRANCH_COLORS.get(_br, MIXED_COLOR)
+                    # Lines (span)
+                    for _, _row in _sub.iterrows():
+                        fig_first.add_trace(go.Scatter(
+                            x=[_row["FirstYear"], _row["LatestYear"]],
+                            y=[_row["TargetCategory"], _row["TargetCategory"]],
+                            mode="lines",
+                            line=dict(color=_color, width=2.5),
+                            showlegend=False, hoverinfo="skip",
+                        ))
+                    # Dots (first-trial marker)
+                    fig_first.add_trace(go.Scatter(
+                        x=_sub["FirstYear"], y=_sub["TargetCategory"],
+                        mode="markers",
+                        marker=dict(color=_color, size=12, symbol="circle",
+                                     line=dict(width=1, color="white")),
+                        name=f"{_br} (first trial)",
+                        hovertemplate=(
+                            "<b>%{y}</b><br>"
+                            "First trial: %{x}<br>"
+                            "Branch: " + _br + "<br>"
+                            "<extra></extra>"
+                        ),
+                        legendgroup=_br, showlegend=True,
+                    ))
+                    # Latest-year markers (smaller, ring style)
+                    fig_first.add_trace(go.Scatter(
+                        x=_sub["LatestYear"], y=_sub["TargetCategory"],
+                        mode="markers",
+                        marker=dict(color="white", size=9, symbol="circle",
+                                     line=dict(width=2, color=_color)),
+                        showlegend=False,
+                        hovertemplate=(
+                            "<b>%{y}</b><br>Latest trial: %{x}<extra></extra>"
+                        ),
+                    ))
+
+                fig_first.update_layout(
+                    **PUB_BASE,
+                    height=max(420, len(_firsts) * 22 + 80),
+                    margin=dict(l=120, r=24, t=8, b=40),
+                    xaxis=dict(
+                        title="Year", tickmode="linear", dtick=2,
+                        tickformat="d", showline=True, linewidth=1.2,
+                        linecolor=_AX_COLOR, showgrid=True,
+                        gridcolor=_GRID_CLR, gridwidth=0.5,
+                    ),
+                    yaxis=dict(
+                        showline=True, linewidth=1.2, linecolor=_AX_COLOR,
+                        tickfont=dict(size=9, color=_AX_COLOR),
+                        showgrid=False, autorange="reversed",
+                    ),
+                    legend=dict(
+                        orientation="h", yanchor="top", y=-0.08,
+                        xanchor="center", x=0.5,
+                        font=dict(size=10, color=_AX_COLOR),
+                        title=None, bgcolor="rgba(0,0,0,0)",
+                    ),
+                )
+                st.plotly_chart(fig_first, width='stretch', config=PUB_EXPORT)
+                _topwave = _firsts.head(5)["TargetCategory"].tolist()
+                _recentwave = _firsts.tail(5)["TargetCategory"].tolist()
+                st.caption(
+                    f"<span style='color:#64748b'>"
+                    f"<strong>Earliest entrants:</strong> {', '.join(_topwave)}. "
+                    f"<strong>Most recent entrants:</strong> "
+                    f"{', '.join(_recentwave)}. Filled dot = first trial; "
+                    f"open ring = most-recent trial; line = active span. "
+                    f"Heme-onc in navy, Solid-onc in amber."
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                st.download_button(
+                    "Download first-in-class timeline (CSV)",
+                    _csv_with_provenance(_firsts,
+                                          "Antigen first-in-class timeline",
+                                          include_filters=True),
+                    "deep_dive_first_in_class_timeline.csv", "text/csv",
+                )
+            else:
+                st.info("Insufficient data for first-in-class timeline.")
+
+            # ---------- 2. Sponsor competition matrix ----------
+            st.markdown("---")
+            st.markdown(
+                "### 2. Sponsor competition matrix "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— top antigens × top disease categories, cell value = "
+                "# distinct lead sponsors. Reveals contested vs. uncontested niches."
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            _comp = _df_ant.dropna(subset=["DiseaseCategory", "LeadSponsor"]).copy()
+            if not _comp.empty:
+                _top_targets = (
+                    _comp["TargetCategory"].value_counts().head(15).index.tolist()
+                )
+                _top_cats = (
+                    _comp["DiseaseCategory"].value_counts().head(12).index.tolist()
+                )
+                _comp_top = _comp[
+                    _comp["TargetCategory"].isin(_top_targets)
+                    & _comp["DiseaseCategory"].isin(_top_cats)
+                ]
+                _comp_pivot = (
+                    _comp_top.groupby(["DiseaseCategory", "TargetCategory"])
+                    .agg(NSponsors=("LeadSponsor", "nunique"))
+                    .reset_index()
+                    .pivot(index="DiseaseCategory", columns="TargetCategory",
+                           values="NSponsors")
+                    .reindex(index=_top_cats, columns=_top_targets)
+                    .fillna(0)
+                )
+                fig_comp = go.Figure(data=go.Heatmap(
+                    z=_comp_pivot.values,
+                    x=_comp_pivot.columns.tolist(),
+                    y=_comp_pivot.index.tolist(),
+                    text=_comp_pivot.astype(int).values,
+                    texttemplate="%{text}",
+                    textfont=dict(size=10),
+                    colorscale=[
+                        [0.0, "#ffffff"], [0.05, "#dbeafe"],
+                        [0.3, "#93c5fd"], [0.6, "#1d4ed8"],
+                        [1.0, "#0b3d91"],
+                    ],
+                    hovertemplate=(
+                        "<b>%{y} × %{x}</b><br>"
+                        "Distinct lead sponsors: %{z}<extra></extra>"
+                    ),
+                    colorbar=dict(
+                        title="# sponsors", thickness=10, len=0.6,
+                        tickfont=dict(size=9, color=_AX_COLOR),
+                    ),
+                ))
+                fig_comp.update_layout(
+                    **PUB_BASE,
+                    height=max(360, len(_top_cats) * 28 + 80),
+                    margin=dict(l=170, r=24, t=8, b=110),
+                    xaxis=dict(side="bottom", tickangle=-40,
+                               tickfont=dict(size=10, color=_AX_COLOR)),
+                    yaxis=dict(autorange="reversed",
+                               tickfont=dict(size=10, color=_AX_COLOR)),
+                )
+                st.plotly_chart(fig_comp, width='stretch', config=PUB_EXPORT)
+                # Stat callout — most-crowded vs uncontested cells
+                _flat = _comp_pivot.stack().reset_index()
+                _flat.columns = ["DiseaseCategory", "TargetCategory", "NSponsors"]
+                _flat = _flat[_flat["NSponsors"] > 0]
+                if not _flat.empty:
+                    _crowded = _flat.nlargest(3, "NSponsors")
+                    _uncontested = _flat[_flat["NSponsors"] == 1]
+                    _crowded_str = ", ".join(
+                        f"{r.DiseaseCategory} × {r.TargetCategory} ({int(r.NSponsors)})"
+                        for r in _crowded.itertuples()
+                    )
+                    st.caption(
+                        f"<span style='color:#64748b'>"
+                        f"<strong>Most crowded cells:</strong> {_crowded_str}. "
+                        f"<strong>Single-sponsor (uncontested) cells:</strong> "
+                        f"{len(_uncontested)} of {len(_flat)} active "
+                        f"(target × disease) pairs."
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                st.download_button(
+                    "Download sponsor competition matrix (CSV)",
+                    _csv_with_provenance(
+                        _comp_pivot.reset_index(),
+                        "Sponsor competition matrix",
+                        include_filters=True,
+                    ),
+                    "deep_dive_sponsor_competition_matrix.csv", "text/csv",
+                )
+            else:
+                st.info("Insufficient data for sponsor competition matrix.")
+
+            # ---------- 3. Phase progression velocity ----------
+            st.markdown("---")
+            st.markdown(
+                "### 3. Phase progression velocity "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— for each antigen with ≥3 trials, distribution of years "
+                "between first Ph1 trial and first Ph3 trial. Shorter spans = "
+                "faster pivotal-stage progression."
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            # For each antigen, find first Ph1 year and first Ph3 (or II/III) year
+            _ph_velo = []
+            for _ant, _grp in _df_ant.dropna(subset=["StartYear"]).groupby("TargetCategory"):
+                if len(_grp) < 3:
+                    continue
+                _ph1_yrs = _grp[_grp["PhaseOrdered"].astype(str) == "Phase 1"]["StartYear"]
+                _ph3_yrs = _grp[
+                    _grp["PhaseOrdered"].astype(str).isin(["Phase 3", "Phase 2/3"])
+                ]["StartYear"]
+                if not _ph1_yrs.empty and not _ph3_yrs.empty:
+                    _ph_velo.append({
+                        "TargetCategory": _ant,
+                        "FirstPh1": int(_ph1_yrs.min()),
+                        "FirstLate": int(_ph3_yrs.min()),
+                        "VelocityYears": int(_ph3_yrs.min() - _ph1_yrs.min()),
+                        "TotalTrials": len(_grp),
+                    })
+            _velo_df = pd.DataFrame(_ph_velo).sort_values("VelocityYears")
+            if not _velo_df.empty:
+                fig_velo = px.bar(
+                    _velo_df, x="VelocityYears", y="TargetCategory",
+                    orientation="h", template="plotly_white",
+                    color="VelocityYears",
+                    color_continuous_scale=[
+                        [0, "#0b3d91"], [0.5, "#5aafd6"], [1, "#fb923c"],
+                    ],
+                    height=max(240, len(_velo_df) * 28 + 80),
+                    text="VelocityYears",
+                    hover_data={"FirstPh1": True, "FirstLate": True,
+                                 "TotalTrials": True, "VelocityYears": False},
+                )
+                fig_velo.update_traces(
+                    marker_line_width=0, opacity=0.92,
+                    textposition="outside",
+                    textfont=dict(size=10, color=_AX_COLOR),
+                )
+                fig_velo.update_layout(
+                    **PUB_BASE,
+                    margin=dict(l=120, r=60, t=8, b=40),
+                    xaxis_title="Years from first Ph1 to first Ph3 (or Ph2/3) trial",
+                    yaxis_title=None,
+                    coloraxis_showscale=False,
+                )
+                st.plotly_chart(fig_velo, width='stretch', config=PUB_EXPORT)
+                st.caption(
+                    f"<span style='color:#64748b'>"
+                    f"<strong>Fastest:</strong> {_velo_df.iloc[0]['TargetCategory']} "
+                    f"({int(_velo_df.iloc[0]['VelocityYears'])} y). "
+                    f"<strong>Slowest:</strong> "
+                    f"{_velo_df.iloc[-1]['TargetCategory']} "
+                    f"({int(_velo_df.iloc[-1]['VelocityYears'])} y). "
+                    f"Antigens with no Ph3 trials yet are absent from this chart."
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                st.download_button(
+                    "Download phase-progression velocity (CSV)",
+                    _csv_with_provenance(_velo_df,
+                                          "Phase progression velocity",
+                                          include_filters=True),
+                    "deep_dive_phase_velocity.csv", "text/csv",
+                )
+            else:
+                st.info(
+                    "No antigens have both a Ph1 AND a Ph3 trial in the "
+                    "current filter — try widening filters."
+                )
+
+            # ---------- 4. Sponsor concentration (top-3 share) ----------
+            st.markdown("---")
+            st.markdown(
+                "### 4. Sponsor concentration — top-3-sponsor share "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— for each antigen, % of trials run by its top-3 lead sponsors. "
+                "High % = consolidated; low % = fragmented competitive landscape."
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            _conc = []
+            for _ant, _grp in _df_ant.dropna(subset=["LeadSponsor"]).groupby("TargetCategory"):
+                _spon_counts = _grp["LeadSponsor"].value_counts()
+                if _spon_counts.sum() < 3:
+                    continue
+                _top3 = _spon_counts.head(3).sum()
+                _total = _spon_counts.sum()
+                _conc.append({
+                    "TargetCategory": _ant,
+                    "Top3Share": round(100 * _top3 / _total, 1),
+                    "TotalTrials": int(_total),
+                    "DistinctSponsors": int(_spon_counts.shape[0]),
+                    "TopSponsor": _spon_counts.index[0],
+                    "TopSponsorTrials": int(_spon_counts.iloc[0]),
+                })
+            _conc_df = pd.DataFrame(_conc)
+            # Only show antigens with ≥5 trials so % is meaningful
+            _conc_df = _conc_df[_conc_df["TotalTrials"] >= 5]
+            _conc_df = _conc_df.sort_values("Top3Share", ascending=True)
+            if not _conc_df.empty:
+                # Color by interpretation: high = monopoly (warm), low = fragmented (cool)
+                fig_conc = px.bar(
+                    _conc_df, x="Top3Share", y="TargetCategory",
+                    orientation="h", template="plotly_white",
+                    color="Top3Share",
+                    color_continuous_scale=[
+                        [0, "#0b3d91"], [0.6, "#dbeafe"], [1, "#7c2d12"],
+                    ],
+                    range_color=[0, 100],
+                    height=max(280, len(_conc_df) * 28 + 80),
+                    text=_conc_df["Top3Share"].apply(lambda v: f"{v:.0f}%"),
+                    hover_data={
+                        "TotalTrials": True, "DistinctSponsors": True,
+                        "TopSponsor": True, "TopSponsorTrials": True,
+                        "Top3Share": False,
+                    },
+                )
+                fig_conc.update_traces(
+                    marker_line_width=0, opacity=0.92,
+                    textposition="outside",
+                    textfont=dict(size=10, color=_AX_COLOR),
+                )
+                fig_conc.update_layout(
+                    **PUB_BASE,
+                    margin=dict(l=120, r=60, t=8, b=40),
+                    xaxis_title="% of trials run by top-3 sponsors",
+                    yaxis_title=None,
+                    coloraxis_colorbar=dict(
+                        title="% top-3", thickness=10, len=0.6,
+                        tickfont=dict(size=9, color=_AX_COLOR),
+                    ),
+                    xaxis=dict(range=[0, 105]),
+                )
+                st.plotly_chart(fig_conc, width='stretch', config=PUB_EXPORT)
+                _frag = _conc_df.head(3)
+                _consol = _conc_df.tail(3).iloc[::-1]
+                _frag_str = ", ".join(
+                    f"{r.TargetCategory} ({r.Top3Share:.0f}%, "
+                    f"{r.DistinctSponsors} sponsors)"
+                    for r in _frag.itertuples()
+                )
+                _consol_str = ", ".join(
+                    f"{r.TargetCategory} ({r.Top3Share:.0f}%, "
+                    f"top: {r.TopSponsor} {r.TopSponsorTrials}/{r.TotalTrials})"
+                    for r in _consol.itertuples()
+                )
+                st.caption(
+                    f"<span style='color:#64748b'>"
+                    f"<strong>Most fragmented:</strong> {_frag_str}. "
+                    f"<strong>Most consolidated:</strong> {_consol_str}. "
+                    f"Antigens with &lt;5 trials excluded so the % is meaningful."
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                st.download_button(
+                    "Download sponsor concentration (CSV)",
+                    _csv_with_provenance(_conc_df,
+                                          "Sponsor concentration (top-3 share)",
+                                          include_filters=True),
+                    "deep_dive_sponsor_concentration.csv", "text/csv",
+                )
+            else:
+                st.info("Insufficient data for sponsor concentration analysis.")
+
+            # ---------- 5. Heme vs solid maturity gap ----------
+            st.markdown("---")
+            st.markdown(
+                "### 5. Heme vs solid maturity gap "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— % of trials in each phase by branch. The signature "
+                "\"solid trails heme by years\" finding."
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            _maturity = (
+                df_filt[df_filt["Branch"].isin(["Heme-onc", "Solid-onc"])]
+                .groupby(["Branch", "PhaseOrdered"], observed=False).size()
+                .reset_index(name="Trials")
+            )
+            _maturity["Phase"] = _maturity["PhaseOrdered"].astype(str).map(PHASE_LABELS)
+            _maturity = _maturity[_maturity["Trials"] > 0]
+            if not _maturity.empty:
+                # Compute pct within branch
+                _maturity["Pct"] = (
+                    _maturity["Trials"]
+                    / _maturity.groupby("Branch")["Trials"].transform("sum")
+                    * 100
+                )
+                _maturity["Phase"] = pd.Categorical(
+                    _maturity["Phase"],
+                    categories=[PHASE_LABELS[p] for p in PHASE_ORDER],
+                    ordered=True,
+                )
+                _maturity = _maturity.sort_values("Phase")
+                fig_mat_branch = px.bar(
+                    _maturity, x="Phase", y="Pct", color="Branch",
+                    color_discrete_map=BRANCH_COLORS, barmode="group",
+                    template="plotly_white", height=380,
+                    text=_maturity["Pct"].apply(lambda v: f"{v:.0f}%"),
+                    hover_data={"Trials": True, "Pct": ":.1f"},
+                )
+                fig_mat_branch.update_traces(
+                    marker_line_width=0, opacity=0.92,
+                    textposition="outside",
+                    textfont=dict(size=10, color=_AX_COLOR),
+                )
+                fig_mat_branch.update_layout(
+                    **PUB_BASE,
+                    margin=dict(l=60, r=24, t=8, b=80),
+                    xaxis_title=None,
+                    yaxis_title="% of branch's trials",
+                    legend=dict(
+                        orientation="h", yanchor="top", y=-0.18,
+                        xanchor="center", x=0.5,
+                        font=dict(size=11, color=_AX_COLOR),
+                        title=None, bgcolor="rgba(0,0,0,0)",
+                    ),
+                )
+                st.plotly_chart(fig_mat_branch, width='stretch', config=PUB_EXPORT)
+                # Compute heme late-phase share vs solid late-phase share
+                _late_phases = ["Phase II", "Phase II/III", "Phase III"]
+                _heme_late = _maturity[
+                    (_maturity["Branch"] == "Heme-onc")
+                    & (_maturity["Phase"].astype(str).isin(_late_phases))
+                ]["Pct"].sum()
+                _solid_late = _maturity[
+                    (_maturity["Branch"] == "Solid-onc")
+                    & (_maturity["Phase"].astype(str).isin(_late_phases))
+                ]["Pct"].sum()
+                st.caption(
+                    f"<span style='color:#64748b'>"
+                    f"<strong>Heme late-phase share (Ph II+):</strong> "
+                    f"{_heme_late:.0f}%. "
+                    f"<strong>Solid late-phase share:</strong> {_solid_late:.0f}%. "
+                    f"Gap: {_heme_late - _solid_late:.0f} percentage points — "
+                    f"reflects the well-documented heme-leads-solid CAR-T "
+                    f"maturity offset."
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                st.download_button(
+                    "Download maturity-gap data (CSV)",
+                    _csv_with_provenance(_maturity,
+                                          "Heme vs solid maturity gap",
+                                          include_filters=True),
+                    "deep_dive_maturity_gap.csv", "text/csv",
+                )
+            else:
+                st.info("Insufficient data for maturity-gap analysis.")
+
+            # ====== Round 2 strategic-landscape additions (added 2026-05-05) ======
+
+            # ---------- 6. White-space matrix ----------
+            # The INVERSE of the sponsor competition matrix — which
+            # (target × disease) cells have ZERO active trials? Pure
+            # opportunity-detection chart for clinical-development
+            # strategy. Restricted to plausible (target, disease)
+            # combinations only — i.e. cells where BOTH the target
+            # has ≥3 trials in the dataset AND the disease has ≥3
+            # CAR-T trials (excludes silly cells like CD7 × Breast).
+            st.markdown("---")
+            st.markdown(
+                "### 6. White-space — antigen × disease cells with ZERO trials "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— restricted to plausible (target, disease) pairs (both with "
+                "≥3 trials elsewhere). Inverse of the competition matrix."
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            if not _comp.empty:
+                # Reuse _top_targets and _top_cats from competition matrix
+                _ws_pivot = (
+                    _comp[
+                        _comp["TargetCategory"].isin(_top_targets)
+                        & _comp["DiseaseCategory"].isin(_top_cats)
+                    ]
+                    .groupby(["DiseaseCategory", "TargetCategory"])
+                    .agg(NTrials=("NCTId", "nunique"))
+                    .reset_index()
+                    .pivot(index="DiseaseCategory",
+                           columns="TargetCategory",
+                           values="NTrials")
+                    .reindex(index=_top_cats, columns=_top_targets)
+                    .fillna(0)
+                )
+                # Mark cells: 0 trials = white space, >0 = covered
+                _ws_marker = _ws_pivot.applymap(lambda v: "—" if v == 0 else "")
+                fig_ws_strat = go.Figure(data=go.Heatmap(
+                    z=_ws_pivot.applymap(lambda v: 0 if v == 0 else 1).values,
+                    x=_ws_pivot.columns.tolist(),
+                    y=_ws_pivot.index.tolist(),
+                    text=_ws_marker.values,
+                    texttemplate="%{text}",
+                    textfont=dict(size=14, color="#0b3d91"),
+                    colorscale=[[0.0, "#fef3c7"], [1.0, "#f1f5f9"]],
+                    showscale=False,
+                    hovertemplate=(
+                        "<b>%{y} × %{x}</b><br>"
+                        "Trials: %{z}<extra></extra>"
+                    ),
+                ))
+                fig_ws_strat.update_layout(
+                    **PUB_BASE,
+                    height=max(360, len(_top_cats) * 28 + 80),
+                    margin=dict(l=170, r=24, t=8, b=110),
+                    xaxis=dict(side="bottom", tickangle=-40,
+                               tickfont=dict(size=10, color=_AX_COLOR)),
+                    yaxis=dict(autorange="reversed",
+                               tickfont=dict(size=10, color=_AX_COLOR)),
+                )
+                st.plotly_chart(fig_ws_strat, width='stretch', config=PUB_EXPORT)
+                _ws_count = int((_ws_pivot == 0).sum().sum())
+                _total_cells = _ws_pivot.size
+                st.caption(
+                    f"<span style='color:#64748b'>"
+                    f"<strong>{_ws_count} of {_total_cells} cells</strong> "
+                    f"({100 * _ws_count / max(1, _total_cells):.0f}%) are "
+                    f"white space — no CAR-T trials yet. Cells marked with "
+                    f"<strong>—</strong>; covered cells are blank. "
+                    f"For each white-space cell, ask: is the biology "
+                    f"plausible? has anyone tried? what's blocking it?"
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                _ws_csv = _ws_pivot.reset_index().melt(
+                    id_vars="DiseaseCategory", var_name="TargetCategory",
+                    value_name="Trials",
+                )
+                _ws_csv["IsWhiteSpace"] = (_ws_csv["Trials"] == 0)
+                st.download_button(
+                    "Download white-space matrix (CSV)",
+                    _csv_with_provenance(_ws_csv,
+                                          "White-space matrix",
+                                          include_filters=True),
+                    "deep_dive_white_space_matrix.csv", "text/csv",
+                )
+            else:
+                st.info("Insufficient data for white-space analysis.")
+
+            # ---------- 7. Target momentum (recent vs prior 24mo) ----------
+            # Per-antigen: trials registered in last 24 months vs prior 24
+            # months. Identifies HOT antigens (recent surge) vs COOLING
+            # ones (recent decline). Driven by snapshot-fixed cutoff to
+            # keep the analysis reproducible.
+            st.markdown("---")
+            st.markdown(
+                "### 7. Target momentum — last 24 months vs prior 24 months "
+                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
+                "— per antigen, recent trial-start velocity. Top = "
+                "fastest accelerating; bottom = fastest cooling."
+                "</span>",
+                unsafe_allow_html=True,
+            )
+            try:
+                _now_year = pd.Timestamp.now().year
+            except Exception:
+                _now_year = 2026
+            _recent_lo = _now_year - 2
+            _prior_lo = _now_year - 4
+            _mom_df = _df_ant.dropna(subset=["StartYear"]).copy()
+            _mom_df["StartYear"] = _mom_df["StartYear"].astype(int)
+            _mom_recent = (
+                _mom_df[_mom_df["StartYear"] >= _recent_lo]
+                .groupby("TargetCategory").size()
+                .reset_index(name="Recent24mo")
+            )
+            _mom_prior = (
+                _mom_df[
+                    (_mom_df["StartYear"] >= _prior_lo)
+                    & (_mom_df["StartYear"] < _recent_lo)
+                ]
+                .groupby("TargetCategory").size()
+                .reset_index(name="Prior24mo")
+            )
+            _mom = pd.merge(
+                _mom_recent, _mom_prior,
+                on="TargetCategory", how="outer",
+            ).fillna(0)
+            _mom["Recent24mo"] = _mom["Recent24mo"].astype(int)
+            _mom["Prior24mo"] = _mom["Prior24mo"].astype(int)
+            _mom["Delta"] = _mom["Recent24mo"] - _mom["Prior24mo"]
+            # Restrict to antigens with ≥3 total trials in 4-year window
+            _mom = _mom[(_mom["Recent24mo"] + _mom["Prior24mo"]) >= 3]
+            _mom = _mom.sort_values("Delta", ascending=False)
+            if not _mom.empty:
+                # Top 10 fastest accelerating + bottom 10 fastest cooling
+                _mom_top = pd.concat([_mom.head(10), _mom.tail(10)]).drop_duplicates()
+                _mom_top = _mom_top.sort_values("Delta", ascending=True)
+                fig_mom = go.Figure()
+                fig_mom.add_trace(go.Bar(
+                    x=_mom_top["Delta"],
+                    y=_mom_top["TargetCategory"],
+                    orientation="h",
+                    marker=dict(
+                        color=_mom_top["Delta"],
+                        colorscale=[
+                            [0, "#7c2d12"], [0.5, "#f4f4f5"], [1, "#0b3d91"],
+                        ],
+                        cmid=0,
+                        colorbar=dict(
+                            title="Δ trials", thickness=10, len=0.6,
+                            tickfont=dict(size=9, color=_AX_COLOR),
+                        ),
+                        line=dict(width=0),
+                    ),
+                    text=_mom_top["Delta"].apply(
+                        lambda v: f"+{int(v)}" if v > 0
+                        else (f"{int(v)}" if v < 0 else "0")
+                    ),
+                    textposition="outside",
+                    textfont=dict(size=10, color=_AX_COLOR),
+                    customdata=_mom_top[["Recent24mo", "Prior24mo"]].values,
+                    hovertemplate=(
+                        "<b>%{y}</b><br>"
+                        "Last 24mo: %{customdata[0]} trials<br>"
+                        "Prior 24mo: %{customdata[1]} trials<br>"
+                        "Δ: %{x}<extra></extra>"
+                    ),
+                ))
+                fig_mom.update_layout(
+                    **PUB_BASE,
+                    height=max(360, len(_mom_top) * 28 + 80),
+                    margin=dict(l=130, r=80, t=8, b=40),
+                    xaxis_title=f"Δ trials ({_recent_lo}-{_now_year} vs "
+                                 f"{_prior_lo}-{_recent_lo - 1})",
+                    yaxis_title=None,
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_mom, width='stretch', config=PUB_EXPORT)
+                _hot = _mom.head(3)
+                _cool = _mom.tail(3).iloc[::-1]
+                _hot_str = ", ".join(
+                    f"{r.TargetCategory} (+{int(r.Delta)})"
+                    for r in _hot.itertuples()
+                )
+                _cool_str = ", ".join(
+                    f"{r.TargetCategory} ({int(r.Delta)})"
+                    for r in _cool.itertuples() if r.Delta < 0
+                ) or "_(none cooling significantly)_"
+                st.caption(
+                    f"<span style='color:#64748b'>"
+                    f"<strong>Hottest (most accelerating):</strong> {_hot_str}. "
+                    f"<strong>Coolest:</strong> {_cool_str}. "
+                    f"Antigens with &lt;3 trials in the 4-year window excluded."
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                st.download_button(
+                    "Download target momentum (CSV)",
+                    _csv_with_provenance(_mom,
+                                          "Target momentum (24mo windows)",
+                                          include_filters=True),
+                    "deep_dive_target_momentum.csv", "text/csv",
+                )
+            else:
+                st.info(
+                    "Insufficient data for target-momentum analysis."
+                )
+
+
+# ---------------------------------------------------------------------------
+# TAB: Insights  (NEW 2026-05-05 — strategic decision-support)
+# ---------------------------------------------------------------------------
+# Three actionable analytical views that don't fit cleanly into any
+# other tab:
+#   1. Pivotal candidates → trials likely to support an upcoming approval
+#      (Industry-sponsored, Ph2/3, currently recruiting / active, n ≥30)
+#   2. First-in-disease trials → (target × disease) combinations appearing
+#      for the first time in the dataset (pioneer flag)
+#   3. Acquisition signals → small sponsors with one breakthrough or
+#      orphan-designated trial — historically these are M&A targets
+
+with tab_insights:
+    st.markdown(
+        '<p class="small-note">Three actionable strategic views — '
+        '<strong>Pivotal candidates</strong> (likely upcoming approvals), '
+        '<strong>First-in-disease</strong> (newly-emerging target × indication '
+        'combinations), and <strong>Acquisition signals</strong> (small '
+        'sponsors with one breakthrough trial — historical M&A pattern). '
+        'All three respect the sidebar filters; click any row in any table '
+        'to open the full trial drilldown.</p>',
+        unsafe_allow_html=True,
+    )
+
+    if df_filt.empty:
+        st.info("No trials in the current filter selection.")
+    else:
+        ins_tab_pivotal, ins_tab_first, ins_tab_acq = st.tabs(
+            ["Pivotal candidates", "First-in-disease", "Acquisition signals"]
+        )
+
+        # ============================================================
+        # 1. PIVOTAL CANDIDATES
+        # ============================================================
+        with ins_tab_pivotal:
+            st.subheader("Pivotal candidates")
+            st.markdown(
+                '<p class="small-note">Industry-sponsored Phase 2/3 trials '
+                'with status RECRUITING / ACTIVE_NOT_RECRUITING and a '
+                'planned enrollment ≥30. These are the trials most likely '
+                'to support an FDA / EMA / NMPA approval filing in the '
+                'next 1-3 years. Sorted by max-phase-reached × '
+                'enrollment.</p>',
+                unsafe_allow_html=True,
+            )
+
+            _piv_filters = (
+                df_filt["SponsorType"].isin(["Industry"])
+                & df_filt["PhaseOrdered"].astype(str).isin(["Phase 2", "Phase 3", "Phase 2/3"])
+                & df_filt["OverallStatus"].isin(["RECRUITING", "ACTIVE_NOT_RECRUITING"])
+            )
+            _piv = df_filt[_piv_filters].copy()
+            _piv["EnrollmentCount"] = pd.to_numeric(
+                _piv["EnrollmentCount"], errors="coerce"
+            )
+            _piv = _piv[_piv["EnrollmentCount"].fillna(0) >= 30]
+
+            if _piv.empty:
+                st.info(
+                    "No pivotal candidates in the current filter — try "
+                    "broadening the Sponsor / Phase / Status filters."
+                )
+            else:
+                _piv["Phase"] = _piv["PhaseLabel"].fillna(_piv["Phase"])
+                _piv["OverallStatus"] = _piv["OverallStatus"].map(
+                    STATUS_DISPLAY).fillna(_piv["OverallStatus"])
+                _piv["NCTLink"] = _piv["NCTId"].apply(
+                    lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
+                )
+                _piv = _piv.sort_values(
+                    ["PhaseOrdered", "EnrollmentCount"],
+                    ascending=[False, False],
+                ).reset_index(drop=True)
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Pivotal candidates", f"{len(_piv):,}")
+                m2.metric(
+                    "Distinct sponsors",
+                    f"{_piv['LeadSponsor'].nunique():,}",
+                )
+                m3.metric(
+                    "Distinct antigens",
+                    f"{_piv['TargetCategory'].nunique():,}",
+                )
+                _med_enroll = (
+                    int(_piv["EnrollmentCount"].median())
+                    if _piv["EnrollmentCount"].notna().any() else 0
+                )
+                m4.metric("Median enrollment", f"{_med_enroll:,}")
+
+                # Distribution of pivotal candidates by target
+                st.markdown("**Pivotal candidates by antigen target**")
+                _piv_by_tgt = (
+                    _piv.groupby("TargetCategory").size()
+                    .reset_index(name="Trials")
+                    .sort_values("Trials", ascending=True)
+                    .tail(15)
+                )
+                if not _piv_by_tgt.empty:
+                    fig_piv = px.bar(
+                        _piv_by_tgt, x="Trials", y="TargetCategory",
+                        orientation="h", template="plotly_white",
+                        color_discrete_sequence=[HEME_COLOR],
+                        height=max(280, len(_piv_by_tgt) * 26 + 60),
+                        text="Trials",
+                    )
+                    fig_piv.update_traces(
+                        marker_line_width=0, opacity=0.92,
+                        textposition="outside",
+                        textfont=dict(size=10, color=_AX_COLOR),
+                    )
+                    fig_piv.update_layout(
+                        **PUB_BASE,
+                        margin=dict(l=140, r=44, t=8, b=24),
+                        xaxis_title="Number of pivotal trials",
+                        yaxis_title=None, showlegend=False,
+                    )
+                    st.plotly_chart(fig_piv, width='stretch')
+
+                # Trial table
+                st.markdown(
+                    "**Pivotal-candidate trials** "
+                    "<span style='color:#64748b; font-weight:400;'>"
+                    "(click any row for full trial details)</span>",
+                    unsafe_allow_html=True,
+                )
+                _piv_cols = [c for c in [
+                    "NCTId", "NCTLink", "BriefTitle", "Branch",
+                    "DiseaseCategory", "DiseaseEntity", "TargetCategory",
+                    "ProductName", "Phase", "OverallStatus",
+                    "EnrollmentCount", "StartYear", "Countries", "LeadSponsor",
+                ] if c in _piv.columns]
+                _piv, _piv_cols = _attach_flag_column(_piv, _piv_cols)
+                _piv_event = st.dataframe(
+                    _piv[_piv_cols],
+                    width='stretch', height=420, hide_index=True,
+                    on_select="rerun", selection_mode="single-row",
+                    key="insights_pivotal_table",
+                    column_config=_trial_detail_cols(),
+                )
+                _piv_rows = (
+                    _piv_event.selection.rows
+                    if _piv_event and hasattr(_piv_event, "selection") else []
+                )
+                if _piv_rows:
+                    _render_trial_drilldown(
+                        _piv.iloc[_piv_rows[0]],
+                        key_suffix="insights_pivotal",
+                    )
+                st.download_button(
+                    "Download pivotal candidates (CSV)",
+                    _csv_with_provenance(_piv,
+                                          "Insights — Pivotal candidates",
+                                          include_filters=True),
+                    "insights_pivotal_candidates.csv", "text/csv",
+                )
+
+        # ============================================================
+        # 2. FIRST-IN-DISEASE
+        # ============================================================
+        with ins_tab_first:
+            st.subheader("First-in-disease trials")
+            st.markdown(
+                '<p class="small-note">For each (TargetCategory × '
+                'DiseaseEntity) pair, we identify the EARLIEST trial — '
+                'the pioneer that opened that combination. Useful for '
+                'tracking who broke ground in each niche, and for '
+                'identifying recently-pioneered combinations that may '
+                'spawn follow-on trials.</p>',
+                unsafe_allow_html=True,
+            )
+
+            _fi_df = df_filt[
+                ~df_filt["TargetCategory"].isin(_PLATFORM_LABELS)
+                & df_filt["TargetCategory"].notna()
+                & ~df_filt["TargetCategory"].isin(["Other_or_unknown", "CAR-T_unspecified"])
+                & df_filt["DiseaseEntity"].notna()
+            ].copy()
+            _fi_df["StartYear"] = pd.to_numeric(_fi_df["StartYear"], errors="coerce")
+            _fi_df = _fi_df.dropna(subset=["StartYear"])
+
+            if _fi_df.empty:
+                st.info("No trials with both target + entity + start-year data.")
+            else:
+                _fi_df["StartYear"] = _fi_df["StartYear"].astype(int)
+                # First trial per (target, entity) pair
+                _firsts_pair = (
+                    _fi_df.sort_values("StartYear")
+                    .groupby(["TargetCategory", "DiseaseEntity"], as_index=False)
+                    .first()
+                )
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("First-in-disease pairs", f"{len(_firsts_pair):,}")
+                _recent_pairs = _firsts_pair[_firsts_pair["StartYear"] >= 2024]
+                m2.metric("Pioneered 2024+", f"{len(_recent_pairs):,}",
+                          help="Recent pioneering combinations")
+                m3.metric(
+                    "Earliest pair year",
+                    f"{int(_firsts_pair['StartYear'].min())}",
+                )
+
+                # Histogram of pioneering year
+                st.markdown(
+                    "**When were these (target × disease) pairs pioneered?** "
+                    "<span style='color:#64748b;font-size:0.78rem;'>"
+                    "(year of first trial per pair — reveals waves of "
+                    "innovation)"
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+                _fi_yr = (
+                    _firsts_pair.groupby("StartYear").size()
+                    .reset_index(name="NewPairs")
+                )
+                if not _fi_yr.empty:
+                    fig_fi = px.bar(
+                        _fi_yr, x="StartYear", y="NewPairs",
+                        template="plotly_white", height=300,
+                        color_discrete_sequence=[HEME_COLOR],
+                        text="NewPairs",
+                    )
+                    fig_fi.update_traces(
+                        marker_line_width=0, opacity=0.92,
+                        textposition="outside",
+                        textfont=dict(size=10, color=_AX_COLOR),
+                    )
+                    fig_fi.update_layout(
+                        **PUB_BASE,
+                        margin=dict(l=44, r=24, t=8, b=40),
+                        xaxis_title=None,
+                        yaxis_title="New (target × disease) pairs",
+                        showlegend=False,
+                    )
+                    fig_fi.update_xaxes(
+                        tickmode="linear", dtick=1, tickformat="d",
+                    )
+                    st.plotly_chart(fig_fi, width='stretch')
+
+                st.markdown(
+                    "**Recent first-in-disease trials** "
+                    "<span style='color:#64748b; font-weight:400;'>"
+                    "(2023+; click any row for full details)</span>",
+                    unsafe_allow_html=True,
+                )
+                _fi_recent = _firsts_pair[
+                    _firsts_pair["StartYear"] >= 2023
+                ].copy().sort_values(["StartYear", "TargetCategory"], ascending=[False, True])
+                _fi_recent["NCTLink"] = _fi_recent["NCTId"].apply(
+                    lambda x: f"https://clinicaltrials.gov/study/{x}" if pd.notna(x) else None
+                )
+                _fi_recent["Phase"] = _fi_recent["PhaseLabel"].fillna(_fi_recent["Phase"])
+                _fi_recent_cols = [c for c in [
+                    "NCTId", "NCTLink", "BriefTitle", "TargetCategory",
+                    "DiseaseEntity", "DiseaseCategory", "Branch",
+                    "Phase", "OverallStatus", "StartYear", "LeadSponsor",
+                ] if c in _fi_recent.columns]
+                _fi_recent, _fi_recent_cols = _attach_flag_column(
+                    _fi_recent, _fi_recent_cols
+                )
+                _fi_event = st.dataframe(
+                    _fi_recent[_fi_recent_cols],
+                    width='stretch', height=380, hide_index=True,
+                    on_select="rerun", selection_mode="single-row",
+                    key="insights_first_table",
+                    column_config=_trial_detail_cols(),
+                )
+                _fi_rows = (
+                    _fi_event.selection.rows
+                    if _fi_event and hasattr(_fi_event, "selection") else []
+                )
+                if _fi_rows:
+                    _render_trial_drilldown(
+                        _fi_recent.iloc[_fi_rows[0]],
+                        key_suffix="insights_first",
+                    )
+                st.download_button(
+                    "Download first-in-disease (CSV)",
+                    _csv_with_provenance(_firsts_pair,
+                                          "Insights — First-in-disease",
+                                          include_filters=True),
+                    "insights_first_in_disease.csv", "text/csv",
+                )
+
+        # ============================================================
+        # 3. ACQUISITION SIGNALS
+        # ============================================================
+        with ins_tab_acq:
+            st.subheader("Acquisition signals")
+            st.markdown(
+                '<p class="small-note">Sponsors with a SMALL portfolio '
+                '(1-3 CAR-T trials in the dataset) but at least one trial '
+                'in <strong>Phase 2/3</strong> AND with status RECRUITING '
+                'or ACTIVE_NOT_RECRUITING. Historical pattern: these '
+                'sponsors are M&A candidates (e.g., Arcellx → Gilead Feb '
+                '2026 for $7.8B; Allogene PG candidates). Big pharma '
+                'often acquires when one breakthrough trial proves out a '
+                'novel construct.</p>',
+                unsafe_allow_html=True,
+            )
+
+            _acq_base = df_filt[
+                df_filt["SponsorType"].isin(["Industry"])
+                & df_filt["LeadSponsor"].notna()
+            ].copy()
+            if _acq_base.empty:
+                st.info("No industry-sponsored trials in current filter.")
+            else:
+                _spon_portfolio = (
+                    _acq_base.groupby("LeadSponsor")
+                    .agg(Trials=("NCTId", "nunique"),
+                         MaxPhase=("PhaseOrdered", "max"),
+                         AnyRecruiting=(
+                             "OverallStatus",
+                             lambda s: any(
+                                 str(x) in ("RECRUITING", "ACTIVE_NOT_RECRUITING")
+                                 for x in s
+                             ),
+                         ),
+                         Targets=(
+                             "TargetCategory",
+                             lambda s: ", ".join(sorted(set(
+                                 x for x in s
+                                 if pd.notna(x) and x not in (
+                                     "Other_or_unknown", "CAR-T_unspecified",
+                                 )
+                             ))),
+                         ),
+                         Diseases=(
+                             "DiseaseEntity",
+                             lambda s: ", ".join(sorted(set(
+                                 x for x in s if pd.notna(x)
+                             ))[:5]),
+                         ),
+                         FirstYear=("StartYear", "min"),
+                         LatestYear=("StartYear", "max"),
+                         Products=(
+                             "ProductName",
+                             lambda s: ", ".join(sorted(set(
+                                 x for x in s if pd.notna(x)
+                             ))) or "—",
+                         ))
+                    .reset_index()
+                )
+                # Acquisition criteria: small portfolio + any Ph2+/3 + recruiting
+                _acq = _spon_portfolio[
+                    (_spon_portfolio["Trials"] <= 3)
+                    & _spon_portfolio["AnyRecruiting"]
+                    & _spon_portfolio["MaxPhase"].astype(str).isin([
+                        "Phase 2", "Phase 3", "Phase 2/3",
+                    ])
+                ].copy()
+                _acq["MaxPhaseLabel"] = _acq["MaxPhase"].astype(str).map(PHASE_LABELS).fillna(_acq["MaxPhase"])
+                _acq = _acq.sort_values(
+                    ["MaxPhase", "Trials"], ascending=[False, True],
+                ).reset_index(drop=True)
+                _acq = _acq.drop(columns=["AnyRecruiting", "MaxPhase"])
+
+                if _acq.empty:
+                    st.info(
+                        "No sponsors match the acquisition-signal criteria "
+                        "in the current filter (1-3 trials + Ph2/3 + open)."
+                    )
+                else:
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Acquisition candidates", f"{len(_acq):,}")
+                    _ph3 = int(
+                        (_acq["MaxPhaseLabel"] == "Phase III").sum()
+                        + (_acq["MaxPhaseLabel"] == "Phase II/III").sum()
+                    )
+                    m2.metric("With Ph III data", f"{_ph3:,}",
+                              help="Most attractive M&A targets — Ph3 = "
+                                    "near-term approval potential")
+                    _solo = int((_acq["Trials"] == 1).sum())
+                    m3.metric("Single-trial sponsors", f"{_solo:,}",
+                              help="One-trial wonders — pure-play candidates")
+
+                    st.dataframe(
+                        _acq, width='stretch', height=420, hide_index=True,
+                        column_config={
+                            "LeadSponsor": st.column_config.TextColumn("Sponsor", width="medium"),
+                            "Trials": st.column_config.NumberColumn("# Trials", width="small"),
+                            "MaxPhaseLabel": st.column_config.TextColumn("Furthest phase", width="small"),
+                            "Targets": st.column_config.TextColumn("Targets", width="medium"),
+                            "Diseases": st.column_config.TextColumn("Diseases (top 5)", width="medium"),
+                            "FirstYear": st.column_config.NumberColumn("First trial", width="small"),
+                            "LatestYear": st.column_config.NumberColumn("Latest trial", width="small"),
+                            "Products": st.column_config.TextColumn("Products", width="medium"),
+                        },
+                        key="insights_acq_table",
+                    )
+                    st.caption(
+                        "<span style='color:#64748b'>"
+                        "Validation example: <strong>Arcellx</strong> "
+                        "(anito-cel) had 2 BCMA CAR-T trials in MM with "
+                        "BLA acceptance Feb 2026 → acquired by Gilead "
+                        "for $7.8B. Same pattern observable for upcoming "
+                        "candidates — drill into trials of the highest-"
+                        "phase candidates above for M&A signal."
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+                    st.download_button(
+                        "Download acquisition signals (CSV)",
+                        _csv_with_provenance(_acq,
+                                              "Insights — Acquisition signals",
+                                              include_filters=True),
+                        "insights_acquisition_signals.csv", "text/csv",
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -6859,6 +9285,176 @@ with tab_methods:
             st.info("PRISMA counts unavailable — refresh the snapshot to populate.")
     else:
         st.info("No PRISMA counts available for this dataset.")
+
+    # ====== Stage 3 Phase C — Methods enrichment (added 2026-05-05) ======
+    # Two additions before the auto-generated Methods text:
+    #   1. Classifier confidence distribution → quantifies how many
+    #      trials in the analyzed dataset have HIGH vs MEDIUM vs LOW
+    #      confidence labels (transparency about classifier reliability)
+    #   2. Known limitations callout → explicit "what we DON'T capture"
+    #      so readers can correctly interpret the analyses
+    if "ClassificationConfidence" in df_filt.columns:
+        st.subheader("Classifier confidence distribution")
+        st.markdown(
+            '<p class="small-note">'
+            'Per-trial classification confidence as derived by '
+            '<code>_score_classification_confidence</code> in <code>pipeline.py</code>. '
+            'High confidence = LLM-validated or strong term match across multiple axes; '
+            'medium = single-axis term match; low = punted to '
+            '<code>Unclassified</code> / <code>CAR-T_unspecified</code>.'
+            '</p>',
+            unsafe_allow_html=True,
+        )
+        _conf_counts = (
+            df_filt["ClassificationConfidence"].fillna("unknown")
+            .value_counts()
+            .rename_axis("Confidence").reset_index(name="Trials")
+        )
+        # Order high → low
+        _conf_order = ["high", "medium", "low", "unknown"]
+        _conf_counts["Confidence"] = pd.Categorical(
+            _conf_counts["Confidence"],
+            categories=[c for c in _conf_order if c in _conf_counts["Confidence"].values],
+            ordered=True,
+        )
+        _conf_counts = _conf_counts.sort_values("Confidence")
+        _conf_color = {
+            "high": "#0b3d91", "medium": "#5aafd6",
+            "low": "#fb923c", "unknown": "#94a3b8",
+        }
+        if not _conf_counts.empty:
+            _conf_counts["Pct"] = (
+                _conf_counts["Trials"] / _conf_counts["Trials"].sum() * 100
+            )
+            cf1, cf2 = st.columns([0.55, 0.45])
+            with cf1:
+                fig_conf = px.bar(
+                    _conf_counts, x="Confidence", y="Trials",
+                    color="Confidence", color_discrete_map=_conf_color,
+                    template="plotly_white", height=300,
+                    text=_conf_counts["Pct"].apply(lambda v: f"{v:.0f}%"),
+                )
+                fig_conf.update_traces(
+                    marker_line_width=0, opacity=0.92,
+                    textposition="outside",
+                    textfont=dict(size=11, color=_AX_COLOR),
+                )
+                fig_conf.update_layout(
+                    **PUB_BASE,
+                    margin=dict(l=44, r=24, t=8, b=40),
+                    xaxis_title=None,
+                    yaxis_title="Number of trials",
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_conf, width='stretch')
+            with cf2:
+                _high_n = int(_conf_counts.loc[
+                    _conf_counts["Confidence"] == "high", "Trials"
+                ].sum())
+                _high_pct = (
+                    100 * _high_n / int(_conf_counts["Trials"].sum())
+                    if int(_conf_counts["Trials"].sum()) else 0
+                )
+                _low_n = int(_conf_counts.loc[
+                    _conf_counts["Confidence"].isin(["low", "unknown"]), "Trials"
+                ].sum())
+                st.metric("High-confidence", f"{_high_n:,}",
+                          f"{_high_pct:.0f}% of analyzed dataset")
+                st.metric("Low-confidence / unknown", f"{_low_n:,}",
+                          help="These trials should be reviewed manually "
+                               "for the highest-fidelity analyses.")
+
+    # --- Known limitations panel ----
+    st.subheader("Known limitations")
+    st.markdown(
+        '<p class="small-note">'
+        'Things this analysis does <em>not</em> capture, by design or '
+        'by data-source limitation. Important context for reviewers and '
+        'manuscript readers.'
+        '</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '''
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.8rem;">
+
+<div style="background:#f8fafc; border-left:4px solid #0b3d91; padding: 0.7rem 0.9rem; border-radius:6px;">
+<strong>Trial outcomes / efficacy data</strong><br>
+<span style="color:#475569; font-size:0.85rem;">
+This is a <em>landscape monitor</em>, not an outcomes registry. ORR, PFS, OS,
+toxicity profiles are NOT captured. Trial registrations only — for outcomes
+data see published trial reports, IndieDB, ASH abstracts, etc.
+</span>
+</div>
+
+<div style="background:#f8fafc; border-left:4px solid #0b3d91; padding: 0.7rem 0.9rem; border-radius:6px;">
+<strong>CAR construct architecture</strong><br>
+<span style="color:#475569; font-size:0.85rem;">
+Costimulatory domains (4-1BB vs CD28), VHH vs scFv binders, switch CAR
+designs, and other construct-engineering features are NOT extracted.
+TargetCategory captures the antigen only.
+</span>
+</div>
+
+<div style="background:#f8fafc; border-left:4px solid #0b3d91; padding: 0.7rem 0.9rem; border-radius:6px;">
+<strong>TCR-T, TIL, CAR-Macrophage</strong><br>
+<span style="color:#475569; font-size:0.85rem;">
+Out of scope. Tecelra (afami-cel) and other TCR-T products are NOT in
+the dataset even though they're listed in adjacent ASGCT data.
+Boundary documented in Inclusion Criteria.
+</span>
+</div>
+
+<div style="background:#f8fafc; border-left:4px solid #0b3d91; padding: 0.7rem 0.9rem; border-radius:6px;">
+<strong>Autoimmune / non-oncology indications</strong><br>
+<span style="color:#475569; font-size:0.85rem;">
+Excluded by the autoimmune-only filter. The expanding autoimmune-CAR-T
+pipeline (CD19 in lupus, BCMA in MG, BAFF-R in NHL→SLE) is tracked in
+the sister rheum-CAR-T monitor.
+</span>
+</div>
+
+<div style="background:#f8fafc; border-left:4px solid #0b3d91; padding: 0.7rem 0.9rem; border-radius:6px;">
+<strong>Patient eligibility nuance</strong><br>
+<span style="color:#475569; font-size:0.85rem;">
+Prior lines of therapy, performance status, organ-function thresholds,
+and biomarker-positivity requirements are NOT systematically extracted
+from EligibilityCriteria text.
+</span>
+</div>
+
+<div style="background:#f8fafc; border-left:4px solid #0b3d91; padding: 0.7rem 0.9rem; border-radius:6px;">
+<strong>Trial design metadata</strong><br>
+<span style="color:#475569; font-size:0.85rem;">
+Single-arm vs randomized, masking, allocation, crossover are partially
+captured (when CT.gov fills the structured fields) but not all trials
+expose this. Methods text declares the per-row coverage rate.
+</span>
+</div>
+
+<div style="background:#f8fafc; border-left:4px solid #92400e; padding: 0.7rem 0.9rem; border-radius:6px;">
+<strong>Snapshot freshness vs live state</strong><br>
+<span style="color:#475569; font-size:0.85rem;">
+Frozen snapshots are reproducibility-anchors; live mode reflects CT.gov
+state at fetch-time (cached 24h). Trials registered between fetches
+won't appear until the next refresh.
+</span>
+</div>
+
+<div style="background:#f8fafc; border-left:4px solid #92400e; padding: 0.7rem 0.9rem; border-radius:6px;">
+<strong>Classifier accuracy</strong><br>
+<span style="color:#475569; font-size:0.85rem;">
+The 2026-05-05 named-product audit hit 97.2% trial-level accuracy
+(176/181) on a 46-product knowledge base. Inter-rater κ from the
+on-going validation study (n=200 trials, 2 raters, 8 axes) is the
+forthcoming primary fidelity benchmark.
+</span>
+</div>
+
+</div>
+        ''',
+        unsafe_allow_html=True,
+    )
 
     methods_text = _build_methods_text(prisma_counts, snap_date, n_inc)
 

@@ -4087,9 +4087,9 @@ with tab_deep:
         "sponsors, phases and targets in one place; (2) drill into a single antigen target "
         "to see how its pipeline spreads across diseases, phases, modalities and sponsors; "
         "(3) aggregate trials by named CAR-T product to track each product's portfolio across "
-        "indications and phases; (4) <strong>strategic-landscape view</strong> — five "
+        "indications and phases; (4) <strong>strategic-landscape view</strong> — four "
         "cross-cutting analyses (antigen first-in-class timeline, sponsor competition matrix, "
-        "heme-vs-solid maturity gap, white-space matrix, target momentum). "
+        "heme-vs-solid maturity gap, target momentum). "
         "Every trial-list table supports row-click drilldown to a full trial record.</p>",
         unsafe_allow_html=True,
     )
@@ -5706,106 +5706,20 @@ with tab_deep:
 
             # ====== Round 2 strategic-landscape additions (added 2026-05-05) ======
 
-            # ---------- 4. White-space matrix ----------
-            # The INVERSE of the sponsor competition matrix — which
-            # (target × disease) cells have ZERO active trials? Pure
-            # opportunity-detection chart for clinical-development
-            # strategy. Restricted to plausible (target, disease)
-            # combinations only — i.e. cells where BOTH the target
-            # has ≥3 trials in the dataset AND the disease has ≥3
-            # CAR-T trials (excludes silly cells like CD7 × Breast).
-            st.markdown("---")
-            st.markdown(
-                "### 4. White-space — antigen × disease cells with ZERO trials "
-                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
-                "— restricted to plausible (target, disease) pairs (both with "
-                "≥3 trials elsewhere). Inverse of the competition matrix."
-                "</span>",
-                unsafe_allow_html=True,
-            )
-            if not _comp.empty:
-                # Reuse _top_targets and _top_cats from competition matrix
-                _ws_pivot = (
-                    _comp[
-                        _comp["TargetCategory"].isin(_top_targets)
-                        & _comp["DiseaseCategory"].isin(_top_cats)
-                    ]
-                    .groupby(["DiseaseCategory", "TargetCategory"])
-                    .agg(NTrials=("NCTId", "nunique"))
-                    .reset_index()
-                    .pivot(index="DiseaseCategory",
-                           columns="TargetCategory",
-                           values="NTrials")
-                    .reindex(index=_top_cats, columns=_top_targets)
-                    .fillna(0)
-                )
-                # Mark cells: 0 trials = white space, >0 = covered
-                # `DataFrame.applymap` was removed in pandas 3.x;
-                # `DataFrame.map` (element-wise) is the replacement.
-                # Verified 2026-05-06 from a prod traceback when the
-                # Strategic-landscape > White-space matrix rendered
-                # against pandas==3.0.2.
-                _ws_marker = _ws_pivot.map(lambda v: "—" if v == 0 else "")
-                fig_ws_strat = go.Figure(data=go.Heatmap(
-                    z=_ws_pivot.map(lambda v: 0 if v == 0 else 1).values,
-                    x=_ws_pivot.columns.tolist(),
-                    y=_ws_pivot.index.tolist(),
-                    text=_ws_marker.values,
-                    texttemplate="%{text}",
-                    textfont=dict(size=14, color="#0b3d91"),
-                    colorscale=[[0.0, "#fef3c7"], [1.0, "#f1f5f9"]],
-                    showscale=False,
-                    hovertemplate=(
-                        "<b>%{y} × %{x}</b><br>"
-                        "Trials: %{z}<extra></extra>"
-                    ),
-                ))
-                fig_ws_strat.update_layout(
-                    **PUB_BASE,
-                    height=max(360, len(_top_cats) * 28 + 80),
-                    margin=dict(l=170, r=24, t=8, b=110),
-                    xaxis=dict(side="bottom", tickangle=-40,
-                               tickfont=dict(size=10, color=_AX_COLOR)),
-                    yaxis=dict(autorange="reversed",
-                               tickfont=dict(size=10, color=_AX_COLOR)),
-                )
-                st.plotly_chart(fig_ws_strat, width='stretch', config=PUB_EXPORT)
-                _ws_count = int((_ws_pivot == 0).sum().sum())
-                _total_cells = _ws_pivot.size
-                st.caption(
-                    f"<span style='color:#64748b'>"
-                    f"<strong>{_ws_count} of {_total_cells} cells</strong> "
-                    f"({100 * _ws_count / max(1, _total_cells):.0f}%) are "
-                    f"white space — no CAR-T trials yet. Cells marked with "
-                    f"<strong>—</strong>; covered cells are blank. "
-                    f"For each white-space cell, ask: is the biology "
-                    f"plausible? has anyone tried? what's blocking it?"
-                    "</span>",
-                    unsafe_allow_html=True,
-                )
-                _ws_csv = _ws_pivot.reset_index().melt(
-                    id_vars="DiseaseCategory", var_name="TargetCategory",
-                    value_name="Trials",
-                )
-                _ws_csv["IsWhiteSpace"] = (_ws_csv["Trials"] == 0)
-                st.download_button(
-                    "Download white-space matrix (CSV)",
-                    _csv_with_provenance(_ws_csv,
-                                          "White-space matrix",
-                                          include_filters=True),
-                    "deep_dive_white_space_matrix.csv", "text/csv",
-                )
-            else:
-                st.info("Insufficient data for white-space analysis.")
+            # Section 4 (White-space matrix) dropped 2026-05-06 in
+            # the de-redundancy pass — user explicitly said it wasn't
+            # needed. The inverse-of-competition-matrix view was
+            # conceptually neat but practically not actionable enough
+            # to justify its space.
 
-            # ---------- 5. Target momentum (recent vs prior 24mo) ----------
+            # ---------- 4. Target momentum (recent vs prior 24mo) ----------
             # Per-antigen: trials registered in last 24 months vs prior 24
             # months. Identifies HOT antigens (recent surge) vs COOLING
             # ones (recent decline). Driven by snapshot-fixed cutoff to
             # keep the analysis reproducible.
             st.markdown("---")
             st.markdown(
-                "### 5. Target momentum — last 24 months vs prior 24 months "
+                "### 4. Target momentum — last 24 months vs prior 24 months "
                 "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
                 "— per antigen, recent trial-start velocity. Top = "
                 "fastest accelerating; bottom = fastest cooling."

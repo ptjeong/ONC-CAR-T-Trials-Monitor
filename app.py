@@ -184,6 +184,17 @@ SOLID_COLOR = "#b45309"   # amber-700 — solid stories (complementary warm tone
 MIXED_COLOR = "#475569"   # slate-600 — neutral (replaces indigo per style guide)
 UNKNOWN_COLOR = "#94a3b8" # slate-400
 
+# Axis / grid colors used across BOTH publication figures and the inline
+# Overview / Geography / Deep Dive charts. Defined here near THEME (was
+# previously at line ~3857 in the pub-figures style block) so the
+# Overview tab's render — which executes BEFORE the pub-figures block
+# at script-execution time — doesn't NameError on `_AX_COLOR`.
+# Originally `_AX_COLOR` lived only with the publication-figure typography
+# constants; the Stage-3 Overview / Geography enrichment used it for
+# in-tab text colors and surfaced this forward-reference bug in prod.
+_AX_COLOR  = "#1a1a1a"
+_GRID_CLR  = "#c8c8c8"
+
 BRANCH_COLORS = {
     "Heme-onc": HEME_COLOR,
     "Solid-onc": SOLID_COLOR,
@@ -3854,8 +3865,9 @@ _MODALITY_COLORS.update({
     "In vivo CAR":     NEJM_RED,
 })
 
-_AX_COLOR  = "#1a1a1a"
-_GRID_CLR  = "#c8c8c8"
+# `_AX_COLOR` and `_GRID_CLR` moved earlier (next to THEME) so the
+# Overview / Geography / Deep Dive charts that reference them at
+# script-execution time don't NameError. They remain in scope here.
 _TICK_SZ   = 11
 _TITLE_SZ  = 14
 _LAB_SZ    = 12

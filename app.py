@@ -202,6 +202,42 @@ BRANCH_COLORS = {
     "Unknown": UNKNOWN_COLOR,
 }
 
+# Default + high-contrast palette snapshots (added 2026-05-06).
+# The sidebar `Display options` expander lets the rater toggle between
+# the default (brand-aligned navy/amber/slate/gray) and a Tableau-20-
+# based variant where every branch gets a maximally distinct hue —
+# useful for greyscale printing and for distinguishing closely-prevalent
+# branches in stacked panels. Mutated in place via dict.update so every
+# downstream chart picks up the change without per-chart plumbing.
+_BRANCH_COLORS_DEFAULT = dict(BRANCH_COLORS)
+_BRANCH_COLORS_HIGH_CONTRAST = {
+    "Heme-onc":  "#1f77b4",   # tableau blue
+    "Solid-onc": "#d62728",   # tableau red
+    "Mixed":     "#9467bd",   # tableau purple
+    "Unknown":   "#7f7f7f",   # tableau gray
+}
+
+# Plotly modebar export config — moved to top-of-file 2026-05-06 so the
+# sidebar `Display options` expander can mutate it before any chart
+# renders. The format / scale fields drive the camera-icon download
+# in every chart's modebar (browser-side, no kaleido needed). Was
+# previously buried in the publication-figures style block at line
+# ~3877 — moved up so the sidebar (which runs earlier in the script)
+# can reference it without a forward-reference NameError.
+PUB_EXPORT = {
+    "toImageButtonOptions": {
+        "format": "png",
+        "width": 1600,
+        "height": 900,
+        "scale": 5,
+    },
+    "displaylogo": False,
+    "modeBarButtonsToRemove": [
+        "lasso2d", "select2d", "autoScale2d", "hoverClosestCartesian",
+        "hoverCompareCartesian", "toggleSpikelines",
+    ],
+}
+
 _MODALITY_COLORS: dict[str, str] = {}  # populated below once NEJM palette defined
 
 # ---------------------------------------------------------------------------
@@ -1822,6 +1858,74 @@ if df.empty:
     st.error("No studies were returned. Try broadening the status filters.")
     st.stop()
 
+
+# ---------------------------------------------------------------------------
+# Sidebar — Display options expander (added 2026-05-06)
+# ---------------------------------------------------------------------------
+# Two controls in a single expander BETWEEN the data-source / snapshot-pin
+# section above and the Filters header below. Replaces the per-chart
+# PNG/SVG/CSV button rows that were visually noisy across 30+ figures.
+# Both controls drive global mutations:
+#   * Chart export format → PUB_EXPORT["toImageButtonOptions"] (drives
+#     the Plotly modebar's camera-icon download — browser-side, no
+#     kaleido needed; this also resolves the prod RuntimeError from
+#     the kaleido v1+ Chrome-dependency on Streamlit Cloud).
+#   * High-contrast palette → BRANCH_COLORS dict (mutated in place so
+#     every downstream chart referencing BRANCH_COLORS gets the new
+#     palette on next render).
+# Streamlit re-executes top-to-bottom each rerun, so mutating these
+# module-level dicts here propagates to every chart below in the same run.
+with st.sidebar.expander("Display options", expanded=False):
+    _export_choice = st.radio(
+        "Chart export format",
+        options=[
+            "PNG (slides, 5× resolution)",
+            "SVG (vector — journal / Illustrator)",
+        ],
+        index=0,
+        key="chart_export_fmt",
+        help=(
+            "PNG — best for presentations / slide decks. Renders at 5× "
+            "the chart's natural size for crisp 4K-projection / "
+            "300-DPI print quality.\n\nSVG — best for journal "
+            "submission requiring vector graphics, or post-editing in "
+            "Illustrator / Inkscape / Figma. Infinite resolution; "
+            "every wedge / bar / label is an editable element."
+        ),
+    )
+    _hc_toggle = st.toggle(
+        "High-contrast palette",
+        value=False,
+        key="high_contrast",
+        help=(
+            "Switch every branch-coloured chart to a Tableau-20-based "
+            "palette where Heme-onc (blue), Solid-onc (red), Mixed "
+            "(purple), and Unknown (gray) are maximally distinct. "
+            "Useful for greyscale printing and for distinguishing "
+            "stacked bars / overlapping series. Default off to keep "
+            "the brand-aligned navy/amber palette."
+        ),
+    )
+
+# Mutate PUB_EXPORT in place per the export choice. Same dict object
+# referenced by every `config=PUB_EXPORT` arg downstream.
+if _export_choice.startswith("SVG"):
+    PUB_EXPORT["toImageButtonOptions"]["format"] = "svg"
+    PUB_EXPORT["toImageButtonOptions"]["scale"] = 1
+else:
+    PUB_EXPORT["toImageButtonOptions"]["format"] = "png"
+    PUB_EXPORT["toImageButtonOptions"]["scale"] = 5
+
+# Mutate BRANCH_COLORS in place per the toggle. .clear() + .update()
+# keeps the SAME dict object so charts that captured a reference to
+# BRANCH_COLORS (rather than re-resolving the global on every render)
+# still see the new values.
+if _hc_toggle:
+    BRANCH_COLORS.clear()
+    BRANCH_COLORS.update(_BRANCH_COLORS_HIGH_CONTRAST)
+else:
+    BRANCH_COLORS.clear()
+    BRANCH_COLORS.update(_BRANCH_COLORS_DEFAULT)
 
 # ---------------------------------------------------------------------------
 # Sidebar — cascading disease filter + other filters
@@ -3874,96 +3978,36 @@ _LAB_SZ    = 12
 
 PUB_FONT = dict(family="Arial, Helvetica, sans-serif", size=_TICK_SZ, color=_AX_COLOR)
 PUB_BASE = dict(template="plotly_white", paper_bgcolor="white", plot_bgcolor="white", font=PUB_FONT)
-PUB_EXPORT = {"toImageButtonOptions": {"format": "png", "width": 1600, "height": 900, "scale": 2}}
-
-# ---- High-fidelity figure export (PNG + SVG) for publication / slides ----
-# PNG: scale=5 against the PUB_EXPORT 1600×900 base → 8000×4500 px. Comfortably
-# exceeds 4K projection (3840×2160) AND 300-DPI journal requirements (~3500 px
-# wide for an A4 column). Universal compatibility, drag-and-drop into
-# PowerPoint/Keynote/Slides without import friction.
-# SVG: vector, infinite resolution, individual elements editable in
-# Illustrator/Figma/Inkscape. Required by NEJM/JAMA/Lancet for vector
-# submission. Smaller file size than PNG for typical chart content.
+# `PUB_EXPORT` itself is defined at the top of the file (around line 227)
+# so the sidebar `Display options` expander can mutate it before any
+# chart renders. The duplicate definition that was here was removed
+# 2026-05-06 in the per-chart-export → sidebar-export UX port.
 PUB_PNG_SCALE = 5
 PUB_EXPORT_WIDTH = 1600
 PUB_EXPORT_HEIGHT = 900
 
 
-@st.cache_data(show_spinner=False, max_entries=64)
-def _fig_to_bytes_cached(fig_json: str, fmt: str,
-                          width: int, height: int, scale: int) -> bytes:
-    """Render a Plotly figure (passed as JSON string for hashability) to
-    bytes in the requested format. Cached so the same figure under the
-    same filter state doesn't re-render kaleido every interaction.
-    """
-    import plotly.io as pio
-    fig = pio.from_json(fig_json)
-    if fmt == "png":
-        return fig.to_image(format="png", width=width, height=height, scale=scale)
-    if fmt == "svg":
-        return fig.to_image(format="svg", width=width, height=height)
-    raise ValueError(f"Unsupported format: {fmt!r}")
-
-
 def _fig_download_buttons(fig, name_stem: str, fig_label: str = "figure",
                            *, csv_button=None) -> None:
-    """Render a row of download buttons for a Plotly figure.
+    """Render the optional CSV download button under a chart.
 
-    Three buttons in one columns row: PNG (high-res, scale=5), SVG
-    (vector), and optionally CSV (passed-through st.download_button kwargs
-    so the caller controls the data + label).
+    Stripped down 2026-05-06: was a 3-button row (PNG / SVG / CSV) using
+    server-side kaleido rendering. Both image-export buttons removed
+    because (a) the rheum sister monitor moved to a single sidebar
+    `Display options` export-format selector that drives the Plotly
+    modebar's browser-side download (no kaleido dependency), and the
+    onc app now does the same; (b) kaleido v1+ on Streamlit Cloud needs
+    an external Chrome browser that isn't installed in the container,
+    surfacing as `RuntimeError` on every chart's image export.
 
-    Generated bytes are cached on the figure's JSON form so flipping
-    between figures or filter changes that don't alter THIS figure
-    don't re-render kaleido. Failures (e.g. kaleido missing) surface
-    as a one-line caption rather than crashing the page — the camera
-    icon in the Plotly toolbar remains as a fallback.
+    The `fig` and `fig_label` and `name_stem` args are kept for source
+    compatibility with the ~30 existing call sites — they're accepted
+    but not used. Only `csv_button` (a dict of st.download_button
+    kwargs) actually emits anything.
     """
-    try:
-        fig_json = fig.to_json()
-        png_bytes = _fig_to_bytes_cached(
-            fig_json, "png",
-            PUB_EXPORT_WIDTH, PUB_EXPORT_HEIGHT, PUB_PNG_SCALE,
-        )
-        svg_bytes = _fig_to_bytes_cached(
-            fig_json, "svg",
-            PUB_EXPORT_WIDTH, PUB_EXPORT_HEIGHT, 1,
-        )
-    except Exception as e:
-        st.caption(
-            f"Image export unavailable ({type(e).__name__}). Use the "
-            "camera icon in the chart toolbar to download a PNG."
-        )
-        if csv_button is not None:
-            st.download_button(**csv_button)
-        return
-
-    cols = st.columns(3 if csv_button else 2)
-    with cols[0]:
-        st.download_button(
-            f"{fig_label} — PNG (high-res)",
-            data=png_bytes,
-            file_name=f"{name_stem}.png",
-            mime="image/png",
-            help=f"{PUB_EXPORT_WIDTH * PUB_PNG_SCALE}×"
-                 f"{PUB_EXPORT_HEIGHT * PUB_PNG_SCALE} px, scale={PUB_PNG_SCALE}. "
-                 "Drop into PowerPoint/Keynote/Slides as-is.",
-            use_container_width=True,
-        )
-    with cols[1]:
-        st.download_button(
-            f"{fig_label} — SVG (vector)",
-            data=svg_bytes,
-            file_name=f"{name_stem}.svg",
-            mime="image/svg+xml",
-            help="Vector — open in Illustrator / Figma / Inkscape to "
-                 "re-color, re-typeset, or recompose. Required by NEJM / "
-                 "JAMA / Lancet for vector submission.",
-            use_container_width=True,
-        )
+    del fig, name_stem, fig_label  # accepted-but-unused (compat)
     if csv_button is not None:
-        with cols[2]:
-            st.download_button(use_container_width=True, **csv_button)
+        st.download_button(use_container_width=True, **csv_button)
 
 
 def _pub_header(figure_num: str, title: str, subtitle: str | None = None) -> None:

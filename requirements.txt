@@ -1,12 +1,12 @@
 streamlit==1.56.0
 plotly==6.7.0
-# Required by plotly 6.x for fig.to_image() — powers the PNG / SVG
-# download buttons under each Publication Figure and Deep Dive chart.
-# Without this pin, Streamlit Cloud installs only what's listed in this
-# file and every image-export call fails with ValueError ("kaleido is
-# not installed"). Verified 2026-05-06 from a prod traceback.
-# kaleido v1+ is the API generation that pairs with plotly 6.x.
-kaleido>=1.0.0
+# kaleido was previously pinned here for fig.to_image() server-side PNG/SVG
+# rendering. Removed 2026-05-06 in the per-chart-export → sidebar-export
+# UX port: image export is now driven entirely by the Plotly modebar's
+# camera-icon download (browser-side `Plotly.downloadImage()` JS,
+# configured via `PUB_EXPORT.toImageButtonOptions`). This removes the
+# kaleido v1+ Chrome dependency that was failing with `RuntimeError` on
+# Streamlit Cloud's container (no Chrome installed by default).
 pandas==3.0.2
 numpy==2.4.4
 altair==6.1.0

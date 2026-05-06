@@ -2551,9 +2551,15 @@ if _MODERATOR_MODE:
     _tab_labels.append("Moderation")
 
 # Insights as a top-level tab was removed 2026-05-06 in the UX cleanup
-# pass — its three views (Pivotal candidates, First-in-disease,
-# Acquisition signals) are now sections 8/9/10 of Deep Dive >
-# Strategic landscape. Same data, one fewer top-level tab.
+# pass — its three views (Pivotal candidates, First-in-disease pairs,
+# Acquisition signals) were briefly folded into Strategic-landscape as
+# sections 8/9/10, then dropped entirely later the same day in the
+# de-redundancy pass: First-in-disease overlapped with Section 1
+# (first-in-class antigen timeline); Pivotal candidates and Acquisition
+# signals rendered empty under most sidebar filter combinations
+# (Industry × Ph2/3 × Recruiting × n≥30 is a tight filter chain). The
+# surviving Strategic-landscape sections (1-5) all degrade gracefully
+# under any filter scope.
 _tabs = st.tabs(_tab_labels)
 tab_overview, tab_geo, tab_data, tab_deep, tab_pub, tab_methods, tab_about = _tabs[:7]
 tab_moderation = _tabs[7] if _MODERATOR_MODE else None
@@ -4125,16 +4131,14 @@ def _cagr(first_count: int, last_count: int, n_years: int) -> float | None:
 
 with tab_deep:
     st.markdown(
-        '<p class="small-note">Five focused views that complement the aggregate dashboards: '
+        '<p class="small-note">Four focused views that complement the aggregate dashboards: '
         "(1) drill into a single disease entity (category or Tier-3 leaf) to see all trials, "
         "sponsors, phases and targets in one place; (2) drill into a single antigen target "
         "to see how its pipeline spreads across diseases, phases, modalities and sponsors; "
         "(3) aggregate trials by named CAR-T product to track each product's portfolio across "
-        "indications and phases; (4) break the landscape down by sponsor type (Industry / "
-        "Academic / Government / Other) to compare who is running what; "
-        "(5) <strong>strategic-landscape view</strong> — cross-cutting analyses that don't fit "
-        "any single dimension (antigen first-in-class timeline, sponsor competition matrix, "
-        "phase-progression velocity, sponsor concentration, heme-vs-solid maturity gap). "
+        "indications and phases; (4) <strong>strategic-landscape view</strong> — four "
+        "cross-cutting analyses (antigen first-in-class timeline, sponsor competition matrix, "
+        "heme-vs-solid maturity gap, target momentum). "
         "Every trial-list table supports row-click drilldown to a full trial record.</p>",
         unsafe_allow_html=True,
     )
@@ -5751,106 +5755,20 @@ with tab_deep:
 
             # ====== Round 2 strategic-landscape additions (added 2026-05-05) ======
 
-            # ---------- 4. White-space matrix ----------
-            # The INVERSE of the sponsor competition matrix — which
-            # (target × disease) cells have ZERO active trials? Pure
-            # opportunity-detection chart for clinical-development
-            # strategy. Restricted to plausible (target, disease)
-            # combinations only — i.e. cells where BOTH the target
-            # has ≥3 trials in the dataset AND the disease has ≥3
-            # CAR-T trials (excludes silly cells like CD7 × Breast).
-            st.markdown("---")
-            st.markdown(
-                "### 4. White-space — antigen × disease cells with ZERO trials "
-                "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
-                "— restricted to plausible (target, disease) pairs (both with "
-                "≥3 trials elsewhere). Inverse of the competition matrix."
-                "</span>",
-                unsafe_allow_html=True,
-            )
-            if not _comp.empty:
-                # Reuse _top_targets and _top_cats from competition matrix
-                _ws_pivot = (
-                    _comp[
-                        _comp["TargetCategory"].isin(_top_targets)
-                        & _comp["DiseaseCategory"].isin(_top_cats)
-                    ]
-                    .groupby(["DiseaseCategory", "TargetCategory"])
-                    .agg(NTrials=("NCTId", "nunique"))
-                    .reset_index()
-                    .pivot(index="DiseaseCategory",
-                           columns="TargetCategory",
-                           values="NTrials")
-                    .reindex(index=_top_cats, columns=_top_targets)
-                    .fillna(0)
-                )
-                # Mark cells: 0 trials = white space, >0 = covered
-                # `DataFrame.applymap` was removed in pandas 3.x;
-                # `DataFrame.map` (element-wise) is the replacement.
-                # Verified 2026-05-06 from a prod traceback when the
-                # Strategic-landscape > White-space matrix rendered
-                # against pandas==3.0.2.
-                _ws_marker = _ws_pivot.map(lambda v: "—" if v == 0 else "")
-                fig_ws_strat = go.Figure(data=go.Heatmap(
-                    z=_ws_pivot.map(lambda v: 0 if v == 0 else 1).values,
-                    x=_ws_pivot.columns.tolist(),
-                    y=_ws_pivot.index.tolist(),
-                    text=_ws_marker.values,
-                    texttemplate="%{text}",
-                    textfont=dict(size=14, color="#0b3d91"),
-                    colorscale=[[0.0, "#fef3c7"], [1.0, "#f1f5f9"]],
-                    showscale=False,
-                    hovertemplate=(
-                        "<b>%{y} × %{x}</b><br>"
-                        "Trials: %{z}<extra></extra>"
-                    ),
-                ))
-                fig_ws_strat.update_layout(
-                    **PUB_BASE,
-                    height=max(360, len(_top_cats) * 28 + 80),
-                    margin=dict(l=170, r=24, t=8, b=110),
-                    xaxis=dict(side="bottom", tickangle=-40,
-                               tickfont=dict(size=10, color=_AX_COLOR)),
-                    yaxis=dict(autorange="reversed",
-                               tickfont=dict(size=10, color=_AX_COLOR)),
-                )
-                st.plotly_chart(fig_ws_strat, width='stretch', config=PUB_EXPORT)
-                _ws_count = int((_ws_pivot == 0).sum().sum())
-                _total_cells = _ws_pivot.size
-                st.caption(
-                    f"<span style='color:#64748b'>"
-                    f"<strong>{_ws_count} of {_total_cells} cells</strong> "
-                    f"({100 * _ws_count / max(1, _total_cells):.0f}%) are "
-                    f"white space — no CAR-T trials yet. Cells marked with "
-                    f"<strong>—</strong>; covered cells are blank. "
-                    f"For each white-space cell, ask: is the biology "
-                    f"plausible? has anyone tried? what's blocking it?"
-                    "</span>",
-                    unsafe_allow_html=True,
-                )
-                _ws_csv = _ws_pivot.reset_index().melt(
-                    id_vars="DiseaseCategory", var_name="TargetCategory",
-                    value_name="Trials",
-                )
-                _ws_csv["IsWhiteSpace"] = (_ws_csv["Trials"] == 0)
-                st.download_button(
-                    "Download white-space matrix (CSV)",
-                    _csv_with_provenance(_ws_csv,
-                                          "White-space matrix",
-                                          include_filters=True),
-                    "deep_dive_white_space_matrix.csv", "text/csv",
-                )
-            else:
-                st.info("Insufficient data for white-space analysis.")
+            # Section 4 (White-space matrix) dropped 2026-05-06 in
+            # the de-redundancy pass — user explicitly said it wasn't
+            # needed. The inverse-of-competition-matrix view was
+            # conceptually neat but practically not actionable enough
+            # to justify its space.
 
-            # ---------- 5. Target momentum (recent vs prior 24mo) ----------
+            # ---------- 4. Target momentum (recent vs prior 24mo) ----------
             # Per-antigen: trials registered in last 24 months vs prior 24
             # months. Identifies HOT antigens (recent surge) vs COOLING
             # ones (recent decline). Driven by snapshot-fixed cutoff to
             # keep the analysis reproducible.
             st.markdown("---")
             st.markdown(
-                "### 5. Target momentum — last 24 months vs prior 24 months "
+                "### 4. Target momentum — last 24 months vs prior 24 months "
                 "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
                 "— per antigen, recent trial-start velocity. Top = "
                 "fastest accelerating; bottom = fastest cooling."
@@ -5963,14 +5881,15 @@ with tab_deep:
                     "Insufficient data for target-momentum analysis."
                 )
 
-            # ====== Sections 6 + 7 (formerly 8 + 10) — folded from former "Insights" tab ======
-            # Originally a separate top-level tab (added 2026-05-05); folded
-            # into Strategic-landscape on 2026-05-06 in the UX cleanup pass
-            # because the analyses are conceptually identical to the other
-            # strategic-landscape views (cross-cutting, sidebar-filter-
-            # scoped, decision-support framing). Three sections in the
-            # same numbered scroll as the rest:
-
+            # ====== Strategic-landscape final form: 5 sections ======
+            # Originally 7 sections (1, 2, 3-orig=phase-velocity, 4-orig=
+            # sponsor-concentration, 5-orig=heme-vs-solid, 6-orig=white-
+            # space, 7-orig=target-momentum) plus 3 folded-from-Insights
+            # (8/9/10 = pivotal/first-in-disease/acquisition). All three
+            # folded-from-Insights views + the original sections 3 & 4
+            # were dropped in the de-redundancy pass — left were 5 views
+            # that all work at both global AND filtered scopes:
+            #
             # Sections 6 (Pivotal candidates) and 7 (Acquisition
             # signals) dropped 2026-05-06 in the de-redundancy pass.
             # Same precedent as the earlier Phase-velocity cut: both
@@ -5984,15 +5903,18 @@ with tab_deep:
 
 
 # ---------------------------------------------------------------------------
-# TAB: Publication Figures  (oncology-specific set, 8 figures)
+# TAB: Publication Figures  (oncology-specific set, 11 figures: 1-10 + 12;
+# Fig 11 is the PRISMA flow in the Methods tab)
 # ---------------------------------------------------------------------------
 
 with tab_pub:
     st.markdown(
         '<p class="small-note" style="color:#555">Publication-ready figures with white backgrounds. '
-        "Use the camera icon (▷ toolbar) on each chart to download a high-resolution PNG; "
-        "each chart has a CSV export below it with a provenance header capturing the active "
-        "filter state so downloads are reproducibly tagged. "
+        "Use the camera icon (▷ toolbar) on each chart to download the figure as PNG or SVG "
+        "— format and resolution are controlled globally by the sidebar's "
+        "<strong>Display options</strong> expander (PNG = 5× resolution for slides; "
+        "SVG = vector for journal / Illustrator). Each chart also has a CSV export "
+        "below it with a provenance header capturing the active filter state. "
         "Heme-onc shown in navy, Solid-onc in amber throughout.</p>",
         unsafe_allow_html=True,
     )

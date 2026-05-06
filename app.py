@@ -282,7 +282,7 @@ _BRANCH_COLORS_HIGH_CONTRAST = {
 # on every script run via `_build_pub_export()` below. Reason: the
 # previous in-place mutation pattern produced the same dict object
 # reference on every rerun, so Streamlit's change-detection on
-# `st.plotly_chart(config=...)` saw "same args, no need to re-render"
+# `st.plotly_chart(config=..., config=PUB_EXPORT)` saw "same args, no need to re-render"
 # — the modebar kept its previous (PNG) format burned in even when
 # the user picked SVG in the sidebar. Rebuilding the dict gives a
 # new object identity → Streamlit re-renders → modebar picks up
@@ -2663,7 +2663,7 @@ with tab_overview:
             margin=dict(l=8, r=8, t=8, b=8),
             font=dict(family="Inter, sans-serif", size=12, color=THEME["text"]),
         )
-        st.plotly_chart(fig_ov_sun, width='stretch')
+        st.plotly_chart(fig_ov_sun, width='stretch', config=PUB_EXPORT)
     else:
         st.info("No trials for the current filter selection.")
 
@@ -2733,7 +2733,7 @@ with tab_overview:
             )
             fig_cat.update_xaxes(color=THEME["muted"])
             fig_cat.update_yaxes(gridcolor=THEME["grid"], color=THEME["muted"])
-            st.plotly_chart(fig_cat, width='stretch')
+            st.plotly_chart(fig_cat, width='stretch', config=PUB_EXPORT)
         else:
             st.info("No trials for the current filter selection.")
 
@@ -2753,6 +2753,7 @@ with tab_overview:
             st.plotly_chart(
                 make_bar(counts_target, "TargetCategory", "Count", color=THEME["primary"], height=380),
                 width='stretch',
+                config=PUB_EXPORT,
             )
         else:
             st.info("No trials for the current filter selection.")
@@ -2790,7 +2791,7 @@ with tab_overview:
             fig_phase.update_xaxes(color=THEME["muted"], categoryorder="array",
                                     categoryarray=[PHASE_LABELS[p] for p in PHASE_ORDER])
             fig_phase.update_yaxes(gridcolor=THEME["grid"], color=THEME["muted"])
-            st.plotly_chart(fig_phase, width='stretch')
+            st.plotly_chart(fig_phase, width='stretch', config=PUB_EXPORT)
         else:
             st.info("No trials for the current filter selection.")
 
@@ -2833,7 +2834,7 @@ with tab_overview:
                 range=[_ov_first - 0.5, _ov_last + 0.5],
             )
             fig_year.update_yaxes(gridcolor=THEME["grid"], color=THEME["muted"])
-            st.plotly_chart(fig_year, width='stretch')
+            st.plotly_chart(fig_year, width='stretch', config=PUB_EXPORT)
         else:
             st.info("No trials with a valid start year for the current filter selection.")
 
@@ -2885,7 +2886,7 @@ with tab_overview:
         )
         fig_platform.update_xaxes(color=THEME["muted"])
         fig_platform.update_yaxes(gridcolor=THEME["grid"], color=THEME["muted"])
-        st.plotly_chart(fig_platform, width='stretch')
+        st.plotly_chart(fig_platform, width='stretch', config=PUB_EXPORT)
 
         # Compact summary metrics below the chart — modal platform +
         # share of "alternative" (non-Auto) modalities.
@@ -2953,7 +2954,7 @@ with tab_overview:
                 font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
                 xaxis_title=None, yaxis_title=None, showlegend=False,
             )
-            st.plotly_chart(fig_top_spon, width='stretch')
+            st.plotly_chart(fig_top_spon, width='stretch', config=PUB_EXPORT)
         else:
             st.caption("_(no sponsor data)_")
 
@@ -3005,7 +3006,7 @@ with tab_overview:
                 font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
                 xaxis_title=None, yaxis_title=None, showlegend=False,
             )
-            st.plotly_chart(fig_hot, width='stretch')
+            st.plotly_chart(fig_hot, width='stretch', config=PUB_EXPORT)
         else:
             st.caption(
                 "_(no recruitment hotspots — site-level data may be "
@@ -3250,7 +3251,7 @@ with tab_geo:
         # country names left-to-right with no rotation, much cleaner.
         _c_map, _c_bar = st.columns([0.68, 0.32])
         with _c_map:
-            st.plotly_chart(fig_world, width='stretch')
+            st.plotly_chart(fig_world, width='stretch', config=PUB_EXPORT)
         with _c_bar:
             _top_countries = country_counts.head(12).iloc[::-1]  # reverse so biggest on top
             fig_top = go.Figure()
@@ -3284,7 +3285,7 @@ with tab_geo:
                 ),
                 bargap=0.35, showlegend=False,
             )
-            st.plotly_chart(fig_top, width='stretch')
+            st.plotly_chart(fig_top, width='stretch', config=PUB_EXPORT)
 
         # Country-counts table spans full width below.
         st.markdown(
@@ -3407,7 +3408,7 @@ with tab_geo:
                     font=dict(family="Inter, sans-serif", size=11, color=THEME["text"]),
                     xaxis_title=None, yaxis_title=None, showlegend=False,
                 )
-                st.plotly_chart(fig_region, width='stretch')
+                st.plotly_chart(fig_region, width='stretch', config=PUB_EXPORT)
             with _rg_b:
                 # Mini-stats: total + dominant region's share
                 _total_trials_geo = int(_region_summary["Trials"].sum())
@@ -3522,7 +3523,7 @@ with tab_geo:
                                 bgcolor="rgba(0,0,0,0)", title=None,
                             ),
                         )
-                        st.plotly_chart(fig_pc_phase, width='stretch')
+                        st.plotly_chart(fig_pc_phase, width='stretch', config=PUB_EXPORT)
                     else:
                         st.caption("_(no phase data for this country)_")
 
@@ -3569,7 +3570,7 @@ with tab_geo:
                             xaxis_title=None, yaxis_title=None,
                             showlegend=False,
                         )
-                        st.plotly_chart(fig_pc_spon, width='stretch')
+                        st.plotly_chart(fig_pc_spon, width='stretch', config=PUB_EXPORT)
                     else:
                         st.caption("_(no sponsor data)_")
 
@@ -3636,6 +3637,7 @@ with tab_geo:
                         _c_fig, width='stretch',
                         on_select="rerun", key=_map_key,
                         selection_mode=("points",),
+                        config=PUB_EXPORT,
                     )
 
                     # Map-click → table-selection sync (multi-select aware).
@@ -3700,6 +3702,7 @@ with tab_geo:
                     make_bar(_top_cities, "City", "OpenSiteCount",
                              height=_primary_h, color=THEME["primary"]),
                     width='stretch',
+                    config=PUB_EXPORT,
                 )
 
             # Full city table below — spans full width. Multi-row select:
@@ -4280,6 +4283,7 @@ with tab_deep:
                     st.plotly_chart(
                         make_bar(_phase_counts, "Phase", "Count", color=HEME_COLOR, height=280),
                         width='stretch',
+                        config=PUB_EXPORT,
                     )
                 else:
                     st.info("No phase data.")
@@ -4294,6 +4298,7 @@ with tab_deep:
                     st.plotly_chart(
                         make_bar(_tgt, "Target", "Count", color=SOLID_COLOR, height=280),
                         width='stretch',
+                        config=PUB_EXPORT,
                     )
 
             # By-disease cuts 2026-05-06: dropped (a) `dc2` column's
@@ -4642,6 +4647,7 @@ with tab_deep:
                         st.plotly_chart(
                             make_bar(_cats, "Category", "Trials", color=HEME_COLOR, height=280),
                             width="stretch",
+                            config=PUB_EXPORT,
                         )
 
                     st.markdown("**Modality breakdown**")
@@ -4671,6 +4677,7 @@ with tab_deep:
                             make_bar(_phase_counts, "Phase", "Count",
                                       color=SOLID_COLOR, height=280),
                             width="stretch",
+                            config=PUB_EXPORT,
                         )
 
                     # By-target "Branch split" 2-row table dropped
@@ -6808,7 +6815,8 @@ with tab_pub:
                 st.markdown("**Top heme-onc categories**")
                 st.plotly_chart(make_bar(heme_cat.sort_values("Trials", ascending=True),
                                           "Trials", "Category", height=320, color=HEME_COLOR).update_traces(orientation="h"),
-                                width='stretch')
+                                width='stretch',
+                                    config=PUB_EXPORT)
         with c2:
             solid_cat = (
                 df_filt[df_filt["Branch"] == "Solid-onc"]["DiseaseCategory"]
@@ -6819,7 +6827,8 @@ with tab_pub:
                 st.markdown("**Top solid-onc categories**")
                 st.plotly_chart(make_bar(solid_cat.sort_values("Trials", ascending=True),
                                           "Trials", "Category", height=320, color=SOLID_COLOR).update_traces(orientation="h"),
-                                width='stretch')
+                                width='stretch',
+                                    config=PUB_EXPORT)
 
         _pub_caption(len(df_filt),
                      extra="Basket/Multidisease trials are shown as their own category slice under the inferred branch.")
@@ -8395,7 +8404,7 @@ with tab_methods:
                     yaxis_title="Number of trials",
                     showlegend=False,
                 )
-                st.plotly_chart(fig_conf, width='stretch')
+                st.plotly_chart(fig_conf, width='stretch', config=PUB_EXPORT)
             with cf2:
                 _high_n = int(_conf_counts.loc[
                     _conf_counts["Confidence"] == "high", "Trials"

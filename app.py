@@ -6054,14 +6054,12 @@ with tab_pub:
         _brands_display = list(reversed(_brands_ordered))
         _brand_to_y = {b: i for i, b in enumerate(_brands_display)}
 
-        @st.fragment
         def _render_fig1() -> None:
-            # Fragment-scoped rerun: pill clicks below only re-execute this
-            # function, not the whole Publication Figures tab.
-            _active_regs = st.session_state.get("fig1_approval_regs", _reg_labels) or []
-
-            # Filter approvals by pill selection.
-            _appr_active = _appr_df[_appr_df["regulator"].isin(_active_regs)].copy()
+            # Plotly legend already provides per-regulator visibility toggling
+            # (click any legend entry to hide/show that series). The pill row
+            # below the chart was a duplicate of that interaction and was
+            # removed 2026-05-07 (Tufte: redundant control = chartjunk).
+            _appr_active = _appr_df.copy()
             _has_any_active = not _appr_active.empty
 
             # Brand count drives the strip height + tick font — with 14+
@@ -6102,8 +6100,6 @@ with tab_pub:
             # --- Bottom panel: approval milestones strip ------------------
             if _has_any_active:
                 for reg in _reg_labels:
-                    if reg not in _active_regs:
-                        continue
                     _sub = _appr_active[_appr_active["regulator"] == reg]
                     if _sub.empty:
                         continue
@@ -6237,21 +6233,9 @@ with tab_pub:
 
             st.plotly_chart(fig1, width='stretch', config=PUB_EXPORT)
 
-            # Pill row — filters which regulators' dots appear in the strip.
-            st.pills(
-                "Regulators",
-                options=_reg_labels,
-                default=_reg_labels,
-                selection_mode="multi",
-                key="fig1_approval_regs",
-                label_visibility="collapsed",
-            )
-
-            # Stash for export buttons rendered outside this fragment.
+            # Stash for export buttons rendered outside this function.
             # `fig1` is a local of `_render_fig1`; without this, the
-            # export call below the fragment can't reach it. Re-run
-            # of the fragment (pill clicks) refreshes the stashed
-            # fig so PNG/SVG always reflect the latest pill state.
+            # export call below can't reach it.
             st.session_state["_fig1_for_export"] = fig1
 
         _render_fig1()

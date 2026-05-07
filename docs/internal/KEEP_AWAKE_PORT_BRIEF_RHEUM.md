@@ -1,131 +1,107 @@
-# Rheum port — keep-awake GitHub Actions workflow
+# Rheum port — keep deployed Streamlit Cloud app awake
 
 Paste the section between `--- BEGIN PROMPT ---` and `--- END PROMPT ---`
 into a fresh Claude Code session in the **car-t-rheumatology-monitor** repo.
 Self-contained, no other context needed.
 
-Onc-side commit (reference): added 2026-05-07 alongside the
-`README` refresh / dual-push cycle. Path: `.github/workflows/keep-awake.yml`.
+Onc-side decision (2026-05-07): **UpTimeRobot** as the keep-awake path.
+GitHub-Actions cron was considered and briefly committed, but removed
+once the maintainer set up UpTimeRobot — pinging twice would be
+redundant and waste runner minutes for no gain.
 
 ---
 
 --- BEGIN PROMPT ---
 
-The onc sister monitor just added a GitHub Actions cron workflow that
-pings the deployed Streamlit Cloud URL every 30 minutes to suppress
-Streamlit's sleep timer. Port the same workflow here with the
-rheum-specific URL.
+The onc sister monitor recently set up UpTimeRobot to keep its
+Streamlit Cloud deploy from going to sleep. Same fix should apply
+on the rheum side. This brief is a no-code config recipe — you just
+need to sign up for UpTimeRobot and add a single monitor.
 
 ## Why
 
 Streamlit Community Cloud puts apps to sleep after a few hours of
 inactivity (full eviction after ~7 days). First visitor pays a
-~30-60 s cold-start. For a research dashboard that gets ad-hoc
-collaborator visits, that cold-start is a real friction point —
-especially when sharing the URL during a meeting.
+~30-60 s cold-start. For a research dashboard shared ad-hoc with
+collaborators, that cold-start is a real friction point — especially
+if you're sharing the URL during a meeting.
 
-The fix is a cron-based HTTP ping that keeps the container warm.
-Costs nothing on a public repo (GH Actions minutes are unlimited
-for public).
+UpTimeRobot's free tier supports 50 HTTP monitors with a 5-minute
+check interval. Pinging the deploy URL every 5 min keeps the
+container warm AND gives you uptime alerts as a side benefit
+(email when the URL is actually down, not just sleeping).
 
-## What to add
+## Setup (no-code, ~5 min)
 
-Single new file: `.github/workflows/keep-awake.yml`. Drop in the
-contents below verbatim, then update the `URL=` line to the rheum
-deploy URL.
-
-```yaml
-name: Keep deployed Streamlit Cloud app awake
-
-# Streamlit Community Cloud puts apps to sleep after a few hours of
-# inactivity (full eviction after ~7 days). First visitor pays a
-# ~30-60s cold-start cost when the container has been evicted. This
-# workflow pings the deployed URL every 30 minutes to suppress the
-# inactivity timer, so collaborators and reviewers don't hit the
-# cold start.
-#
-# Cost: GitHub-hosted-runner minutes are unlimited on PUBLIC repos
-# and capped at 2,000/mo on private. This workflow uses ~5-10 s per
-# run × 48 runs/day × 30 days ≈ 2 hours/month — negligible either way.
-#
-# Caveat: Streamlit Cloud's sleep detection uses real session activity,
-# not just HTTP requests. Bare `curl` may not always count as activity.
-# If the app still goes to sleep despite this workflow, upgrade to a
-# Puppeteer-on-Actions browser ping or use UpTimeRobot's full-page
-# monitor instead.
-
-on:
-  schedule:
-    - cron: '*/30 * * * *'
-  workflow_dispatch:
-
-jobs:
-  ping:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Wake the Streamlit Cloud deploy
-        run: |
-          set -eo pipefail
-          URL="<RHEUM_DEPLOY_URL_HERE>"
-          echo "Pinging $URL"
-          STATUS=$(curl -fsSL --max-time 60 -o /dev/null -w "%{http_code}" "$URL" || echo "000")
-          echo "HTTP $STATUS"
-          if [ "$STATUS" = "000" ]; then
-            echo "::error::Could not reach $URL"
-            exit 1
-          fi
-```
-
-Replace `<RHEUM_DEPLOY_URL_HERE>` with the actual rheum URL (likely
-something like `https://car-t-rheum-monitor.streamlit.app` — check
-the README or the deploy in the Streamlit Cloud dashboard).
+1. Sign up at [uptimerobot.com](https://uptimerobot.com) — free tier
+   is fine.
+2. Click "+ New monitor".
+3. Configure:
+   * **Monitor type**: HTTP(s) (the default)
+   * **Friendly name**: `Rheum CAR-T Trials Monitor — keep-awake`
+   * **URL**: the rheum deploy URL (likely
+     `https://<your-app>.streamlit.app` — confirm in the Streamlit
+     Cloud dashboard)
+   * **Monitoring interval**: 5 minutes (the most aggressive free-tier
+     setting; 30 min would also work but 5 min keeps the container
+     warmer and gives better alert resolution)
+   * **HTTP method**: GET (HEAD might not count as session activity)
+   * **Alert contacts**: your email — leave the default "When down,
+     when up, when SSL expires" alerts on
+4. Save.
 
 ## Verification
 
-After commit + push:
+* Within 5 min the dashboard should show a green dot + "Up" status
+  for the new monitor.
+* Visit the deployed URL the next morning (or after a long quiet
+  period) — should load instantly, no cold-start spinner.
+* Check the UpTimeRobot dashboard's "Response time" graph — should
+  show consistent response under ~2 s; spikes to ~30 s would
+  indicate the app went to sleep and the ping just woke it up.
 
-1. Go to the repo's Actions tab → confirm the workflow appears as
-   "Keep deployed Streamlit Cloud app awake" with a green run on the
-   first manual trigger.
-2. Click "Run workflow" once manually to verify the curl returns
-   HTTP 200 (or 503 during wake transition — both fine).
-3. Wait ~30 min for the first scheduled run; check the Actions log.
+## Why NOT GitHub Actions cron
 
-Expected log output:
+Considered on the onc side, briefly committed (a
+`.github/workflows/keep-awake.yml` curl ping every 30 min), then
+removed when UpTimeRobot was set up. Reasons UpTimeRobot is better:
 
-```
-Pinging https://...
-HTTP 200
-```
+* **5-min interval vs 30-min** — keeps the container warmer
+* **Real HTTP-session activity** — UpTimeRobot does a full GET
+  and parses the response; bare `curl` from GH Actions is more
+  likely to be classified as bot traffic by Streamlit's sleep
+  detection
+* **Free uptime alerts** — email when the URL is actually down,
+  not just sleeping
+* **No code maintenance** — no YAML to keep in sync with workflow
+  schema changes
+
+The GH Actions path is still viable as a fallback if you don't
+want to depend on a third-party service; ping me for the YAML.
 
 ## When this is NOT enough
 
-If the app continues to go to sleep despite the 30-min ping (some
-Streamlit Cloud edge cases require real browser session activity to
-suppress the sleep timer), escalate to:
+* **You hit UpTimeRobot's free-tier ceiling (50 monitors)** —
+  upgrade to their paid tier ($7-15/mo) or split monitors across
+  multiple accounts.
+* **The app still goes to sleep despite 5-min pings** — Streamlit
+  Cloud occasionally tightens sleep heuristics. Escalate to
+  Streamlit Cloud's paid "Cloud for Teams" tier (no sleep
+  guaranteed) or use a real-browser ping (Puppeteer / Playwright on
+  GH Actions).
 
-* **UpTimeRobot full-page monitor** — sign up at uptimerobot.com,
-  add a "Page Speed" monitor (loads the full HTML, not just HEAD)
-  with a 5-min interval. Free tier supports 50 monitors. Bonus:
-  email alerts when the URL is actually down.
-* **Streamlit Cloud paid tier** — guarantees no sleep, faster
-  cold-starts, custom domains. Worth it if collaborator traffic
-  becomes routine.
+## Commit / config artifact
 
-## Commit message suggestion
+UpTimeRobot is configured outside the repo, so there's no commit
+to make. If you want a record in the repo, add a one-liner to the
+README under "Operations" or similar:
 
-```
-ci: add keep-awake workflow — ping Streamlit deploy every 30 min
+```markdown
+### Keep-awake
 
-Streamlit Community Cloud sleeps inactive apps after a few hours
-(full eviction after ~7 days). First visitor pays a ~30-60s
-cold-start. Workflow pings the deploy URL every 30 min to suppress
-the sleep timer, eliminating the cold-start for collaborator visits.
-
-Cost: ~2 hrs/month of GH Actions minutes (unlimited on public repos).
-
-Ported from onc sister monitor commit <sha>.
+Streamlit Cloud deploy is pinged every 5 min by an UpTimeRobot HTTP
+monitor (no in-repo config). Disable / reconfigure at
+uptimerobot.com under monitor `<friendly name>`.
 ```
 
 --- END PROMPT ---

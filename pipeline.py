@@ -13,6 +13,7 @@ Plus PRISMA-style flow accounting, snapshot I/O, and LLM-override support.
 import json
 import os
 import re
+import sys
 import requests
 import pandas as pd
 from datetime import datetime
@@ -1264,7 +1265,7 @@ def save_snapshot(
             df_sites_sorted = backfill_site_geo(df_sites_sorted)
         except Exception as _e:  # noqa: BLE001
             print(f"  WARN: backfill_site_geo failed ({_e}); "
-                  f"saving snapshot without geo enrichment.")
+                  f"saving snapshot without geo enrichment.", file=sys.stderr)
 
     df_sorted.to_csv(os.path.join(out_dir, "trials.csv"), index=False)
     df_sites_sorted.to_csv(os.path.join(out_dir, "sites.csv"), index=False)

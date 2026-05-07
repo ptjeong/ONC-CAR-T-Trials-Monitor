@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import subprocess
@@ -8,7 +9,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from collections import Counter
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from pipeline import (
     build_all_from_api,
@@ -242,13 +245,28 @@ UNKNOWN_COLOR = "#94a3b8" # slate-400
 # constants; the Stage-3 Overview / Geography enrichment used it for
 # in-tab text colors and surfaced this forward-reference bug in prod.
 _AX_COLOR  = "#1a1a1a"
-_GRID_CLR  = "#c8c8c8"
+# Tufte: gridlines should be barely-perceptible scaffolding, not foreground
+# ink. #e8e8e8 (was #c8c8c8) drops the grid contrast by ~3× so data carries
+# the figure visually. Cascades to every publication figure via _V_YAXIS /
+# _H_YAXIS / _V_XAXIS and to fig1's inline grid setting.
+_GRID_CLR  = "#e8e8e8"
 
 BRANCH_COLORS = {
     "Heme-onc": HEME_COLOR,
     "Solid-onc": SOLID_COLOR,
     "Mixed": MIXED_COLOR,
     "Unknown": UNKNOWN_COLOR,
+}
+
+# Snapshot freshness indicator colors (semantic, status-driven). Tokenised
+# here so the freshness badge renderer in the data-source banner doesn't
+# carry inline hex strings — keeps the color palette centralised and
+# auditable in one place.
+_FRESHNESS_COLORS = {
+    "fresh":         "#059669",   # green-600 — ≤ 7 days
+    "current":       "#0891b2",   # cyan-600  — ≤ 30 days
+    "stale_leaning": THEME["amber"],  # ≤ 90 days
+    "stale":         "#991b1b",   # red-700   — > 90 days
 }
 
 # Default + high-contrast palette snapshots (added 2026-05-06).
@@ -408,13 +426,13 @@ def _landscape_table_cols(dim_key: str, dim_label: str) -> dict:
     )
     return {
         dim_key:            st.column_config.TextColumn(dim_label),
-        "Trials":           st.column_config.NumberColumn("Trials", format="%d"),
-        "Open":             st.column_config.NumberColumn("Open / recruiting", format="%d"),
-        "Sponsors":         st.column_config.NumberColumn("Distinct sponsors", format="%d"),
+        "Trials":           st.column_config.NumberColumn("Trials", format="%,d"),
+        "Open":             st.column_config.NumberColumn("Open / recruiting", format="%,d"),
+        "Sponsors":         st.column_config.NumberColumn("Distinct sponsors", format="%,d"),
         "TotalEnrolled":    st.column_config.NumberColumn(
             "Total planned enrollment", format="%,d", help=_enroll_help),
         "MedianEnrollment": st.column_config.NumberColumn(
-            "Median enrollment", format="%d", help=_enroll_help),
+            "Median enrollment", format="%,d", help=_enroll_help),
     }
 
 
@@ -449,7 +467,7 @@ def _mini_count_cols(label: str) -> dict:
     """2-col count tables ('Antigen targets', 'Products', 'Top sponsors', …)."""
     return {
         label:    st.column_config.TextColumn(label, width="medium"),
-        "Trials": st.column_config.NumberColumn("Trials", format="%d", width="small"),
+        "Trials": st.column_config.NumberColumn("Trials", format="%,d", width="small"),
     }
 
 
@@ -956,8 +974,7 @@ def _load_active_flags() -> dict:
             return {}
         issues = resp.json()
         flags: dict[str, dict] = {}
-        import re as _re_flag
-        nct_re = _re_flag.compile(r"NCT\d{8}")
+        nct_re = re.compile(r"NCT\d{8}")
         for issue in issues:
             title = issue.get("title", "")
             labels = {lbl.get("name", "") for lbl in (issue.get("labels") or [])}
@@ -1180,7 +1197,6 @@ def _load_moderator_validations() -> list[dict]:
     flat dict with keys: nct_id, axis, pipeline_label, moderator_label,
     timestamp, source ('flag' | 'random'), moderator, rationale, issue_url.
     """
-    import json
     try:
         with open(MODERATOR_VALIDATIONS_PATH, "r") as fh:
             data = json.load(fh)
@@ -1192,7 +1208,6 @@ def _load_moderator_validations() -> list[dict]:
 def _append_moderator_validation(record: dict) -> None:
     """Append one validation event. Writes the whole list back atomically
     enough for our single-moderator workflow (no concurrent writers)."""
-    import json
     log = _load_moderator_validations()
     log.append(record)
     with open(MODERATOR_VALIDATIONS_PATH, "w") as fh:
@@ -1215,7 +1230,6 @@ def _cohens_kappa(rater_a: list[str], rater_b: list[str]) -> float | None:
     # observed agreement
     observed = sum(1 for a, b in zip(rater_a, rater_b) if a == b) / n
     # expected agreement under independence
-    from collections import Counter
     ca = Counter(rater_a)
     cb = Counter(rater_b)
     expected = sum((ca[c] / n) * (cb[c] / n) for c in categories)
@@ -1627,8 +1641,7 @@ def _classifier_mtime() -> float:
     or until they manually refresh — even though the classifier
     code has already changed on disk.
     """
-    from pathlib import Path as _Path
-    repo = _Path(__file__).resolve().parent
+    repo = Path(__file__).resolve().parent
     paths = [
         repo / "config.py",
         repo / "pipeline.py",
@@ -1669,8 +1682,7 @@ def _snapshot_mtime(snapshot_date: str) -> float:
     Streamlit cache invalidates on the next render rather than serving
     a stale in-memory DataFrame until the process restarts.
     """
-    from pathlib import Path as _Path
-    p = _Path(__file__).resolve().parent / "snapshots" / snapshot_date / "trials.csv"
+    p = Path(__file__).resolve().parent / "snapshots" / snapshot_date / "trials.csv"
     return p.stat().st_mtime if p.exists() else 0.0
 
 
@@ -1708,7 +1720,7 @@ def make_bar(df_plot, x, y, height=360, color=HEME_COLOR):
         plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=8, r=8, t=8, b=8),
         font=dict(family="Inter, sans-serif", size=12, color=THEME["text"]),
-        xaxis_title=None, yaxis_title=None, showlegend=False, bargap=0.35,
+        xaxis_title=None, yaxis_title=None, showlegend=False, bargap=0.25,
     )
     fig.update_traces(marker_line_width=0, opacity=0.90)
     fig.update_xaxes(showgrid=False, color=THEME["muted"], tickfont_size=11)
@@ -1716,7 +1728,6 @@ def make_bar(df_plot, x, y, height=360, color=HEME_COLOR):
         gridcolor=THEME["grid"], gridwidth=1,
         color=THEME["muted"], tickfont_size=11, zeroline=False,
     )
-    fig.update_layout(bargap=0.4)
     return fig
 
 
@@ -2656,7 +2667,7 @@ with tab_overview:
         )
         fig_ov_sun.update_traces(
             insidetextorientation="radial",
-            marker=dict(line=dict(color="white", width=1.2)),
+            marker=dict(line=dict(color="white", width=0.5)),
         )
         fig_ov_sun.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -3038,16 +3049,16 @@ with tab_overview:
             _freshness_color = THEME["muted"]
         elif _snap_age_days <= 7:
             _freshness_msg = f"{_snap_age_days} days old · fresh"
-            _freshness_color = "#059669"
+            _freshness_color = _FRESHNESS_COLORS["fresh"]
         elif _snap_age_days <= 30:
             _freshness_msg = f"{_snap_age_days} days old · current"
-            _freshness_color = "#0891b2"
+            _freshness_color = _FRESHNESS_COLORS["current"]
         elif _snap_age_days <= 90:
             _freshness_msg = f"{_snap_age_days} days old · stale-leaning"
-            _freshness_color = "#92400e"
+            _freshness_color = _FRESHNESS_COLORS["stale_leaning"]
         else:
             _freshness_msg = f"{_snap_age_days} days old · STALE — refresh recommended"
-            _freshness_color = "#991b1b"
+            _freshness_color = _FRESHNESS_COLORS["stale"]
         st.markdown(
             f'<div style="margin-top:0.8rem; padding:0.6rem 0.9rem; '
             f'border-radius:6px; background:#f8fafc; border-left:4px solid '
@@ -3167,10 +3178,7 @@ with tab_geo:
                 z=country_counts_iso["Count"],
                 text=country_counts_iso["Country"],
                 hovertemplate="<b>%{text}</b><br>%{z} trials<extra></extra>",
-                colorscale=[
-                    [0.00, "#eff6ff"], [0.25, "#bfdbfe"],
-                    [0.50, "#60a5fa"], [0.75, "#2563eb"], [1.00, "#1e3a8a"],
-                ],
+                colorscale="Blues",
                 colorbar=dict(
                     thickness=8, len=0.45, x=1.0, xanchor="left",
                     tickfont=dict(size=10, color="#64748b"),
@@ -3230,7 +3238,7 @@ with tab_geo:
                 # weren't shown).
                 scope="world",
                 bgcolor="rgba(0,0,0,0)",
-                lakecolor="#e0f2fe", landcolor="#f1f5f9",
+                lakecolor="white", landcolor="#f5f5f5",
                 showframe=False, showcoastlines=False,
                 showcountries=True, countrycolor="rgba(0,0,0,0.08)",
                 projection=dict(type="natural earth"),
@@ -3283,7 +3291,7 @@ with tab_geo:
                     showgrid=False, tickfont=dict(size=11, color="#475569"),
                     ticks="",
                 ),
-                bargap=0.35, showlegend=False,
+                bargap=0.25, showlegend=False,
             )
             st.plotly_chart(fig_top, width='stretch', config=PUB_EXPORT)
 
@@ -3297,7 +3305,7 @@ with tab_geo:
             country_counts, width='stretch', height=260, hide_index=True,
             column_config={
                 "Country": st.column_config.TextColumn("Country", width="medium"),
-                "Count":   st.column_config.NumberColumn("Trials", format="%d"),
+                "Count":   st.column_config.NumberColumn("Trials", format="%,d"),
             },
         )
 
@@ -3625,7 +3633,7 @@ with tab_geo:
                         paper_bgcolor="rgba(0,0,0,0)",
                         geo=dict(
                             bgcolor="rgba(0,0,0,0)",
-                            lakecolor="#ddeeff", landcolor="#eef2f7",
+                            lakecolor="white", landcolor="#f5f5f5",
                             showframe=False, showcoastlines=False,
                             showcountries=True, countrycolor="rgba(0,0,0,0.12)",
                             fitbounds="locations",
@@ -3726,7 +3734,7 @@ with tab_geo:
                 column_config={
                     "City": st.column_config.TextColumn("City", width="medium"),
                     "OpenSiteCount": st.column_config.NumberColumn(
-                        "Open sites", format="%d",
+                        "Open sites", format="%,d",
                         help="Recruiting / active site rows in this city.",
                     ),
                 },
@@ -4126,15 +4134,15 @@ def _pub_caption(n: int, extra: str | None = None) -> None:
 
 
 _V_XAXIS = dict(
-    showline=True, linewidth=1.5, linecolor=_AX_COLOR, mirror=False,
-    showgrid=False, ticks="outside", ticklen=6, tickwidth=1.2,
+    showline=True, linewidth=1.0, linecolor=_AX_COLOR, mirror=False,
+    showgrid=False, ticks="outside", ticklen=4, tickwidth=0.8,
     title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
 )
 _V_YAXIS = dict(
-    showline=True, linewidth=1.5, linecolor=_AX_COLOR, mirror=False,
+    showline=True, linewidth=1.0, linecolor=_AX_COLOR, mirror=False,
     showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-    ticks="outside", ticklen=6, tickwidth=1.2,
+    ticks="outside", ticklen=4, tickwidth=0.8,
     title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
     zeroline=False,
@@ -4142,17 +4150,17 @@ _V_YAXIS = dict(
 PUB_LAYOUT = dict(**PUB_BASE, margin=dict(l=72, r=36, t=24, b=72), xaxis=_V_XAXIS, yaxis=_V_YAXIS)
 
 _H_XAXIS = dict(
-    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+    showline=True, linewidth=1.0, linecolor=_AX_COLOR,
     showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-    ticks="outside", ticklen=6, tickwidth=1.2,
+    ticks="outside", ticklen=4, tickwidth=0.8,
     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
     title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
     zeroline=False,
 )
 _H_YAXIS = dict(
-    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+    showline=True, linewidth=1.0, linecolor=_AX_COLOR,
     showgrid=False,
-    ticks="outside", ticklen=4, tickwidth=1.2,
+    ticks="outside", ticklen=4, tickwidth=0.8,
     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
 )
 
@@ -4592,8 +4600,8 @@ with tab_deep:
                 width="stretch", height=460, hide_index=True,
                 column_config={
                     "TargetCategory": st.column_config.TextColumn("Antigen", width="medium"),
-                    "Trials":         st.column_config.NumberColumn("Trials", format="%d", width="small"),
-                    "Sponsors":       st.column_config.NumberColumn("# Sponsors", format="%d", width="small"),
+                    "Trials":         st.column_config.NumberColumn("Trials", format="%,d", width="small"),
+                    "Sponsors":       st.column_config.NumberColumn("# Sponsors", format="%,d", width="small"),
                     "Branches":       st.column_config.TextColumn("Branches", width="small"),
                     "Categories":     st.column_config.TextColumn("Disease categories (top)", width="large"),
                 },
@@ -5342,7 +5350,7 @@ with tab_deep:
                             xaxis_title="Start year",
                             yaxis_title=None,
                             yaxis=dict(
-                                showline=True, linewidth=1.2,
+                                showline=True, linewidth=1.0,
                                 linecolor=_AX_COLOR,
                                 tickfont=dict(size=9, color=_AX_COLOR),
                                 showgrid=True, gridcolor=_GRID_CLR,
@@ -5416,12 +5424,12 @@ with tab_deep:
                         margin=dict(l=44, r=24, t=8, b=40),
                         xaxis=dict(
                             title="Year", tickmode="linear", dtick=1,
-                            tickformat="d", showline=True, linewidth=1.2,
+                            tickformat="d", showline=True, linewidth=1.0,
                             linecolor=_AX_COLOR,
                         ),
                         yaxis=dict(
                             title="Trials started",
-                            showline=True, linewidth=1.2,
+                            showline=True, linewidth=1.0,
                             linecolor=_AX_COLOR, gridcolor=_GRID_CLR,
                             gridwidth=0.5,
                         ),
@@ -5565,12 +5573,12 @@ with tab_deep:
                     margin=dict(l=120, r=24, t=8, b=40),
                     xaxis=dict(
                         title="Year", tickmode="linear", dtick=2,
-                        tickformat="d", showline=True, linewidth=1.2,
+                        tickformat="d", showline=True, linewidth=1.0,
                         linecolor=_AX_COLOR, showgrid=True,
                         gridcolor=_GRID_CLR, gridwidth=0.5,
                     ),
                     yaxis=dict(
-                        showline=True, linewidth=1.2, linecolor=_AX_COLOR,
+                        showline=True, linewidth=1.0, linecolor=_AX_COLOR,
                         tickfont=dict(size=9, color=_AX_COLOR),
                         showgrid=False, autorange="reversed",
                     ),
@@ -5605,7 +5613,7 @@ with tab_deep:
                 st.info("Insufficient data for first-in-class timeline.")
 
             # ---------- 2. Sponsor competition matrix ----------
-            st.markdown("---")
+            st.divider()
             st.markdown(
                 "### 2. Sponsor competition matrix "
                 "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
@@ -5710,7 +5718,7 @@ with tab_deep:
             # 1-2, 5-8, 10 (re-numbered visibly to 1-7 for the reader).
 
             # ---------- 3. Heme vs solid maturity gap ----------
-            st.markdown("---")
+            st.divider()
             st.markdown(
                 "### 3. Heme vs solid maturity gap "
                 "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
@@ -5808,7 +5816,7 @@ with tab_deep:
             # months. Identifies HOT antigens (recent surge) vs COOLING
             # ones (recent decline). Driven by snapshot-fixed cutoff to
             # keep the analysis reproducible.
-            st.markdown("---")
+            st.divider()
             st.markdown(
                 "### 4. Target momentum — last 24 months vs prior 24 months "
                 "<span style='color:#64748b; font-size:0.8rem; font-weight:400;'>"
@@ -5992,8 +6000,7 @@ with tab_pub:
         # milestone strip on the bottom, sharing the x-axis. This lets the
         # reader see WHEN approvals landed relative to trial-start trends
         # without cluttering the trend panel itself.
-        import re as _re_overlay
-        _brand_re = _re_overlay.compile(r"\(([^)]+)\)")
+        _brand_re = re.compile(r"\(([^)]+)\)")
 
         def _brand_of(full_name: str) -> str:
             m = _brand_re.search(full_name)
@@ -6110,7 +6117,7 @@ with tab_pub:
                                 size=13,
                                 color=_REG_COLOR[reg],
                                 opacity=0.92,
-                                line=dict(width=1.2, color="white"),
+                                line=dict(width=0.5, color="white"),
                                 symbol=_REG_SYMBOL[reg],
                             ),
                             customdata=_sub[["brand", "generic", "target",
@@ -6131,9 +6138,9 @@ with tab_pub:
             # --- Layout ---------------------------------------------------
             fig1.update_yaxes(
                 row=1, col=1,
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                showline=True, linewidth=1.0, linecolor=_AX_COLOR,
                 showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                ticks="outside", ticklen=6, tickwidth=1.2,
+                ticks="outside", ticklen=4, tickwidth=0.8,
                 tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
                 title="Number of trials",
                 title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
@@ -6154,7 +6161,7 @@ with tab_pub:
                 ticktext=list(_brand_to_y.keys())  if _has_any_active else [],
                 tickfont=dict(size=_brand_tick_size, color=THEME["text"]),
                 showgrid=False,
-                showline=True, linewidth=1.2, linecolor=_AX_COLOR,
+                showline=True, linewidth=1.0, linecolor=_AX_COLOR,
                 zeroline=False,
                 range=[-0.6, (len(_brands_display) - 0.4) if _has_any_active else 1],
                 fixedrange=True,
@@ -6171,8 +6178,8 @@ with tab_pub:
             fig1.update_xaxes(
                 row=2, col=1,
                 tickmode="linear", dtick=1, tickformat="d", showgrid=False,
-                showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                ticks="outside", ticklen=6, tickwidth=1.2,
+                showline=True, linewidth=1.0, linecolor=_AX_COLOR,
+                ticks="outside", ticklen=4, tickwidth=0.8,
                 tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
                 title="Start year",
                 title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
@@ -6180,7 +6187,7 @@ with tab_pub:
             )
             fig1.update_xaxes(
                 row=1, col=1,
-                showgrid=False, showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                showgrid=False, showline=True, linewidth=1.0, linecolor=_AX_COLOR,
                 ticks="", showticklabels=False,
                 range=[_fig1_first - 0.5, _fig1_last + 0.5],
             )
@@ -6309,10 +6316,11 @@ with tab_pub:
         fig2 = px.bar(
             phase_counts, x="Phase", y="Trials", color="Branch",
             color_discrete_map=BRANCH_COLORS, barmode="stack",
-            template="plotly_white", height=420, text="Trials",
+            template="plotly_white", height=420,
         )
-        fig2.update_traces(marker_line_width=0, opacity=1, textposition="inside",
-                           textfont=dict(size=10, color="white"))
+        # Tufte: in-bar text labels duplicated the Y axis and became
+        # illegible on small stack segments. Y axis carries the value.
+        fig2.update_traces(marker_line_width=0, opacity=1)
         fig2.update_layout(
             **PUB_LAYOUT,
             xaxis_title="Phase", yaxis_title="Number of trials",
@@ -6381,16 +6389,16 @@ with tab_pub:
         fig3_map = px.choropleth(
             geo_counts_iso, locations="ISO3", locationmode="ISO-3",
             color="Trials", hover_name="Country",
-            color_continuous_scale=[[0, "#dce9f5"], [0.3, "#5aafd6"], [0.65, "#1c6faf"], [1, "#08306b"]],
+            color_continuous_scale="Blues",
             projection="natural earth", template="plotly_white",
         )
         fig3_map.update_layout(
             paper_bgcolor="white", plot_bgcolor="white",
             font=PUB_FONT, margin=dict(l=0, r=0, t=10, b=0),
             geo=dict(
-                bgcolor="white", lakecolor="#ddeeff", landcolor="#eeeeee",
+                bgcolor="white", lakecolor="white", landcolor="#f5f5f5",
                 showframe=False,
-                showcoastlines=True, coastlinecolor="#999999", coastlinewidth=0.6,
+                showcoastlines=True, coastlinecolor="#bbbbbb", coastlinewidth=0.4,
                 showcountries=True, countrycolor="#cccccc", countrywidth=0.4,
             ),
             coloraxis_colorbar=dict(
@@ -6610,16 +6618,16 @@ with tab_pub:
                     title=None,
                     range=[0, 100],
                     ticksuffix="%",
-                    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                    showline=True, linewidth=1.0, linecolor=_AX_COLOR,
                     showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                    ticks="outside", ticklen=6, tickwidth=1.2,
+                    ticks="outside", ticklen=4, tickwidth=0.8,
                     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
                     zeroline=False,
                 ),
                 yaxis=dict(
                     title=None,
-                    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                    ticks="outside", ticklen=4, tickwidth=1.2,
+                    showline=True, linewidth=1.0, linecolor=_AX_COLOR,
+                    ticks="outside", ticklen=4, tickwidth=0.8,
                     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
                 ),
                 legend=dict(
@@ -6795,7 +6803,7 @@ with tab_pub:
         )
         fig5.update_traces(
             insidetextorientation="radial",
-            marker=dict(line=dict(color="white", width=1.2)),
+            marker=dict(line=dict(color="white", width=0.5)),
         )
         fig5.update_layout(
             paper_bgcolor="white", plot_bgcolor="white",
@@ -7006,7 +7014,7 @@ with tab_pub:
                     "NMPA approvals", format="%d",
                 ),
                 "Trials in current view": st.column_config.NumberColumn(
-                    "Trials in current view", format="%d",
+                    "Trials in current view", format="%,d",
                     help="Total ongoing CAR-T trials targeting this "
                          "antigen in the currently-filtered cohort.",
                 ),
@@ -7159,15 +7167,15 @@ with tab_pub:
                 margin=dict(l=64, r=36, t=24, b=110),
                 xaxis=dict(
                     tickmode="linear", dtick=1, tickformat="d", showgrid=False,
-                    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
-                    ticks="outside", ticklen=6, tickwidth=1.2,
+                    showline=True, linewidth=1.0, linecolor=_AX_COLOR,
+                    ticks="outside", ticklen=4, tickwidth=0.8,
                     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
                     title="Start year", title_font=dict(size=_LAB_SZ, color=_AX_COLOR),
                 ),
                 yaxis=dict(
-                    showline=True, linewidth=1.5, linecolor=_AX_COLOR,
+                    showline=True, linewidth=1.0, linecolor=_AX_COLOR,
                     showgrid=True, gridcolor=_GRID_CLR, gridwidth=0.7,
-                    ticks="outside", ticklen=6, tickwidth=1.2,
+                    ticks="outside", ticklen=4, tickwidth=0.8,
                     tickfont=dict(size=_TICK_SZ, color=_AX_COLOR),
                     title=_y_title,
                     title_font=dict(size=_LAB_SZ, color=_AX_COLOR), zeroline=False,
@@ -7290,7 +7298,7 @@ with tab_pub:
             text=_text_masked,
             texttemplate="%{text}",
             textfont=dict(size=10, color="#0b1220"),
-            colorscale=[[0, "#dbeafe"], [0.4, "#93c5fd"], [0.7, "#1d4ed8"], [1, "#0b3d91"]],
+            colorscale="Blues",
             colorbar=dict(title=dict(text="Trials", font=dict(size=11, color=_AX_COLOR)),
                            tickfont=dict(size=10, color=_AX_COLOR), thickness=14, len=0.55),
             hovertemplate="Category: %{y}<br>Target: %{x}<br>Trials: %{z}<extra></extra>",
@@ -7431,8 +7439,7 @@ with tab_pub:
             text=_ab_text,
             texttemplate="%{text}",
             textfont=dict(size=11, color="#0b1220"),
-            colorscale=[[0, "#dbeafe"], [0.4, "#93c5fd"],
-                         [0.7, "#1d4ed8"], [1, "#0b3d91"]],
+            colorscale="Blues",
             colorbar=dict(
                 title=dict(text="Trials", font=dict(size=11, color=_AX_COLOR)),
                 tickfont=dict(size=10, color=_AX_COLOR),
@@ -8731,7 +8738,6 @@ forthcoming primary fidelity benchmark.
         )
 
         def _cohen_kappa(y1: list, y2: list) -> float:
-            from collections import Counter
             n = len(y1)
             if n == 0:
                 return float("nan")
@@ -8847,7 +8853,7 @@ or decision-support tool.
         """
     )
 
-    st.markdown("---")
+    st.divider()
     st.subheader("Contact")
     st.markdown(
         f"""
@@ -8894,7 +8900,7 @@ or decision-support tool.
         unsafe_allow_html=True,
     )
 
-    st.markdown("---")
+    st.divider()
     st.subheader("Suggested citation")
     citation = (
         f"Jeong P. CAR-T Oncology Trials Monitor (version {sha}) [Internet]. "
@@ -8912,7 +8918,7 @@ or decision-support tool.
         "DOI: [10.5281/zenodo.19738097](https://doi.org/10.5281/zenodo.19738097)"
     )
 
-    st.markdown("---")
+    st.divider()
     st.subheader("Scientific disclaimer")
     st.markdown(
         """
@@ -9122,8 +9128,7 @@ if _MODERATOR_MODE and tab_moderation is not None:
                         # Append a record per axis (pipeline-label remains the
                         # baseline; moderator_label is what we'll use to compute
                         # κ, ground-truth coverage, and override JSON).
-                        from datetime import datetime as _dt_mod
-                        ts = _dt_mod.utcnow().isoformat() + "Z"
+                        ts = datetime.utcnow().isoformat() + "Z"
                         for ax in _MODERATOR_AXES:
                             _pipeline_label = (
                                 str(pr.get(ax, "")) if not pipeline_row.empty else ""
@@ -9226,8 +9231,7 @@ if _MODERATOR_MODE and tab_moderation is not None:
                         key=f"mod_rand_submit_{_rand_nct}",
                         type="primary",
                     ):
-                        from datetime import datetime as _dt_mod2
-                        ts = _dt_mod2.utcnow().isoformat() + "Z"
+                        ts = datetime.utcnow().isoformat() + "Z"
                         for ax, mod_lbl in _corrections.items():
                             _append_moderator_validation({
                                 "nct_id": _rand_nct,

@@ -306,6 +306,23 @@ _BRANCH_COLORS_HIGH_CONTRAST = {
 # new object identity → Streamlit re-renders → modebar picks up
 # the new format. Verified by user report 2026-05-06: "download
 # plot as svg doesnt work even if selected in the sidebar".
+# PNG-export resolution settings. Single source of truth — referenced
+# from `_build_pub_export()` and the sidebar help text.
+#
+# Scale chosen for "useful even for high-resolution" coverage:
+#   * scale=6 with 1600×900 base → 9600×5400 px output (~52 MP)
+#   * 32" × 18" at 300 DPI → A0 conference poster safe
+#   * 16" × 9" at 600 DPI → high-DPI journal print safe
+#   * 8K display (7680×4320) covered with margin
+#   * File size ~12-18 MB PNG (compressed) — manageable email attachment
+#
+# Was scale=5 (8000×4500); bumped to 6 on 2026-05-07 so exports survive
+# downsampling for poster-grade output without forcing per-figure tuning.
+PUB_PNG_SCALE     = 6
+PUB_EXPORT_WIDTH  = 1600
+PUB_EXPORT_HEIGHT = 900
+
+
 def _build_pub_export() -> dict:
     """Construct a fresh PUB_EXPORT dict from current sidebar state.
 
@@ -314,7 +331,7 @@ def _build_pub_export() -> dict:
     re-renders the chart with the updated modebar config.
     """
     fmt_choice = st.session_state.get(
-        "chart_export_fmt", "PNG (slides, 5× resolution)",
+        "chart_export_fmt", f"PNG (slides + print, {PUB_PNG_SCALE}× resolution)",
     )
     is_svg = fmt_choice.startswith("SVG")
     return {
@@ -322,11 +339,12 @@ def _build_pub_export() -> dict:
             "format": "svg" if is_svg else "png",
             # Width/height are advisory for SVG (it scales to natural
             # bounds anyway) but required for raster PNG sizing.
-            "width": 1600,
-            "height": 900,
-            # scale=1 for SVG (vector — already infinite resolution),
-            # scale=5 for PNG (8000×4500 px = 4K + 300DPI safe).
-            "scale": 1 if is_svg else 5,
+            "width":  PUB_EXPORT_WIDTH,
+            "height": PUB_EXPORT_HEIGHT,
+            # scale=1 for SVG (vector — already infinite resolution).
+            # PUB_PNG_SCALE for PNG (definition documents the resolution
+            # math + use-case coverage).
+            "scale":  1 if is_svg else PUB_PNG_SCALE,
         },
         "displaylogo": False,
         "modeBarButtonsToRemove": [
@@ -1975,18 +1993,22 @@ with st.sidebar.expander("Display options", expanded=False):
     _export_choice = st.radio(
         "Chart export format",
         options=[
-            "PNG (slides, 5× resolution)",
+            f"PNG (slides + print, {PUB_PNG_SCALE}× resolution)",
             "SVG (vector — journal / Illustrator)",
         ],
         index=0,
         key="chart_export_fmt",
         help=(
-            "PNG — best for presentations / slide decks. Renders at 5× "
-            "the chart's natural size for crisp 4K-projection / "
-            "300-DPI print quality.\n\nSVG — best for journal "
-            "submission requiring vector graphics, or post-editing in "
-            "Illustrator / Inkscape / Figma. Infinite resolution; "
-            "every wedge / bar / label is an editable element."
+            f"PNG — {PUB_PNG_SCALE}× the chart's natural size "
+            f"({PUB_EXPORT_WIDTH * PUB_PNG_SCALE}×"
+            f"{PUB_EXPORT_HEIGHT * PUB_PNG_SCALE} px output). Covers: "
+            "slide decks (1080p / 4K projection), journal print "
+            "(300-600 DPI, full-page width), and conference posters "
+            "(A0 at 300 DPI). File size ~12-18 MB.\n\nSVG — best for "
+            "journal submission requiring vector graphics, or "
+            "post-editing in Illustrator / Inkscape / Figma. Infinite "
+            "resolution; every wedge / bar / label is an editable "
+            "element."
         ),
     )
     _hc_toggle = st.toggle(
@@ -4083,9 +4105,10 @@ PUB_BASE = dict(template="plotly_white", paper_bgcolor="white", plot_bgcolor="wh
 # so the sidebar `Display options` expander can mutate it before any
 # chart renders. The duplicate definition that was here was removed
 # 2026-05-06 in the per-chart-export → sidebar-export UX port.
-PUB_PNG_SCALE = 5
-PUB_EXPORT_WIDTH = 1600
-PUB_EXPORT_HEIGHT = 900
+# Note: PUB_PNG_SCALE / PUB_EXPORT_WIDTH / PUB_EXPORT_HEIGHT are defined
+# near the top of the file (above _build_pub_export) so they can be
+# referenced from both that function and the sidebar Display options
+# expander, which renders earlier in the script execution.
 
 
 def _fig_download_buttons(fig, name_stem: str, fig_label: str = "figure",

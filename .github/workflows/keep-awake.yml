@@ -1,0 +1,54 @@
+name: Keep deployed Streamlit Cloud app awake
+
+# Streamlit Community Cloud puts apps to sleep after a few hours of
+# inactivity (full eviction after ~7 days). First visitor pays a
+# ~30-60s cold-start cost when the container has been evicted. This
+# workflow pings the deployed URL every 30 minutes to suppress the
+# inactivity timer, so collaborators and reviewers don't hit the
+# cold start.
+#
+# Cost: GitHub-hosted-runner minutes are unlimited on PUBLIC repos
+# and capped at 2,000/mo on private. This workflow uses ~5-10 s per
+# run × 48 runs/day × 30 days ≈ 2 hours/month — negligible either way.
+#
+# Caveat: Streamlit Cloud's sleep detection uses real session activity,
+# not just HTTP requests. Bare `curl` may not always count as activity.
+# If the app still goes to sleep despite this workflow, upgrade to a
+# Puppeteer-on-Actions browser ping or use UpTimeRobot's full-page
+# monitor instead.
+#
+# Trigger options:
+#   * schedule (every 30 min) — automatic
+#   * workflow_dispatch       — manual "Run workflow" button in the
+#                              Actions tab for ad-hoc warm-ups
+
+on:
+  schedule:
+    # Every 30 minutes. GH Actions cron uses UTC; the absolute clock
+    # doesn't matter here since we're targeting always-on uptime.
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Wake the Streamlit Cloud deploy
+        run: |
+          set -eo pipefail
+          URL="https://onc-car-t-trial-monitor.streamlit.app"
+          echo "Pinging $URL"
+          # -fsSL: fail on HTTP errors silently, follow redirects.
+          # --max-time 60: hard timeout (cold-start can take ~30-60 s).
+          # Discard body, log status code only.
+          STATUS=$(curl -fsSL --max-time 60 -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+          echo "HTTP $STATUS"
+          # Streamlit Cloud serves 200 for a warm or just-woken app, and
+          # 503 briefly during the wake transition. Accept both as "the
+          # ping landed and triggered a wake-up". Hard-fail only on
+          # connection failure (status=000) so the workflow stays green.
+          if [ "$STATUS" = "000" ]; then
+            echo "::error::Could not reach $URL"
+            exit 1
+          fi

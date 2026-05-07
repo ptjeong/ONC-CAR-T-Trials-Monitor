@@ -1845,68 +1845,44 @@ st.markdown(
 # Sidebar — data source
 # ---------------------------------------------------------------------------
 #
-# Snapshot-first architecture (changed 2026-05-07):
-#   - Default: auto-pin the MOST RECENT frozen snapshot on first load. Stable,
-#     citable, fast (no API call). Matches the research-author workflow where
-#     analyses reference a specific dated dataset.
-#   - Opt-in: switch to LIVE CT.gov pull (cached 24h) via the "Switch to live
-#     data" button. Choice persists in session_state so subsequent reruns
-#     don't snap back to the snapshot.
-#   - Opt-in: pin a SPECIFIC dated snapshot (not just the latest) for
-#     publication reproducibility. Done via the Reproducibility expander.
-#   - Fallback: if no snapshots exist, falls through to live mode (preserves
-#     the architecture for fresh deployments before any snapshot is saved).
-#   - Fallback: if CT.gov is unreachable in live mode, the most recent
-#     snapshot is loaded automatically.
+# Live-first architecture:
+#   - Default: live CT.gov pull cached 24h. First visitor of the day pays the
+#     cold-start cost; everyone else gets an instant warm cache. No manual
+#     refresh step.
+#   - Opt-in: pin a specific dated snapshot for publication reproducibility
+#     (e.g., "pin to the dataset cited in the paper"). Hidden behind an
+#     "Advanced" expander so casual viewers never see the mode toggle.
+#   - Safety net: if CT.gov is unreachable, fall back to the most recent
+#     frozen snapshot automatically.
 #
-# Was live-by-default — but for a research-grade dashboard the snapshot is
-# the citable artifact and should be the canonical view. Live is the
-# what's-new escape hatch, not the default.
+# Briefly tried snapshot-first (2026-05-07 morning) but reverted same day —
+# for an iterating-author dashboard the live data IS the value-add over the
+# static snapshot. Snapshot-pinning remains opt-in via the Reproducibility
+# expander when the user wants to cite a specific dated dataset.
 
 st.sidebar.header("Data source")
 
 available_snapshots = list_snapshots()  # sorted reverse-chronological
 prisma_counts: dict = {}
 
-# Two session-state keys drive the data-source decision:
-#   _PIN_KEY        — which snapshot is currently pinned (str), or None for live
-#   _LIVE_OPTIN_KEY — True if the user has explicitly clicked "Switch to live
-#                     data". Without this, every rerun would snap back to the
-#                     latest snapshot via the auto-pin block below.
+# Detect an explicit user opt-in to pin a frozen snapshot. Stored in
+# session_state so the Refresh button can clear it.
 _PIN_KEY = "pinned_snapshot"
-_LIVE_OPTIN_KEY = "user_opted_into_live"
-
 _pinned = st.session_state.get(_PIN_KEY)
-_user_wants_live = st.session_state.get(_LIVE_OPTIN_KEY, False)
-
-# Validate any stale pinned-snapshot reference (e.g., snapshot dir was
-# manually deleted between sessions).
 if _pinned and _pinned not in available_snapshots:
     _pinned = None
     st.session_state[_PIN_KEY] = None
-
-# Auto-pin to the latest snapshot on first load. The user can opt out via
-# the "Switch to live data" button; that sets _LIVE_OPTIN_KEY so subsequent
-# reruns don't re-pin.
-if _pinned is None and not _user_wants_live and available_snapshots:
-    _pinned = available_snapshots[0]  # latest (list is reverse-sorted)
-    st.session_state[_PIN_KEY] = _pinned
 
 if _pinned:
     with st.spinner(f"Loading pinned snapshot {_pinned}..."):
         df, df_sites, prisma_counts = load_frozen(
             _pinned, csv_mtime=_snapshot_mtime(_pinned),
         )
-    # Show "auto-selected (latest)" affordance when this snapshot was
-    # picked by the auto-pin block (not by an explicit user pin).
-    _is_latest = (_pinned == available_snapshots[0]) if available_snapshots else False
-    _suffix = " · auto-selected (latest)" if _is_latest else ""
     st.sidebar.success(
-        f"Snapshot **{_pinned}** ({len(df):,} trials){_suffix}."
+        f"Pinned to frozen snapshot **{_pinned}** ({len(df):,} trials)."
     )
-    if st.sidebar.button("Switch to live data"):
+    if st.sidebar.button("Unpin — switch back to live data"):
         st.session_state[_PIN_KEY] = None
-        st.session_state[_LIVE_OPTIN_KEY] = True   # remember opt-in
         st.cache_data.clear()
         st.rerun()
 else:
@@ -1963,8 +1939,6 @@ else:
             if _pin_choice != "— live data —":
                 if st.button(f"Pin snapshot {_pin_choice}"):
                     st.session_state[_PIN_KEY] = _pin_choice
-                    # Explicit pin overrides any prior live opt-in
-                    st.session_state[_LIVE_OPTIN_KEY] = False
                     st.rerun()
         if st.button("Save current as snapshot"):
             statuses_list = selected_statuses if selected_statuses else None

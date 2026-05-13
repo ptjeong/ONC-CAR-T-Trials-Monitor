@@ -1,0 +1,86 @@
+# Keep-awake via scheduled empty push
+# ====================================
+#
+# Decision history:
+#   1. Original: GH Actions cron `curl`-pinging the deploy URL every 30 min.
+#   2. Reverted (4eb5448) in favour of UpTimeRobot — same approach, no
+#      in-repo dependency, free-tier supports it.
+#   3. UpTimeRobot tested → didn't keep the container warm (Streamlit Cloud
+#      sleep heuristics classify bot-style GETs as non-session activity).
+#   4. THIS workflow: scheduled EMPTY PUSH to main, forcing a redeploy.
+#
+# Why empty-push works when URL pings don't:
+#   - Streamlit Cloud watches the repo via webhook; any push to main triggers
+#     a fresh container build (~2-3 min) regardless of file changes.
+#   - A freshly-rebuilt container starts the "sleep timer" from zero.
+#   - Trade-off: each redeploy means ~2-3 min of cold-start latency for
+#     any visitor who happens to be loading during the rebuild window.
+#     At 6-hour cadence this is ~12 min/day of potential downtime —
+#     acceptable for an ad-hoc-demo dashboard.
+#
+# Cadence choice (6 hours):
+#   - Streamlit Cloud sleep timer is "a few hours" (vague; empirically
+#     2-4h of zero traffic). 6h cadence keeps the deploy fresh without
+#     thrashing the rebuild process.
+#   - 4 redeploys/day × ~2 min runner time = ~480 CI min/month, well
+#     within the 2000-min free-tier ceiling for private repos
+#     (public repos: unlimited).
+#
+# When to escalate:
+#   - If 6h is too sparse (app still cold when collaborator visits at
+#     random times): drop to '0 */3 * * *' (every 3 hours; ~960 CI min/mo)
+#   - If file-edit pushes (real commits) are already happening on a
+#     daily cadence: increase to '0 */12 * * *' or remove this workflow
+#     entirely — your normal git activity is the keep-awake.
+#   - Container still going stale despite pings: switch to Streamlit
+#     Cloud's paid "Cloud for Teams" (no-sleep guaranteed) or implement
+#     real-browser pings via Playwright on GH Actions.
+
+name: Keep-awake (scheduled empty push)
+
+on:
+  schedule:
+    # Every 6 hours at minute 17 (avoid the :00 cron-storm window where
+    # GH delays runs by several minutes under high load).
+    - cron: '17 */6 * * *'
+  workflow_dispatch:  # manual trigger from Actions tab
+
+permissions:
+  contents: write    # required for `git push`
+
+concurrency:
+  # Cancel any in-flight keep-awake if a new one fires (e.g. manual
+  # workflow_dispatch while a scheduled run is mid-flight).
+  group: keep-awake
+  cancel-in-progress: true
+
+jobs:
+  empty-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          # Need full history so the push doesn't reject as non-fast-forward
+          # if there's been other activity on main since the checkout's base.
+          fetch-depth: 0
+          # Use the default GITHUB_TOKEN — Streamlit Cloud's webhook fires
+          # on any push to main, regardless of who pushed.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create empty commit and push
+        run: |
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          git commit --allow-empty -m "ci(keep-awake): scheduled empty push at ${TS}
+
+          Automated commit from .github/workflows/keep-awake.yml — triggers
+          Streamlit Cloud redeploy to keep the container fresh. UpTimeRobot
+          URL-pings did not prevent sleep; empty-push approach forces a
+          rebuild every 6 hours."
+          git push origin main

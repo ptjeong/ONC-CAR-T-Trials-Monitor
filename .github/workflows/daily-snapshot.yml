@@ -1,0 +1,182 @@
+# Daily snapshot rebuild
+# =======================
+#
+# Ported from the rheum monitor's daily-snapshot CI (zero failures across
+# 6 days at time of port, 2026-05-14). The mechanism:
+#
+#   1. Fetch fresh trials from CT.gov API (scripts/build_snapshot.py)
+#   2. Compute a composite skip-decision hash:
+#      - sha256 of new trials.csv
+#      - sha256 of git-tracked SHAs for pipeline.py + config.py + llm_overrides.json
+#      Skip the commit if BOTH match the previous run — no data changes,
+#      no classifier changes, no need to bloat git history.
+#   3. If not skipped: commit the snapshot dir, tag the commit
+#      `snapshot-YYYY-MM-DD` (for downstream Zenodo / citation pipelines),
+#      and append a diff-vs-previous-snapshot summary to the rolling
+#      "what changed today" GitHub issue.
+#
+# Cadence: 04:00 UTC daily (offset from rheum's 03:00 to dodge GH's
+# cron-storm window where simultaneous scheduled runs get queued for
+# minutes).
+#
+# Cost: ~10-12 min wall-clock per run (onc has ~3000 trials vs rheum's
+# ~800; the API fetch + classifier dominate). ~5 GB/month git-LFS-free
+# storage at ~5 MB per snapshot × ~30 snapshots/month, well within the
+# soft GitHub repo storage limit.
+#
+# Force-rebuild via workflow_dispatch: tick `force: true` to commit a
+# snapshot even when hashes match (useful for testing downstream
+# tooling like Zenodo workflows that need a fresh tag to fire on).
+
+name: Daily snapshot rebuild
+
+on:
+  schedule:
+    - cron: '0 4 * * *'   # 04:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force commit even if content hash matches previous run'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # commit snapshot, push tag
+  issues: write     # append diff comment to rolling issue
+
+concurrency:
+  # Serialise scheduled vs manual runs — never lose a snapshot to a
+  # cancelled mid-flight build, but never duplicate one either.
+  group: daily-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25   # ~10-12 min typical; 25 covers slow API days
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set snapshot date
+        id: date
+        run: echo "snap=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Build snapshot
+        run: python scripts/build_snapshot.py --max-records 10000
+
+      - name: Composite skip-decision hash
+        id: hash
+        run: |
+          SNAP=${{ steps.date.outputs.snap }}
+          # Content hash of today's trials.csv
+          DATA_HASH=$(sha256sum "snapshots/${SNAP}/trials.csv" | cut -c1-16)
+          # Git blob SHAs of classifier sources — content-stable across
+          # fresh clones (unlike mtime). Hashes them together as one
+          # composite identity for the classifier configuration.
+          CLF_HASH=$(git rev-parse HEAD:pipeline.py HEAD:config.py HEAD:llm_overrides.json \
+                       | sha256sum | cut -c1-16)
+          PREV_DATA=$(cat snapshots/.last_data_hash 2>/dev/null || echo "")
+          PREV_CLF=$(cat snapshots/.last_classifier_hash 2>/dev/null || echo "")
+          FORCE="${{ github.event.inputs.force }}"
+          if [ "$FORCE" != "true" ] && [ "$DATA_HASH" = "$PREV_DATA" ] && [ "$CLF_HASH" = "$PREV_CLF" ]; then
+            echo "Data + classifier identical to previous run — skip."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            # Remove the unchanged snapshot dir so the repo doesn't
+            # accumulate stub YYYY-MM-DD/ entries.
+            rm -rf "snapshots/${SNAP}"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "$DATA_HASH" > snapshots/.last_data_hash
+            echo "$CLF_HASH" > snapshots/.last_classifier_hash
+            echo "DATA_HASH=${DATA_HASH}  (prev=${PREV_DATA:-none})"
+            echo "CLF_HASH=${CLF_HASH}  (prev=${PREV_CLF:-none})"
+          fi
+
+      - name: Find previous snapshot for diff
+        if: steps.hash.outputs.skip == 'false'
+        id: prev
+        run: |
+          SNAP=${{ steps.date.outputs.snap }}
+          PREV=$(ls snapshots/ 2>/dev/null \
+                   | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' \
+                   | grep -v "^${SNAP}$" \
+                   | sort -r | head -1)
+          echo "date=${PREV}" >> "$GITHUB_OUTPUT"
+          if [ -n "$PREV" ]; then
+            echo "Previous snapshot found: ${PREV}"
+          else
+            echo "No previous snapshot — this is the first auto-snapshot."
+          fi
+
+      - name: Generate diff markdown
+        if: steps.hash.outputs.skip == 'false' && steps.prev.outputs.date != ''
+        run: |
+          mkdir -p reports
+          python scripts/snapshot_diff.py \
+            "${{ steps.prev.outputs.date }}" \
+            "${{ steps.date.outputs.snap }}" \
+            --out "reports/snapshot_diff.md"
+          echo "--- Diff preview (first 40 lines) ---"
+          head -40 "reports/snapshot_diff.md"
+
+      - name: Commit + push snapshot
+        if: steps.hash.outputs.skip == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add snapshots/
+          git commit -m "Daily snapshot ${{ steps.date.outputs.snap }} (auto)
+
+          Automated commit from .github/workflows/daily-snapshot.yml.
+          Source: live CT.gov API + current classifier on main.
+          Composite hash key: data + (pipeline.py + config.py + llm_overrides.json).
+
+          See snapshot-${{ steps.date.outputs.snap }} tag for citation reference."
+          git push origin main
+
+      - name: Tag for citation pipeline
+        if: steps.hash.outputs.skip == 'false'
+        run: |
+          TAG="snapshot-${{ steps.date.outputs.snap }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "Pushed tag $TAG (consumed by downstream Zenodo workflow once shipped)."
+
+      - name: Append diff to rolling tracking issue
+        # Only run if (a) we built a fresh snapshot, (b) a previous one
+        # exists to diff against, and (c) the maintainer has configured
+        # ROLLING_DIFF_ISSUE in repo vars. Without (c) we silently skip
+        # — the diff still lives in the workflow run artifacts via the
+        # `head -40 reports/snapshot_diff.md` log line above.
+        if: |
+          steps.hash.outputs.skip == 'false' &&
+          steps.prev.outputs.date != '' &&
+          vars.ROLLING_DIFF_ISSUE != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ vars.ROLLING_DIFF_ISSUE }}
+          body-file: reports/snapshot_diff.md
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.hash.outputs.skip }}" = "true" ]; then
+            echo "::notice::Skipped — data + classifier identical to previous snapshot."
+          elif [ "${{ steps.hash.outputs.skip }}" = "false" ]; then
+            echo "::notice::Committed snapshot ${{ steps.date.outputs.snap }} + tagged snapshot-${{ steps.date.outputs.snap }}."
+          fi

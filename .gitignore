@@ -12,10 +12,14 @@ env/
 # Reference copy of rheum app (not part of this repo)
 car-t-rheumatology-monitor/
 
-# Snapshots — ignore all EXCEPT the bootstrap snapshot that ships with
-# the repo so a fresh deployment has a fallback when the CT.gov API is
-# unreachable on first load.
-snapshots/*
-!snapshots/2026-04-24/
+# Snapshots — every dated YYYY-MM-DD/ directory is tracked (the
+# daily-snapshot CI commits new ones; downstream Zenodo / citation
+# tooling consumes them). Only working-state files inside snapshots/
+# are excluded:
+#   * .bak files from in-place audit-patch backups
+#   * .parquet (transient analysis outputs)
+# Bootstrap snapshot 2026-04-24/ is the legacy seed (kept for
+# backward compatibility with any existing pinned-snapshot citations).
+snapshots/**/*.bak
 *.parquet
 reports/

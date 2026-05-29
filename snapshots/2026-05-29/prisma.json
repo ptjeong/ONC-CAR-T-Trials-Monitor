@@ -1,0 +1,9 @@
+{
+  "n_after_dedup": 2811,
+  "n_duplicates_removed": 0,
+  "n_fetched": 2811,
+  "n_hard_excluded": 293,
+  "n_included": 2190,
+  "n_indication_excluded": 328,
+  "n_total_excluded": 621
+}

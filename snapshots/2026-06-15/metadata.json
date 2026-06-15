@@ -1,0 +1,7 @@
+{
+  "api_base_url": "https://clinicaltrials.gov/api/v2/studies",
+  "n_sites": 10975,
+  "n_trials": 2216,
+  "snapshot_date": "2026-06-15",
+  "statuses_filter": []
+}
